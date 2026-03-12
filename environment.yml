@@ -1,4 +1,4 @@
-name: hippocampalswr
+name: hippocampalseq
 channels:
   - bioconda
   - r

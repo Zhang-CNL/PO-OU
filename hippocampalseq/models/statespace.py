@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from dataclasses import dataclass
 
-import hippocampalswr.utils as hswu
+import hippocampalseq.utils as hseu
 
 __all__ = [
     'StateSpaceModel',
@@ -55,7 +55,7 @@ class StateSpaceModel:
     def _filter_init(self, values: KalmanResults):
         """Initialize the filter for the first observation."""
         P0Ct = self.initial_state_covariance @ self.observation_matrices.T 
-        K1 = hswu.invmul(P0Ct, self.observation_covariance @ P0Ct + self.observation_matrices) 
+        K1 = hseu.invmul(P0Ct, self.observation_covariance @ P0Ct + self.observation_matrices) 
         mu1 = self.initial_state_mean + K1 @ (values.observations[0] - self.observation_matrices @ self.initial_state_mean)
         v1 = (torch.eye(self.augmented_dim) - K1 @ self.observation_matrices) @ self.initial_state_covariance
 
@@ -72,7 +72,7 @@ class StateSpaceModel:
         Pn1 = values.predicted_cov[t-1]
 
         Pct = Pn1 @ self.observation_matrices.T
-        K = hswu.invmul(Pct, self.observation_matrices @ Pct + self.observation_covariance)
+        K = hseu.invmul(Pct, self.observation_matrices @ Pct + self.observation_covariance)
 
         mut = Am1 + K @ (values.observations[t] - self.observation_matrices @ Am1)
         vt  = (torch.eye(self.augmented_dim) - K @ self.observation_matrices) @ Pn1
@@ -106,7 +106,7 @@ class StateSpaceModel:
         Amt   = values.predicted_mean[t]
         Pt    = values.predicted_cov[t]
 
-        J = hswu.invmul(values.filtered_cov[t] @ self.transition_matrices.T, Pt)
+        J = hseu.invmul(values.filtered_cov[t] @ self.transition_matrices.T, Pt)
         muht = values.filtered_mean[t] + J @ (values.smoothed_mean[t+1] - Amt) 
         vht = values.filtered_cov[t] + J @ (values.smoothed_cov[t+1] - Pt) @ J.mT
 
@@ -190,7 +190,7 @@ class StateSpaceModel:
         ip2 = self.initial_state_mean @ values.smoothed_mean[0].mT
         ip3 = values.smoothed_mean[0] @ self.initial_state_mean.mT
         ip4 = self.initial_state_mean @ self.initial_state_mean.mT
-        ill = hswu.mulinv(self.initial_state_covariance + .001 * torch.eye(self.augmented_dim), ip1 - ip2 - ip3 + ip4)
+        ill = hseu.mulinv(self.initial_state_covariance + .001 * torch.eye(self.augmented_dim), ip1 - ip2 - ip3 + ip4)
         ill = torch.trace(ill) / 2
         ll += ill
 
@@ -199,7 +199,7 @@ class StateSpaceModel:
         tp3 = tp2.mT 
         tp4 = self.transition_matrices @ stats.Ezz[:-1] @ self.transition_matrices.mT
         tll = torch.sum(tp1 - tp2 - tp3 + tp4, axis=0) 
-        tll = hswu.mulinv(self.transition_covariance, tll)
+        tll = hseu.mulinv(self.transition_covariance, tll)
         tll = torch.trace(tll) / 2
         ll += tll
 
@@ -208,7 +208,7 @@ class StateSpaceModel:
         ep3 = ep2.mT
         ep4 = self.observation_matrices @ stats.Ezz @ self.observation_matrices.mT
         ell = torch.sum(ep1 - ep2 - ep3 + ep4, axis=0)
-        ell = hswu.mulinv(self.observation_covariance, ell)
+        ell = hseu.mulinv(self.observation_covariance, ell)
         ell = torch.trace(ell) / 2
         ll += ell
 
@@ -229,7 +229,7 @@ class StateSpaceModel:
     def _transition_matrix_mle(self, values: KalmanResults, stats: SufficientStatistics):
         Numer = torch.sum(stats.Ezz1, axis=0)
         Denom = torch.sum(stats.Ezz, axis=0)
-        return torch.atleast_2d(hswu.invmul(Numer, Denom))
+        return torch.atleast_2d(hseu.invmul(Numer, Denom))
 
     def _transition_covariance_mle(self, values: KalmanResults, stats: SufficientStatistics):
         P1 = stats.Ezz[1:]
@@ -242,7 +242,7 @@ class StateSpaceModel:
     def _observation_matrix_mle(self, values: KalmanResults, stats: SufficientStatistics):
         Numer = torch.sum(stats.Exz, axis=0)
         Denom = torch.sum(stats.Ezz, axis=0)
-        return torch.atleast_2d(hswu.invmul(Numer, Denom))
+        return torch.atleast_2d(hseu.invmul(Numer, Denom))
 
     def _observation_covariance_mle(self, values: KalmanResults, stats: SufficientStatistics):
         P1 = stats.Exx
@@ -256,8 +256,8 @@ class StateSpaceModel:
         """Maximum likelihood estimation of all relevant parameters.
 
         Args:
-            values (hswm.KalmanResults): Kalman filter results.
-            stats (hswm.SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
+            values (hsem.KalmanResults): Kalman filter results.
+            stats (hsem.SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
             normalize (bool): If True, normalize the transition and observation matrices.
 
         Returns:
@@ -369,7 +369,7 @@ class StateSpaceModel:
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
-            values (hswm.KalmanResults): Kalman filter results.
+            values (hsem.KalmanResults): Kalman filter results.
             normalize (bool): If True, normalize the transition and observation matrices.
             maximization_type (str): Type of maximization algorithm to use. Can be either 'mle' or 'autograd'.
             **autograd_args: Keyword arguments for the autograd maximization algorithm.

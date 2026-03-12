@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-import hippocampalswr.preprocessing as hswp
+import hippocampalseq.preprocessing as hsep
 
 def init_plotting():
     SMALL_SIZE = 5

@@ -2,7 +2,7 @@ import numpy as np
 import torch 
 from torch.distributions import MultivariateNormal
 
-from hippocampalswr.utils import atleast_2d
+from hippocampalseq.utils import atleast_2d
 
 def laplacian_approximation(z: torch.Tensor, pz: torch.Tensor, kl:str = "pq", lr:float = .01, n_epochs:int = 1000):
     r"""Laplacian approximation for the parameters of a Gaussian distribution.

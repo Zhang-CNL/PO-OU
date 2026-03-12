@@ -1,6 +1,6 @@
 import numpy as np 
 import scipy.stats as sp
-import hippocampalswr.utils as hswu
+import hippocampalseq.utils as hseu
 from typing import Optional
 from .data import *
 
@@ -156,7 +156,7 @@ def process_ripples(
     time_window_advance_s = time_window_s if time_window_advance_ms is None else time_window_advance_ms / 1000
     min_popburst_n_time_windows = int(np.ceil(min_popburst_duration_ms / time_window_ms))
 
-    place_field_mat = hswu.placefield_matrix(
+    place_field_mat = hseu.placefield_matrix(
             rat_data.place_field_data.place_fields,
             rat_data.place_field_data.place_cell_ids
         )

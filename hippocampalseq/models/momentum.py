@@ -3,15 +3,15 @@ import torch
 import torch.nn as nn
 from dataclasses import dataclass
 
-import hippocampalswr.utils as hswu
-import hippocampalswr.models as hswm
+import hippocampalseq.utils as hseu
+import hippocampalseq.models as hsem
 
 __all__ = [
     'Momentum'
 ]
 
 
-class Momentum(hswm.StateSpaceModel):
+class Momentum(hsem.StateSpaceModel):
     def __init__(
             self,
             place_fields: np.ndarray|torch.Tensor, 
@@ -37,12 +37,12 @@ class Momentum(hswm.StateSpaceModel):
 
         x = torch.arange(0, self.bins[0], 1)
         y = torch.arange(0, self.bins[1], 1)
-        self.grid = hswu.bin_points(x,y)
+        self.grid = hseu.bin_points(x,y)
 
         if seed is not None:
             torch.random.manual_seed(seed)
 
-        self.emission_probabilities = hswu.calc_poisson_emission_probabilities_2d(
+        self.emission_probabilities = hseu.calc_poisson_emission_probabilities_2d(
             torch.from_numpy(spikemat).double(), 
             torch.from_numpy(place_fields),
             self.dt
@@ -52,7 +52,7 @@ class Momentum(hswm.StateSpaceModel):
         self.approx_mean = torch.zeros(T, self.latent_dim, 1)
         self.approx_cov = torch.zeros(T, self.latent_dim, self.latent_dim)
         for t in range(T):
-            self.approx_mean[t], self.approx_cov[t] = hswu.laplacian_approximation(
+            self.approx_mean[t], self.approx_cov[t] = hseu.laplacian_approximation(
                 self.grid,
                 self.emission_probabilities[t]
             )
@@ -144,7 +144,7 @@ class Momentum(hswm.StateSpaceModel):
         H = self.approx_cov
         return C,H
 
-    def _filter_init(self, values: hswm.KalmanResults):
+    def _filter_init(self, values: hsem.KalmanResults):
         """
         Initialize the filter for the first observation.
         Since we have a uniform prior for this model, we use the information filter
@@ -171,7 +171,7 @@ class Momentum(hswm.StateSpaceModel):
         # Now we can calculate it for $P(z_1|z_0)$
         return values
 
-    def _filter(self, values: hswm.KalmanResults, t: int):
+    def _filter(self, values: hsem.KalmanResults, t: int):
         """
         Run the Kalman filter for a single time step.
         Use our initial transition and covariance matrices for t == 0
@@ -186,7 +186,7 @@ class Momentum(hswm.StateSpaceModel):
         Pn1 = values.predicted_cov[t-1]
 
         PnCt = Pn1 @ C.T
-        K = hswu.invmul(PnCt, C @ PnCt + sigma[t])
+        K = hseu.invmul(PnCt, C @ PnCt + sigma[t])
 
         mu_t = Am1 + K @ (values.observations[t] - C @ Am1)
         v_t = (torch.eye(self.augmented_dim) - K @ C) @ Pn1
@@ -202,7 +202,7 @@ class Momentum(hswm.StateSpaceModel):
 
         return values
 
-    def _smooth(self, values: hswm.KalmanResults, t: int):
+    def _smooth(self, values: hsem.KalmanResults, t: int):
         """
         Smooth the Kalman filter results for one timestep.
 
@@ -213,7 +213,7 @@ class Momentum(hswm.StateSpaceModel):
             Amt = values.predicted_mean[t]
             Pt  = values.predicted_cov[t]
 
-            J = hswu.invmul(values.filtered_cov[t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
+            J = hseu.invmul(values.filtered_cov[t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
             muht = values.filtered_mean[t] + J @ (values.smoothed_mean[t+1] - Amt) 
             vht = values.filtered_cov[t] + J @ (values.smoothed_cov[t+1] - Pt) @ J.mT
 
@@ -229,8 +229,8 @@ class Momentum(hswm.StateSpaceModel):
         raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
 
     def _em_autograd(self, 
-            values: hswm.KalmanResults,
-            stats: hswm.SufficientStatistics,
+            values: hsem.KalmanResults,
+            stats: hsem.SufficientStatistics,
             normalize: bool,
             lr: float = 1e-3, 
             n_epochs: int = 1000, 
@@ -240,8 +240,8 @@ class Momentum(hswm.StateSpaceModel):
         """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
 
         Args:
-            values (hswm.KalmanResults): Kalman filter results.
-            stats (hswm.SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
+            values (hsem.KalmanResults): Kalman filter results.
+            stats (hsem.SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
             normalize (bool): If True, normalize the transition and observation matrices.
             lr (float): Learning rate for the optimizer.
             n_epochs (int): Number of epochs for SGD.

@@ -1,11 +1,11 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter
-import hippocampalswr.utils as hswu
+import hippocampalseq.utils as hseu
 from .data import *
 
 
 
-def __get_run_data(rat_data: RatData) -> hswu.AttrDict:
+def __get_run_data(rat_data: RatData) -> hseu.AttrDict:
     """
     Extracts spikes and positions from the given rat data in the given runs.
 
@@ -13,7 +13,7 @@ def __get_run_data(rat_data: RatData) -> hswu.AttrDict:
         rat_data (RatData): Dictionary containing rat data
 
     Returns:
-        hswu.AttrDict: Dictionary containing extracted spike and position data
+        hseu.AttrDict: Dictionary containing extracted spike and position data
     """
     spike_ids   = rat_data.spike_ids
     spike_times = rat_data.spike_times_sec
@@ -30,8 +30,8 @@ def __get_run_data(rat_data: RatData) -> hswu.AttrDict:
         start = run_starts[epoch]
         end   = run_ends[epoch]
         # extract window indices
-        spike_window_bool = hswu.times_to_bool(spike_times, start, end)
-        pos_window_bool   = hswu.times_to_bool(pos_times, start, end)
+        spike_window_bool = hseu.times_to_bool(spike_times, start, end)
+        pos_window_bool   = hseu.times_to_bool(pos_times, start, end)
         # extract spikes and positions in this window
         window_spike_times = spike_times[spike_window_bool]
         window_spike_ids   = spike_ids[spike_window_bool]
@@ -51,7 +51,7 @@ def __get_run_data(rat_data: RatData) -> hswu.AttrDict:
     _spike_ids   = np.hstack(_spike_ids)
     pos_xy_cm    = np.vstack((np.hstack(_run_x_pos), np.hstack(_run_y_pos))).T
     #pos_xy_cm = np.array((_run_x_pos, _run_y_pos)).T
-    return hswu.AttrDict({
+    return hseu.AttrDict({
         "spike_times": _spike_times,
         "spike_ids": _spike_ids,
         "run_pos_xy_cm": pos_xy_cm
@@ -85,7 +85,7 @@ def __calculate_one_placefield(
     #if self.params.rotate_placefields:
     #    place_field_raw = np.roll(place_field_raw, np.random.randint(50), axis=0)
     #    place_field_raw = np.roll(place_field_raw, np.random.randint(50), axis=1)
-    pf_gaussian_sd_bins = hswu.cm_to_bins(place_field_sd_gaussian)
+    pf_gaussian_sd_bins = hseu.cm_to_bins(place_field_sd_gaussian)
     place_field_smoothed = gaussian_filter(
         place_field_raw, sigma=pf_gaussian_sd_bins
     )
@@ -253,7 +253,7 @@ def calculate_placefields(
 
     place_field_data = PlacefieldData(
             place_fields,
-            hswu.placefield_matrix(place_fields, place_cell_ids),
+            hseu.placefield_matrix(place_fields, place_cell_ids),
             mean_fr_array,
             max_fr_array,
             place_cell_ids,

@@ -1,7 +1,7 @@
 import os
 import copy
 import numpy as np
-import hippocampalswr.utils as hswu
+import hippocampalseq.utils as hseu
 from typing import Optional
 from .placefields import * 
 from .ripples import *
@@ -31,13 +31,13 @@ def __extract_runs(
     """
     run_times = epochs_dict["Run_Times"]
     spikes = spike_dict['Spike_Data']
-    spike_ind = hswu.times_to_bool(spikes[:,0], run_times[0], run_times[1])
+    spike_ind = hseu.times_to_bool(spikes[:,0], run_times[0], run_times[1])
 
     ripples = ripple_dict['Ripple_Events']
-    rip_idx = hswu.times_to_bool(ripples[:,0], run_times[0], run_times[1])
+    rip_idx = hseu.times_to_bool(ripples[:,0], run_times[0], run_times[1])
 
     pos = pos_dict['Position_Data']
-    pos_idx = hswu.times_to_bool(pos[:,0], run_times[0], run_times[1])
+    pos_idx = hseu.times_to_bool(pos[:,0], run_times[0], run_times[1])
 
     if sweep_type == "theta":
         spikes  = spikes[spike_ind,:]
@@ -123,7 +123,7 @@ def load_rat(data_path: str, rat_name: str, session: int, sweep_type: str = "the
         sweep_type (str): Type of sweep ("theta" or "replay")
 
     Returns:
-        hsw.AttrDict: Dictionary containing rat data
+        hse.AttrDict: Dictionary containing rat data
     """
     assert rat_name in RAT_NAMES, f"{rat_name} not in {RAT_NAMES}"
     assert session in [1,2]
@@ -132,11 +132,11 @@ def load_rat(data_path: str, rat_name: str, session: int, sweep_type: str = "the
     if not os.path.exists(dir_path):
         raise FileNotFoundError(f"{dir_path} not found")
 
-    spike_file  = hswu.read_mat(os.path.join(dir_path, "Spike_Data.mat"))
-    pos_file    = hswu.read_mat(os.path.join(dir_path, "Position_Data.mat"))
-    ripple_file = hswu.read_mat(os.path.join(dir_path, "Ripple_Events.mat"))
-    epochs      = hswu.read_mat(os.path.join(dir_path, "Epochs.mat"))
-    well_seq    = hswu.read_mat(os.path.join(dir_path, "Well_Sequence.mat"))
+    spike_file  = hseu.read_mat(os.path.join(dir_path, "Spike_Data.mat"))
+    pos_file    = hseu.read_mat(os.path.join(dir_path, "Position_Data.mat"))
+    ripple_file = hseu.read_mat(os.path.join(dir_path, "Ripple_Events.mat"))
+    epochs      = hseu.read_mat(os.path.join(dir_path, "Epochs.mat"))
+    well_seq    = hseu.read_mat(os.path.join(dir_path, "Well_Sequence.mat"))
 
     pos,spikes,ripples = __extract_runs(epochs, pos_file, spike_file, ripple_file, sweep_type)
 
@@ -196,7 +196,7 @@ def calculate_velocity(rat_data: RatData, velocity_run_threshold_s: float = 5.0)
         velocity_t = velocity_t[~nan_vel]
         velocity   = velocity[~nan_vel]
     run_b = velocity > velocity_run_threshold_s
-    run_starts,run_ends = hswu.extract_times_from_boolean(run_b, velocity_t)
+    run_starts,run_ends = hseu.extract_times_from_boolean(run_b, velocity_t)
 
     rat_data.velocity_time_sec = velocity_t
     rat_data.velocity          = velocity

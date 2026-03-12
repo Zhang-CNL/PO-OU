@@ -1,3 +1,24 @@
-# hippocampalswr
+# hippocampalseq
+State-space modeling of hippocampal theta and replay sequences.
 
-Git repo where I rip out the code from https://github.com/DrugowitschLab/HippocampalSWRDynamics/ that I need and organize it so that it makes sense.
+## Submodules
+### hippocampalseq.models
+All state-space models are contained here.
+- statespace.py - Basic state-space model implementing a kalman filter
+- momentum.py - Subclassed model adding momentum to the variables.
+
+### hippocampalseq.preprocessing
+Preprocessing code ripped from https://github.com/DrugowitschLab/hippocampalseqDynamics/ and then modified.
+
+### hippoocampalseq.utils
+Code for approximating place-fields as gaussians and more.
+
+## notebooks
+The [notebooks](./notebooks/) folder contains jupyter notebooks for running the library
+on Brad Pfeiffer's data.
+
+## Installation
+```
+conda env create -f environment.yml
+conda activate hippocampalseq
+```
