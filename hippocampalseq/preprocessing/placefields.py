@@ -9,7 +9,7 @@ def __get_run_data(rat_data: RatData) -> hseu.AttrDict:
     """
     Extracts spikes and positions from the given rat data in the given runs.
 
-    Parameters:
+    Args:
         rat_data (RatData): Dictionary containing rat data
 
     Returns:
@@ -68,7 +68,7 @@ def __calculate_one_placefield(
     """
     Calculate the place field given the spike histogram and position histogram.
 
-    Parameters:
+    Args:
         position_hist (np.ndarray): Position histogram
         spike_hist (np.ndarray): Spike histogram
         place_field_sd_gaussian (float): Standard deviation of the place field
@@ -99,7 +99,7 @@ def __get_spike_positions(
     ) -> np.ndarray:
     """Extracts the positions corresponding to the given spike times.
 
-    Parameters:
+    Args:
         cell_spike_times (np.ndarray): Spike times of a cell
         pos_xy (np.ndarray): Position data
         pos_times (np.ndarray): Position times
@@ -125,7 +125,7 @@ def __find_position_during_spike(
     """
     Finds the position corresponding to the given spike time.
 
-    Parameters:
+    Args:
         pos_xy (np.ndarray): Position data
         pos_times (np.ndarray): Position times
         spike_time (float): Spike time
@@ -154,7 +154,7 @@ def __mean_firing_rate(position_histogram: np.ndarray, spiking_histograms: np.nd
     """
     Calculate the mean firing rate for a given position histogram and a set of spiking histograms.
 
-    Parameters:
+    Args:
         position_histogram (np.ndarray): Position histogram
         spiking_histograms (np.ndarray): Spiking histograms
 
@@ -176,7 +176,7 @@ def calculate_placefields(
     ) -> PlacefieldData:
     """Calculate the place fields of a given rat.
 
-    Parameters:
+    Args:
         rat_data (RatData): Data of the rat
         bin_size_cm (int): Bin size in cm
         place_field_gaussian_sd_cm (float): Standard deviation of the place field in cm

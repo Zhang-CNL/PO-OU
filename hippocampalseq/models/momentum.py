@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
+from scipy.optimize import least_squares
+from torch.utils.data import random_split
 
 import hippocampalseq.utils as hseu
 import hippocampalseq.models as hsem
@@ -9,6 +11,19 @@ import hippocampalseq.models as hsem
 __all__ = [
     'Momentum'
 ]
+
+def _init_momentum_params(z: np.ndarray):
+    x = z[:-2]
+    y = z[1:-1]
+    z = z[2:]
+    def residuals(params, x, y, z):
+        a,b = params
+        plane = (1 + a) * x - a * y + (b**2 / 2 / a)
+        return (plane - z).ravel()
+    
+    res = least_squares(residuals, [0.1,0], args=(x, y, z))
+    a,b = res.x
+    return a,b
 
 
 class Momentum(hsem.StateSpaceModel):
@@ -23,7 +38,7 @@ class Momentum(hsem.StateSpaceModel):
         """Initialize the momentum SSM.
         
         Args:
-            place_fields (np.ndarray|torch.Tensor): (Ncells, Ngrid) Flattened place fields.
+            place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
             dt (float): Time step for the transition matrix.
             bins (tuple): Number of bins for each latent dimension.
@@ -42,6 +57,29 @@ class Momentum(hsem.StateSpaceModel):
         if seed is not None:
             torch.random.manual_seed(seed)
 
+        place_fields = torch.from_numpy(place_fields)
+
+        self.data_batches = dict()
+        for k,v in spikemat.items():
+            emission_probability = hseu.calc_poisson_emission_probabilities_2d(
+                torch.from_numpy(v).double(), 
+                place_fields,
+                self.dt
+            )
+
+            T = emission_probability.shape[0]
+            approx_mean = torch.zeros(T, self.latent_dim, 1)
+            approx_cov = torch.zeros(T, self.latent_dim, self.latent_dim)
+            for t in range(T):
+                approx_mean[t], approx_cov[t] = hseu.laplacian_approximation(
+                    self.grid,
+                    emission_probability[t]
+                )
+            self.data_batches[k] = dict()
+            self.data_batches[k]['emission_probabilities'] = emission_probability
+            self.data_batches[k]['approx_mean'] = approx_mean
+            self.data_batches[k]['approx_cov'] = approx_cov
+        """
         self.emission_probabilities = hseu.calc_poisson_emission_probabilities_2d(
             torch.from_numpy(spikemat).double(), 
             torch.from_numpy(place_fields),
@@ -56,21 +94,16 @@ class Momentum(hsem.StateSpaceModel):
                 self.grid,
                 self.emission_probabilities[t]
             )
+        """
 
         # Random initialization of parameters
         self.initial_diffusion = torch.rand(1) * 1000
         self.decay             = torch.rand(1) * (800 - 1) + 1 
         self.diffusion         = torch.rand(1) * (400 - 40) + 40
 
-        pz = torch.tensor([self.emission_probabilities[t][*self.approx_mean[t].to(int)] for t in range(T)])
-        # A = torch.column_stack((self.approx_mean, torch.ones(T, 1, 1)))
-        A = self.approx_mean
-        A = A.squeeze(-1)
-        print(A.shape, pz.shape)
-        soln,resid,rank,s = torch.linalg.lstsq(A, pz)
-        a,b = soln
-        print(a,b)
-
+        # TODO: Simple Bayesian decoder to get z from my approx_mean
+        #a,b = _init_momentum_params(self.approx_mean.numpy())
+        #print(a,b)
         # TODO:
         # Instead of randomly initializing parameters,
         # fit a plane to parameters based on P(z_t|z_{t-1},z_{t-2})
@@ -81,7 +114,7 @@ class Momentum(hsem.StateSpaceModel):
     def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0):
         I = torch.eye(self.latent_dim)
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
-        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion**2 * self.dt * I
+        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion * initial_diffusion * self.dt * I
         init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
         return init_cov
 
@@ -141,7 +174,8 @@ class Momentum(hsem.StateSpaceModel):
         Z = torch.zeros(self.latent_dim, self.latent_dim)
         C = torch.hstack((I, Z))
         #H = np.zeros((self.augmented_dim, self.augmented_dim))
-        H = self.approx_cov
+        #H = self.approx_cov
+        H = None
         return C,H
 
     def _filter_init(self, values: hsem.KalmanResults):
@@ -224,12 +258,45 @@ class Momentum(hsem.StateSpaceModel):
         else:
             return super()._smooth(values, t)
 
+    def _loglikelihood(self, values: dict):
+        A = self.transition_matrices
+        C = self.observation_matrices
+        Gamma = self._construct_transition_cov(self.decay, self.diffusion, .00001)#self.transition_covariance
+        Sigma = self.observation_covariance
+        init_mat = self.initial_state_mean
+        init_cov = self._construct_init_var(self.initial_diffusion, .00001)#self.initial_state_covariance
+        stats = values['stats']
+        T = values['kf_results'].observations.shape[0]
+
+        ll = 0
+        ll += torch.logdet(self.initial_state_covariance)
+        ll += torch.logdet(self.transition_covariance) * (T-2)
+        ll += torch.sum(torch.logdet(self.observation_covariance))
+        ll /= 2
+
+        ill = stats.Ezz[1] - stats.Ezz1[0] @ init_mat.mT - init_mat @ stats.Ez1z[0] + init_mat @ stats.Ezz[0] @ init_mat.mT
+        ill = torch.linalg.solve(init_cov, ill)
+        ll += torch.trace(ill) / 2.0
+
+        tll = stats.Ezz[2:] - stats.Ezz1[1:] @ A.mT - A @ stats.Ez1z[1:]  + A @ stats.Ezz[1:-1] @ A.mT
+        tll = torch.sum(tll, axis=0)
+        tll = torch.linalg.solve(Gamma, tll)
+        ll += torch.trace(tll) / 2.0
+
+        ell = stats.Exx - stats.Exz @ C.mT - C @ stats.Ezx + C @ stats.Ezz @ C.mT
+        ell = torch.linalg.solve(Sigma + .00001 * torch.eye(self.obs_dim), ell)
+        ell = torch.sum(ell, axis=0)
+        ll += torch.trace(ell) / 2.0
+
+        ll += T * self.augmented_dim * torch.log(2 * hsem.PI)
+
+        return ll
 
     def _em_mle(self, values, stats, normalize):
         raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
 
     def _em_autograd(self, 
-            values: hsem.KalmanResults,
+            values: stats,
             stats: hsem.SufficientStatistics,
             normalize: bool,
             lr: float = 1e-3, 
@@ -254,7 +321,7 @@ class Momentum(hsem.StateSpaceModel):
         if seed is not None:
             torch.random.manual_seed(seed)
 
-        T = values.observations.shape[0]
+        #T = values.observations.shape[0]
 
         I = torch.eye(self.latent_dim)
         Z = torch.zeros((self.latent_dim, self.latent_dim))
@@ -266,54 +333,67 @@ class Momentum(hsem.StateSpaceModel):
             decay.copy_(self.decay)
             diffusion.copy_(self.diffusion)
             initial_diffusion.copy_(self.initial_diffusion)
+        # decay = torch.tensor(self.decay, requires_grad=True)
+        # diffusion = torch.tensor(self.diffusion, requires_grad=True)    
+        # initial_diffusion = torch.tensor(self.initial_diffusion, requires_grad=True)
 
-        A = self._construct_transition_mat(decay, diffusion)
-        Gamma = self._construct_transition_cov(decay, diffusion, jitter=0.00001)
 
-        C = self.observation_matrices
-        Sigma = self.observation_covariance
-
-        init_mat = self.initial_state_mean
-        init_cov = self._construct_init_var(initial_diffusion, jitter=0.00001)
 
         optimizer = torch.optim.Adam(
             [diffusion, decay, initial_diffusion],
             lr=lr
         )
 
+        jitter = torch.eye(self.obs_dim) * .000001
         prev_loss = 0.
-        bins = torch.tensor(self.bins)
 
         for epoch in range(n_epochs):
-            loss = 0
-            
-            ill = stats.Ezz[1] - stats.Ezz1[0] @ init_mat.mT - init_mat @ stats.Ez1z[0] + init_mat @ stats.Ezz[0] @ init_mat.mT
-            ill = torch.linalg.solve(init_cov, ill)
-            loss += torch.trace(ill)
+            total_loss = 0
 
-            tll = stats.Ezz[2:] - stats.Ezz1[1:] @ A.mT - A @ stats.Ez1z[1:]  + A @ stats.Ezz[1:-1] @ A.mT
-            tll = torch.sum(tll, axis=0)
-            tll = torch.linalg.solve(Gamma, tll)
-            loss += torch.trace(tll)
+            for i in values.indices:
+                A = self._construct_transition_mat(decay, diffusion)
+                Gamma = self._construct_transition_cov(decay, diffusion, jitter=0.00001)
 
-            ell = stats.Exx - stats.Exz @ C.mT - C @ stats.Ezx + C @ stats.Ezz @ C.mT
-            ell = torch.linalg.solve(Sigma, ell)
-            ell = torch.sum(ell, axis=0)
-            loss += torch.trace(ell)
+                C = self.observation_matrices
 
-            loss += torch.sum(torch.logdet(Sigma))
-            loss += torch.logdet(init_cov)
-            loss += torch.logdet(Gamma) * (T - 2)
-            loss /= 2.0
+                init_mat = self.initial_state_mean
+                init_cov = self._construct_init_var(initial_diffusion, jitter=0.00001)
 
-            if epoch > 0 and abs((loss.item() - prev_loss) / prev_loss) < gd_tol: 
+                loss = 0.
+                v = values.dataset[i]
+                stats = v['stats']
+                Sigma = v['approx_cov']
+                T = v['kf_results'].observations.shape[0]
+
+                ill = stats.Ezz[1] - stats.Ezz1[0] @ init_mat.mT - init_mat @ stats.Ez1z[0] + init_mat @ stats.Ezz[0] @ init_mat.mT
+                ill = torch.linalg.solve(init_cov, ill)
+                loss += torch.trace(ill)
+
+                tll = stats.Ezz[2:] - stats.Ezz1[1:] @ A.mT - A @ stats.Ez1z[1:]  + A @ stats.Ezz[1:-1] @ A.mT
+                tll = torch.sum(tll, axis=0)
+                tll = torch.linalg.solve(Gamma, tll)
+                loss += torch.trace(tll)
+
+                ell = stats.Exx - stats.Exz @ C.mT - C @ stats.Ezx + C @ stats.Ezz @ C.mT
+                ell = torch.linalg.solve(Sigma + jitter, ell)
+                ell = torch.sum(ell, axis=0)
+                loss += torch.trace(ell)
+
+                loss += torch.sum(torch.logdet(Sigma))
+                loss += torch.logdet(init_cov)
+                loss += torch.logdet(Gamma) * (T - 2)
+                loss /= 2.0 
+
+                loss.backward(retain_graph=True)
+                optimizer.step()
+                optimizer.zero_grad()
+
+                total_loss += loss.item()
+
+            if epoch > 0 and abs((total_loss - prev_loss) / prev_loss) < gd_tol: 
                 break
-            prev_loss = loss.item()
+            prev_loss = total_loss
         
-            loss.backward(retain_graph=True)
-            optimizer.step()
-            optimizer.zero_grad()
-
         self.decay             = decay.detach()
         self.diffusion         = diffusion.detach()
         self.initial_diffusion = initial_diffusion.detach()
@@ -330,7 +410,19 @@ class Momentum(hsem.StateSpaceModel):
 
         return torch.tensor(prev_loss)
 
-    def em(self, X=None, **em_args):
+    def _em(self, values: dict, normalize: bool, maximization_type: str = 'autograd', **autograd_args):
+        #for k,v in values.items():
+        with torch.no_grad():
+            for i in values.indices:
+                v = values.dataset[i]
+                #values[k]['stats'] = self._calc_sufficient_stats(v['kf_results'])
+                values.dataset[i]['stats'] = self._calc_sufficient_stats(v['kf_results'])
+        if maximization_type == 'mle':
+            return self._em_mle(values, normalize)
+        elif maximization_type == 'autograd':
+            return self._em_autograd(values, None, normalize, **autograd_args)
+
+    def em(self, X=None, normalize: bool = True, n_iter: int = 100, emtol: float = 1e-3, **diff_args):
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
@@ -340,6 +432,77 @@ class Momentum(hsem.StateSpaceModel):
         Returns:
             torch.Tensor: The negative log likelihood of the data given the model parameters.
         """
-        X = self.approx_mean
-        return super().em(X, **em_args)
+        X = self.data_batches
+        Xtrain,Xtest = random_split(X, [0.9, 0.1])
 
+        (
+            self.transition_matrices,
+            self.transition_covariance,
+            self.observation_matrices,
+            self.observation_covariance,
+            self.initial_state_mean,
+            self.initial_state_covariance,
+        ) = self._initialize_parameters()
+
+        for k,v in X.items():
+            x = v['approx_mean']
+            values = hsem.KalmanResults(
+                observations  =x,
+                predicted_mean=torch.zeros(x.shape[0], self.augmented_dim, 1),
+                predicted_cov =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                filtered_mean =torch.zeros(x.shape[0], self.augmented_dim, 1),
+                filtered_cov  =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                smoothed_gain =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                smoothed_mean =torch.zeros(x.shape[0], self.augmented_dim, 1),
+                smoothed_cov  =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                negloglike    =[]
+            )
+            X[k]['kf_results'] = values
+
+
+        train_nll = []
+        test_nll = []
+
+        for i in range(n_iter):
+            with torch.no_grad():
+                #for k,v in Xtrain.items():
+                for j in Xtrain.indices:
+                    v = Xtrain.dataset[j]
+                    self.observation_covariance = v['approx_cov']
+                    values = v['kf_results']
+                    values = self.filter(values)
+                    values = self.smooth(values)
+                    v['kf_results'] = values
+            ll = self._em(
+                Xtrain,
+                normalize,
+                **diff_args
+            )
+
+            train_nll.append(-ll)
+            if torch.isnan(train_nll[-1]):
+                print("Log-likelihood is NaN, stopping EM")
+                break
+
+            with torch.no_grad():
+                ll = 0
+                #for k,v in Xtest.items():
+                for j in Xtest.indices:
+                    v = Xtest.dataset[j]
+                    self.observation_covariance = v['approx_cov']
+                    values = v['kf_results']
+                    values = self.filter(values)
+                    values = self.smooth(values)
+                    v['kf_results'] = values
+                    ll += self._loglikelihood(v)
+
+            test_nll.append(-ll)
+            if torch.isnan(test_nll[-1]):
+                print("Log-likelihood is NaN, stopping EM")
+                break
+
+            if i > 0 and abs((train_nll[-1] - train_nll[-2]) / train_nll[-2]) < emtol:
+                print(f"Converged after {i} epochs, exiting")
+                break
+
+        return Xtrain.dataset, train_nll, test_nll

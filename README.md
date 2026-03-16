@@ -9,6 +9,11 @@ All state-space models are contained here.
 
 ### hippocampalseq.preprocessing
 Preprocessing code ripped from https://github.com/DrugowitschLab/hippocampalseqDynamics/ and then modified.
+Loading data can be done using the `load_and_preprocess()` function:
+```py
+import hippocampalseq.preprocessing as hsep
+rat_data = hsep.load_and_preprocess("path/to/data", "RatName", session)
+```
 
 ### hippoocampalseq.utils
 Code for approximating place-fields as gaussians and more.

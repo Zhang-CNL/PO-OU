@@ -13,6 +13,22 @@ def __get_spikemat(
         time_window_s: float,
         time_window_advance_s: float,
     ) -> np.ndarray:
+    """
+    Extracts a spikemat (a matrix where each row corresponds
+     to a timebin and each column corresponds to a place cell) from the given spike data.
+
+    Args:
+        spike_ids (np.ndarray): IDs of the spikes
+        spike_times (np.ndarray): Times of the spikes
+        place_cell_ids (np.ndarray): IDs of the place cells
+        start_time (float): Start time of the epoch
+        end_time (float): End time of the epoch
+        time_window_s (float): Length of time window in seconds
+        time_window_advance_s (float): Advance of time window in seconds
+
+    Returns:
+        np.ndarray: An individual spike matrix.
+    """
     spikemat = np.empty(shape=(0, len(place_cell_ids)), dtype=int)
     timebin_start_time = start_time
     timebin_end_time = start_time + time_window_s
@@ -39,6 +55,27 @@ def __select_population_burst(
         avg_spikes_per_s_threshold: float,
         min_popburst_n_time_windows: int
     ) -> tuple:
+    """
+    Selects a population burst from the given spike data.
+
+    A population burst is defined as a sequence of timebins where the average firing rate of the population
+    is above the given threshold for at least min_popburst_n_time_windows timebins.
+
+    Args:
+        spikemat_fullripple (np.ndarray): Spike matrix of a full ripple
+        ripple_start (float): Start time of the ripple
+        ripple_end (float): End time of the ripple
+        n_place_cells (int): Number of place cells
+        time_window_s (float): Length of time window in seconds
+        avg_fr_smoothing_convolution (np.ndarray): Smoothing convolution for average firing rate
+        avg_spikes_per_s_threshold (float): Threshold for average firing rate in spikes per second
+        min_popburst_n_time_windows (int): Minimum number of time windows for a population burst
+
+    Returns:
+        tuple: A tuple containing the spike matrix of the population burst, the start and end times of the population burst,
+            and the smoothed average firing rate of the population.
+
+    """
     spikes_per_timebin = spikemat_fullripple.sum(axis=1)
     avg_spikes_per_s = (
         spikes_per_timebin / n_place_cells / time_window_s
@@ -81,6 +118,22 @@ def __calc_spikemats(
         avg_spikes_per_s_threshold: int,
         min_popburst_n_time_windows: int
     ) -> tuple:
+    """
+    Calculates the spike matrices for the full ripple and population burst
+    for all ripples in the given rat data.
+
+    Args:
+        rat_data (RatData): Data of the rat
+        time_window_s (float): Length of time window in seconds
+        time_window_advance_s (float): Advance of time window in seconds
+        avg_fr_smoothing_convolution (np.ndarray): Convolution to smooth the average firing rate
+        avg_spikes_per_s_threshold (int): Threshold for the average firing rate
+        min_popburst_n_time_windows (int): Minimum number of time windows for a population burst
+
+    Returns:
+        tuple: Contains the spike matrices for the full ripple and population burst,
+               the start and end times of the population bursts, and the smoothed average firing rate
+    """
     spike_ids      = rat_data.spike_ids
     spike_times    = rat_data.spike_times_sec
     place_cell_ids = rat_data.place_field_data.place_cell_ids
@@ -126,6 +179,19 @@ def __calc_spikemats(
     )
 
 def __calc_popburst_firing_rate_array(spikemats: dict, n_place_cells: int, time_window_s: float) -> np.ndarray:
+    """
+    Calculate the firing rate of the population bursts.
+
+    The firing rate is calculated as the total number of spikes divided by the total time of the population bursts.
+
+    Args:
+        spikemats (dict): Spikemats of the population bursts
+        n_place_cells (int): Number of place cells
+        time_window_s (float): Time window in seconds
+
+    Returns:
+        np.ndarray: Firing rate of the population bursts (spikes per second)
+    """
     firing_rate_matrix = np.full((n_place_cells, len(spikemats)), np.nan)
     total_spikes = np.zeros(n_place_cells)
     total_time = 0
@@ -138,11 +204,24 @@ def __calc_popburst_firing_rate_array(spikemats: dict, n_place_cells: int, time_
     return firing_rate_array, firing_rate_matrix
 
 def __calc_firing_rate_scaling(run_mean_frs: np.ndarray, ripple_mean_frs: np.ndarray) -> dict:
-        scaling_factors = ripple_mean_frs / run_mean_frs
-        scaling_factors = scaling_factors[scaling_factors > 0]
-        k, _, scale = sp.gamma.fit(scaling_factors, floc=0)
-        return {"scaling_factors": scaling_factors, "alpha": k, "beta": 1 / scale}
-        #return {"scaling_factors": scaling_factors, "alpha": 1, "beta": 1}
+    """
+    Calculate the scaling factors for the firing rate of the ripples.
+
+    The scaling factors are calculated as the ratio of the ripple mean firing rates to the run mean firing rates.
+    The gamma distribution is then fitted to the scaling factors to obtain the alpha and beta parameters.
+
+    Args:
+        run_mean_frs (np.ndarray): Mean firing rates of the runs.
+        ripple_mean_frs (np.ndarray): Mean firing rates of the ripples.
+
+    Returns:
+        dict: A dictionary containing the scaling factors, alpha and beta parameters.
+    """
+    scaling_factors = ripple_mean_frs / run_mean_frs
+    scaling_factors = scaling_factors[scaling_factors > 0]
+    k, _, scale = sp.gamma.fit(scaling_factors, floc=0)
+    return {"scaling_factors": scaling_factors, "alpha": k, "beta": 1 / scale}
+    #return {"scaling_factors": scaling_factors, "alpha": 1, "beta": 1}
 
 def process_ripples(
         rat_data: RatData, 
@@ -152,6 +231,23 @@ def process_ripples(
         avg_spikes_per_s_threshold: int = 2,
         min_popburst_duration_ms: int = 30
     ) -> RippleData:
+    """
+    Process ripple data.
+
+    Process the ripple data by calculating the spikemats for the ripples and population bursts,
+    and then calculating the firing rate of the population bursts and the scaling factors.
+
+    Args:
+        rat_data (RatData): Data of the rat
+        time_window_ms (float): Time window in milliseconds. Defaults to 3.0.
+        time_window_advance_ms (Optional[float]): Time window advance in milliseconds. Defaults to None.
+        avg_fr_smoothing_convolution (np.ndarray): Smoothing convolution for average firing rate. Defaults to np.array([.25, .25, .25, .25]).
+        avg_spikes_per_s_threshold (int): Threshold for average firing rate in spikes per second. Defaults to 2.
+        min_popburst_duration_ms (int): Minimum duration of population bursts in milliseconds. Defaults to 30.
+
+    Returns:
+        RippleData: Dictionary containing ripple data with additional fields for population burst firing rate and scaling factors.
+    """
     time_window_s = time_window_ms / 1000
     time_window_advance_s = time_window_s if time_window_advance_ms is None else time_window_advance_ms / 1000
     min_popburst_n_time_windows = int(np.ceil(min_popburst_duration_ms / time_window_ms))

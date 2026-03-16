@@ -212,7 +212,7 @@ class StateSpaceModel:
         ell = torch.trace(ell) / 2
         ll += ell
 
-        ll += T * self.latent_dim * torch.log(PI)
+        ll += T * self.latent_dim * torch.log(2*PI)
         return ll
 
     def _initial_mean_mle(self, values: KalmanResults, stats: SufficientStatistics):

@@ -54,7 +54,7 @@ def __extract_runs(
 def __calculate_velocity(pos_xy: np.ndarray) -> np.ndarray:
     """Calculates the velocity of a given position data.
 
-    Parameters:
+    Args:
         pos_xy (np.ndarray): Position data
 
     Returns:
@@ -67,7 +67,7 @@ def __calculate_velocity(pos_xy: np.ndarray) -> np.ndarray:
 def __align_spikes_to_pos(rat_data: RatData) -> RatData:
     """Align spike and position data by removing spikes and positions outside of each other's recording times.
 
-    Parameters:
+    Args:
         rat_data (RatData): Data of the rat
 
     Returns:
@@ -222,7 +222,7 @@ def load_and_preprocess(
     ) -> RatData:
     """Runs all preprocessing steps on the given rat data.
 
-    Parameters:
+    Args:
         data_path (str): Path to data directory
         rat_name (str): Name of the rat
         session (int): Session number (1 or 2)
