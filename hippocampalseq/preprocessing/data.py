@@ -5,7 +5,7 @@ RAT_NAMES = ['Harpy', 'Imp', 'Janni', 'Naga']
 PFEIFFER_ENV_WIDTH_CM  = 200
 PFEIFFER_ENV_HEIGHT_CM = 200
 PFEIFFER_PLACEFIELD_MIN_TUNE_SPIKES_PSEC = 2
-PFEIFFER_RECORDING_FPS = .003 # 1/30
+PFEIFFER_RECORDING_FPS = 1 / 30
 
 
 @dataclass
@@ -26,6 +26,12 @@ class RippleData:
     mean_popburst_arr : np.ndarray           = None # (n_place_cells, 1): Mean firing rate for each place cell across all time
     mean_popburst_mat : np.ndarray           = None # (n_place_cells, Nripples): Mean firing rate for each place cell for each ripple
     firing_rate_scale : dict                 = None # Gamma scaling factors considered for each place cell's gamma prior.
+
+@dataclass
+class Theta:
+    run_times_s: np.ndarray 
+    true_trajectories: dict[int,np.ndarray]
+    spikemats: dict[int,np.ndarray]
 
 @dataclass 
 class RatData:
@@ -49,3 +55,4 @@ class RatData:
     run_times_end      : np.ndarray     = None # (?, 1): time at which rat dropped below velocity at set threshold
     place_field_data   : PlacefieldData = None 
     ripple_data        : RippleData     = None
+    theta_data         : Theta          = None

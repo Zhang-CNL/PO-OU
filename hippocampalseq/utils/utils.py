@@ -63,6 +63,15 @@ def cm_to_bins(array_in_cm, bin_size_cm: int = 4):
     return np.floor(array_in_cm / bin_size_cm)  # cm to bins
 
 def placefield_matrix(place_fields: np.ndarray, place_cell_ids: np.ndarray) -> np.ndarray:
+    """Convert a 3d array of place fields to a 2d array, where each row corresponds to a cell id.
+
+    Args:
+        place_fields (np.ndarray): 3d array of place fields, where each row is a cell id and each column is a place field.
+        place_cell_ids (np.ndarray): 1d array of cell ids.
+
+    Returns:
+        (np.ndarray): 2d array of place fields, where each row is a cell id and each column is a place field.
+    """
     tuning_curves = place_fields[place_cell_ids]
     return tuning_curves.reshape((len(place_cell_ids), np.prod(tuning_curves.shape[1:3])))
 
@@ -84,21 +93,22 @@ def calc_poisson_emission_probabilities_log(
     Returns:
         (np.ndarray): (Ngrid, T) matrix of emission probabilities
     """
-    (n_timesteps, n_cells) = np.shape(spikemat)
-    (n_cells, n_grid) = np.shape(place_fields)
-    log_pfs = np.log(place_fields)#.T
+    sum, log = changeover_functions(type(spikemat), 'sum', 'log')
+    fac = factorial if type(spikemat) == np.ndarray else lambda x: torch.exp(torch.lgamma(x+1))
+
+    log_pfs = log(place_fields)#.T
 
     # $\sum_n x_t ln(f_n(z_t))$
     pf_spikes_sum = spikemat @ log_pfs# (log_pfs @ spikemat.T).T # (T,Ngrid) matrix
 
     #  $\sum_n x_t ln(\delta_t)$
-    time_window_spikes_sum = np.sum(spikemat * np.log(dt), axis=1) # (T,) matrix
+    time_window_spikes_sum = sum(spikemat * log(dt), axis=1) # (T,) matrix
 
     # $\delta t\sum_n f_n(z_t)$
-    pf_sum = dt * np.sum(place_fields, axis=0) # (Ngrid,) matrix
+    pf_sum = dt * sum(place_fields, axis=0) # (Ngrid,) matrix
 
     # $\sum_n ln(x_{t,n}!)$
-    spikes_sum = np.sum(np.log(factorial(spikemat)), axis=1) # (T,) matrix
+    spikes_sum = sum(log(fac(spikemat)), axis=1) # (T,) matrix
     # calculate emission probs
     pf_sum_norm = (pf_spikes_sum.T + time_window_spikes_sum).T - pf_sum
     emission_probabilities_log = pf_sum_norm.T - spikes_sum
@@ -121,10 +131,11 @@ def calc_poisson_emission_probabilities(
     Returns:
         (np.ndarray): (Ngrid, T) matrix of emission probabilities
     """
+    exp = changeover_functions(type(spikemat), 'exp')
     emission_probabilities_log = calc_poisson_emission_probabilities_log(
         spikemat, place_fields, dt
     )
-    emission_probabilities = np.exp(emission_probabilities_log)
+    emission_probabilities = exp(emission_probabilities_log)
     return emission_probabilities
 
 def calc_poisson_emission_probabilities_log_2d(
@@ -170,6 +181,47 @@ def calc_poisson_emission_probabilities_2d(
     lemission = calc_poisson_emission_probabilities_log_2d(spikemat, place_fields, dt)
     emission_probabilities = exp(lemission)
     return emission_probabilities
+
+def extract_spikemat(
+        spike_ids: np.ndarray, 
+        spike_times: np.ndarray,
+        place_cell_ids: np.ndarray,
+        start_time: float, 
+        end_time: float,
+        time_window_s: float,
+        time_window_advance_s: float
+    ) -> np.ndarray:
+    """
+    Extracts a spikemat (a matrix where each row corresponds
+     to a timebin and each column corresponds to a place cell) from the given spike data.
+
+    Args:
+        spike_ids (np.ndarray): IDs of the spikes
+        spike_times (np.ndarray): Times of the spikes
+        place_cell_ids (np.ndarray): IDs of the place cells
+        start_time (float): Start time of the epoch
+        end_time (float): End time of the epoch
+        time_window_s (float): Length of time window in seconds
+        time_window_advance_s (float): Advance of time window in seconds
+
+    Returns:
+        np.ndarray: An individual spike matrix.
+    """
+    spikemat = np.empty(shape=(0, len(place_cell_ids)), dtype=int)
+    timebin_start_time = start_time
+    timebin_end_time = start_time + time_window_s
+    while timebin_end_time < end_time:
+        spikes_after_start = spike_times >= timebin_start_time
+        spikes_before_end = spike_times < timebin_end_time
+        timebin_bool = spikes_after_start == spikes_before_end
+        spike_ids_in_window = spike_ids[timebin_bool]
+        spikevector = np.array(
+            [[np.sum(spike_ids_in_window == cell_id) for cell_id in place_cell_ids]]
+        )
+        spikemat = np.append(spikemat, spikevector, axis=0)
+        timebin_start_time = timebin_start_time + time_window_advance_s
+        timebin_end_time = timebin_end_time + time_window_advance_s
+    return np.array(spikemat, dtype=int)
 
 def bin_points(x,y):
     vstack,hstack = changeover_functions(type(x), 'vstack', 'hstack')

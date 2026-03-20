@@ -97,9 +97,13 @@ class Momentum(hsem.StateSpaceModel):
         """
 
         # Random initialization of parameters
-        self.initial_diffusion = torch.rand(1) * 1000
-        self.decay             = torch.rand(1) * (800 - 1) + 1 
-        self.diffusion         = torch.rand(1) * (400 - 40) + 40
+        self.decay             = torch.rand(1)# * (800 - 1) + 1 
+        self.diffusion         = torch.rand(1)# * (400 - 40) + 40
+        self.initial_diffusion = torch.rand(1)# * 1000
+        # with torch.no_grad():
+        #     self.decay, self.diffusion = self._adjust_parameters(
+        #         self.decay, self.diffusion, self.dt
+        #     )
 
         # TODO: Simple Bayesian decoder to get z from my approx_mean
         #a,b = _init_momentum_params(self.approx_mean.numpy())
@@ -110,6 +114,32 @@ class Momentum(hsem.StateSpaceModel):
         # Use approx_mean as z
 
         #print(self.initial_diffusion, self.decay, self.diffusion)
+
+    def _adjust_parameters(self, theta, sigma, dt):
+        n = 10**10
+        t_adjusted = torch.log(dt * theta + 1) / dt 
+        delta = n * dt 
+        cfunction = (
+            sigma ** 2 / theta * (
+                (2 * theta * delta) - torch.exp(-2 * theta * delta)
+                + 4 * torch.exp(-theta * delta)
+                -3
+            ) / (2 * theta**2)
+        )
+        prefactor = dt ** 2 / (2 * t_adjusted)
+        numer = (
+            (delta / dt) * -torch.exp(2 * t_adjusted * dt)
+            - 2 * torch.exp(-t_adjusted * (delta - dt))
+            - 2 * torch.exp(-t_adjusted * delta)
+            + torch.exp(-2 * t_adjusted * delta)
+            + 2 * torch.exp(t_adjusted * dt)
+            + (delta / dt)
+            + 1
+        )
+        denom = (torch.exp(t_adjusted * dt) - 1) ** 2 
+        dfunction = prefactor * -(numer / denom)
+        sigma_adjusted = torch.sqrt(cfunction / dfunction)
+        return t_adjusted, sigma_adjusted
 
     def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0):
         I = torch.eye(self.latent_dim)
@@ -269,26 +299,26 @@ class Momentum(hsem.StateSpaceModel):
         T = values['kf_results'].observations.shape[0]
 
         ll = 0
-        ll += torch.logdet(self.initial_state_covariance)
-        ll += torch.logdet(self.transition_covariance) * (T-2)
+        ll += torch.logdet(init_cov)
+        ll += torch.logdet(Gamma) * (T-2)
         ll += torch.sum(torch.logdet(self.observation_covariance))
-        ll /= 2
 
         ill = stats.Ezz[1] - stats.Ezz1[0] @ init_mat.mT - init_mat @ stats.Ez1z[0] + init_mat @ stats.Ezz[0] @ init_mat.mT
         ill = torch.linalg.solve(init_cov, ill)
-        ll += torch.trace(ill) / 2.0
+        ll += torch.trace(ill) 
 
         tll = stats.Ezz[2:] - stats.Ezz1[1:] @ A.mT - A @ stats.Ez1z[1:]  + A @ stats.Ezz[1:-1] @ A.mT
         tll = torch.sum(tll, axis=0)
         tll = torch.linalg.solve(Gamma, tll)
-        ll += torch.trace(tll) / 2.0
+        ll += torch.trace(tll) 
 
         ell = stats.Exx - stats.Exz @ C.mT - C @ stats.Ezx + C @ stats.Ezz @ C.mT
         ell = torch.linalg.solve(Sigma + .00001 * torch.eye(self.obs_dim), ell)
         ell = torch.sum(ell, axis=0)
-        ll += torch.trace(ell) / 2.0
+        ll += torch.trace(ell) 
 
         ll += T * self.augmented_dim * torch.log(2 * hsem.PI)
+        ll /= 2
 
         return ll
 
@@ -465,7 +495,6 @@ class Momentum(hsem.StateSpaceModel):
 
         for i in range(n_iter):
             with torch.no_grad():
-                #for k,v in Xtrain.items():
                 for j in Xtrain.indices:
                     v = Xtrain.dataset[j]
                     self.observation_covariance = v['approx_cov']
@@ -486,7 +515,6 @@ class Momentum(hsem.StateSpaceModel):
 
             with torch.no_grad():
                 ll = 0
-                #for k,v in Xtest.items():
                 for j in Xtest.indices:
                     v = Xtest.dataset[j]
                     self.observation_covariance = v['approx_cov']
@@ -494,6 +522,8 @@ class Momentum(hsem.StateSpaceModel):
                     values = self.filter(values)
                     values = self.smooth(values)
                     v['kf_results'] = values
+                    with torch.no_grad():
+                        v['stats'] = self._calc_sufficient_stats(v['kf_results'])
                     ll += self._loglikelihood(v)
 
             test_nll.append(-ll)

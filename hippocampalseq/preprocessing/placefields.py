@@ -22,10 +22,10 @@ def __get_run_data(rat_data: RatData) -> hseu.AttrDict:
     run_starts  = rat_data.run_times_start
     run_ends    = rat_data.run_times_end
 
-    _spike_times = []#np.array([])
-    _spike_ids = []#np.array([])
-    _run_x_pos = []#np.array([])
-    _run_y_pos = []#np.array([])
+    _spike_times = []
+    _spike_ids = []
+    _run_x_pos = []
+    _run_y_pos = []
     for epoch in range(len(run_starts)):
         start = run_starts[epoch]
         end   = run_ends[epoch]
@@ -42,15 +42,10 @@ def __get_run_data(rat_data: RatData) -> hseu.AttrDict:
         _spike_ids.append(window_spike_ids)
         _run_x_pos.append(window_x_pos)
         _run_y_pos.append(window_y_pos)
-        #_spike_times = np.append(_spike_times, window_spike_times)
-        #_spike_ids   = np.append(_spike_ids, window_spike_ids).astype(int)
-        #_run_x_pos   = np.append(_run_x_pos, window_x_pos)
-        #_run_y_pos   = np.append(_run_y_pos, window_y_pos)
     
     _spike_times = np.hstack(_spike_times)
     _spike_ids   = np.hstack(_spike_ids)
     pos_xy_cm    = np.vstack((np.hstack(_run_x_pos), np.hstack(_run_y_pos))).T
-    #pos_xy_cm = np.array((_run_x_pos, _run_y_pos)).T
     return hseu.AttrDict({
         "spike_times": _spike_times,
         "spike_ids": _spike_ids,

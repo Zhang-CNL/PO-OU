@@ -5,8 +5,8 @@ import hippocampalseq.utils as hseu
 from typing import Optional
 from .placefields import * 
 from .ripples import *
+from .theta import *
 from .data import *
-
 
 
 def __extract_runs(
@@ -218,7 +218,11 @@ def load_and_preprocess(
         time_window_advance_ms: Optional[float] = None,
         avg_fr_smoothing_convolution: np.ndarray = np.array([.25, .25, .25, .25]),
         avg_spikes_per_s_threshold: int = 2,
-        min_popburst_duration_ms: int = 30
+        min_popburst_duration_ms: int = 30,
+        run_period_threshold: float = 2.0,
+        place_field_scaling_factor: float = 2.9,
+        velocity_scaling_factor: float = 6.75,
+        seed: int|None = 42
     ) -> RatData:
     """Runs all preprocessing steps on the given rat data.
 
@@ -239,18 +243,28 @@ def load_and_preprocess(
     rat_data = clean_data(rat_data, position_gap_threshold_s)
     rat_data = calculate_velocity(rat_data, velocity_run_threshold_s)
     rat_data.place_field_data = calculate_placefields(
-            rat_data,
-            bin_size_cm, 
-            place_field_gaussian_sd_cm,
-            position_gap_threshold_s
-        )
+        rat_data,
+        bin_size_cm, 
+        place_field_gaussian_sd_cm,
+        position_gap_threshold_s
+    )
     rat_data.ripple_data = process_ripples(
-            rat_data,
-            time_window_ms,
-            time_window_advance_ms,
-            avg_fr_smoothing_convolution,
-            avg_spikes_per_s_threshold,
-            min_popburst_duration_ms
-        )
+        rat_data,
+        time_window_ms,
+        time_window_advance_ms,
+        avg_fr_smoothing_convolution,
+        avg_spikes_per_s_threshold,
+        min_popburst_duration_ms
+    )
+
+    rat_data.theta_data = process_theta(
+        rat_data, 
+        run_period_threshold, 
+        place_field_scaling_factor,
+        velocity_scaling_factor,
+        time_window_ms,
+        time_window_advance_ms,
+        seed
+    )
 
     return rat_data

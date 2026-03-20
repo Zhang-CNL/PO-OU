@@ -4,47 +4,6 @@ import hippocampalseq.utils as hseu
 from typing import Optional
 from .data import *
 
-def __get_spikemat(
-        spike_ids: np.ndarray,
-        spike_times: np.ndarray,
-        place_cell_ids: np.ndarray,
-        start_time: float,
-        end_time: float,
-        time_window_s: float,
-        time_window_advance_s: float,
-    ) -> np.ndarray:
-    """
-    Extracts a spikemat (a matrix where each row corresponds
-     to a timebin and each column corresponds to a place cell) from the given spike data.
-
-    Args:
-        spike_ids (np.ndarray): IDs of the spikes
-        spike_times (np.ndarray): Times of the spikes
-        place_cell_ids (np.ndarray): IDs of the place cells
-        start_time (float): Start time of the epoch
-        end_time (float): End time of the epoch
-        time_window_s (float): Length of time window in seconds
-        time_window_advance_s (float): Advance of time window in seconds
-
-    Returns:
-        np.ndarray: An individual spike matrix.
-    """
-    spikemat = np.empty(shape=(0, len(place_cell_ids)), dtype=int)
-    timebin_start_time = start_time
-    timebin_end_time = start_time + time_window_s
-    while timebin_end_time < end_time:
-        spikes_after_start = spike_times >= timebin_start_time
-        spikes_before_end = spike_times < timebin_end_time
-        timebin_bool = spikes_after_start == spikes_before_end
-        spike_ids_in_window = spike_ids[timebin_bool]
-        spikevector = np.array(
-            [[np.sum(spike_ids_in_window == cell_id) for cell_id in place_cell_ids]]
-        )
-        spikemat = np.append(spikemat, spikevector, axis=0)
-        timebin_start_time = timebin_start_time + time_window_advance_s
-        timebin_end_time = timebin_end_time + time_window_advance_s
-    return np.array(spikemat, dtype=int)
-
 def __select_population_burst(
         spikemat_fullripple: np.ndarray, 
         ripple_start: float,
@@ -77,23 +36,16 @@ def __select_population_burst(
 
     """
     spikes_per_timebin = spikemat_fullripple.sum(axis=1)
-    avg_spikes_per_s = (
-        spikes_per_timebin / n_place_cells / time_window_s
-    )
     avg_spikes_per_s_smoothed = np.convolve(
-        avg_spikes_per_s, avg_fr_smoothing_convolution, mode="same"
+        spikes_per_timebin / (n_place_cells * time_window_s), avg_fr_smoothing_convolution, mode="same"
     )
-    timebins_above_threshold = (
-        avg_spikes_per_s_smoothed > avg_spikes_per_s_threshold
-    )
-    if (timebins_above_threshold).sum() > 1:
-        start_timebin = np.argwhere(timebins_above_threshold)[0][0]
-        end_timebin = np.argwhere(timebins_above_threshold)[-1][0]
+    timebins_above_threshold = avg_spikes_per_s_smoothed > avg_spikes_per_s_threshold
+    if timebins_above_threshold.sum() > 1:
+        start_timebin = np.argwhere(timebins_above_threshold)[0,0]
+        end_timebin = np.argwhere(timebins_above_threshold)[-1,0]
         if (end_timebin - start_timebin) >= min_popburst_n_time_windows:
             spikemat_popburst = spikemat_fullripple[start_timebin:end_timebin]
-            spikemat_popburst_start = (
-                ripple_start + start_timebin * time_window_s
-            )
+            spikemat_popburst_start = ripple_start + start_timebin * time_window_s
             spikemat_popburst_end = (
                 ripple_end
                 - (spikemat_fullripple.shape[0] - end_timebin)
@@ -110,6 +62,7 @@ def __select_population_burst(
         [spikemat_popburst_start, spikemat_popburst_end],
         avg_spikes_per_s_smoothed,
     )
+
 def __calc_spikemats(
         rat_data: RatData, 
         time_window_s: float, 
@@ -145,10 +98,10 @@ def __calc_spikemats(
     spikemats_popburst = dict()
     avg_spikes_per_s_smoothed = dict()
     spikemat_times = np.zeros((n_ripples, 2))
-    for ripple_num in range(n_ripples):
-        ripple_start = ripple_times[ripple_num][0]
-        ripple_end = ripple_times[ripple_num][1]
-        spikemats_fullripple[ripple_num] = __get_spikemat(
+    for i in range(n_ripples):
+        ripple_start = ripple_times[i,0]
+        ripple_end = ripple_times[i,1]
+        spikemats_fullripple[i] = hseu.extract_spikemat(
             spike_ids,
             spike_times,
             place_cell_ids,
@@ -158,11 +111,11 @@ def __calc_spikemats(
             time_window_advance_s,
         )
         (
-            spikemats_popburst[ripple_num],
-            spikemat_times[ripple_num],
-            avg_spikes_per_s_smoothed[ripple_num],
+            spikemats_popburst[i],
+            spikemat_times[i],
+            avg_spikes_per_s_smoothed[i],
         ) = __select_population_burst(
-                spikemats_fullripple[ripple_num], 
+                spikemats_fullripple[i], 
                 ripple_start, 
                 ripple_end,
                 rat_data.place_field_data.n_place_cells,
@@ -258,30 +211,30 @@ def process_ripples(
         )
 
     fullripple,popburst,times,avg = __calc_spikemats(
-            rat_data, 
-            time_window_s, 
-            time_window_advance_s,
-            avg_fr_smoothing_convolution,
-            avg_spikes_per_s_threshold,
-            min_popburst_n_time_windows
-        )
+        rat_data, 
+        time_window_s, 
+        time_window_advance_s,
+        avg_fr_smoothing_convolution,
+        avg_spikes_per_s_threshold,
+        min_popburst_n_time_windows
+    )
     firing_rate_array, firing_rate_matrix = __calc_popburst_firing_rate_array(
-            popburst,
-            rat_data.place_field_data.n_place_cells,
-            time_window_s
-        )
+        popburst,
+        rat_data.place_field_data.n_place_cells,
+        time_window_s
+    )
     firing_rate_scale = __calc_firing_rate_scaling(
-            rat_data.place_field_data.mean_firing_rate[rat_data.place_field_data.place_cell_ids],
-            firing_rate_array
-        )
+        rat_data.place_field_data.mean_firing_rate[rat_data.place_field_data.place_cell_ids],
+        firing_rate_array
+    )
 
     ripple_info = RippleData(
-            spikemats_ripple   = fullripple,
-            spikemats_popburst = popburst,
-            popburst_time_s    = times,
-            avg_sps_smoothed   = avg,
-            mean_popburst_arr  = firing_rate_array,
-            mean_popburst_mat  = firing_rate_matrix,
-            firing_rate_scale  = firing_rate_scale
-        )
+        spikemats_ripple   = fullripple,
+        spikemats_popburst = popburst,
+        popburst_time_s    = times,
+        avg_sps_smoothed   = avg,
+        mean_popburst_arr  = firing_rate_array,
+        mean_popburst_mat  = firing_rate_matrix,
+        firing_rate_scale  = firing_rate_scale
+    )
     return ripple_info
