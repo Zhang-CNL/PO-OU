@@ -6,210 +6,176 @@ from typing import Optional
 from .placefields import * 
 from .ripples import *
 from .theta import *
-from .data import *
 
-
-def __extract_runs(
-        epochs_dict: dict, 
-        pos_dict: dict, 
-        spike_dict: dict, 
-        ripple_dict: dict, 
-        sweep_type: str 
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Extract position, spike, and ripple data for a run from the given dictionaries.
+def fix_alignment(spike_times, pos_times, spike_ids, x, y):
+    """Fixes alignment between spike times and position times by removing spikes
+     that are not within the position recording period and position points that 
+     are not within the spike recording period.
 
     Args:
-        epochs_dict (dict): Dictionary containing run times
-        pos_dict (dict): Dictionary containing position data
-        spike_dict (dict):  Dictionary containing spike data
-        ripple_dict (dict): Dictionary containing ripple data
-        sweep_type (str): Type of sweep ("theta" or "replay")
+        spike_times (np.ndarray): Times of the spikes
+        pos_times (np.ndarray): Times of the position data
+        spike_ids (np.ndarray): IDs of the spikes
+        x (np.ndarray): x position data
+        y (np.ndarray): y position data
 
     Returns:
-        tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple containing position, spike, and ripple data for the run
+        tuple: spike_times, pos_times, spike_ids, x, y
     """
-    run_times = epochs_dict["Run_Times"]
-    spikes = spike_dict['Spike_Data']
-    spike_ind = hseu.times_to_bool(spikes[:,0], run_times[0], run_times[1])
+    spikes_before = spike_times < pos_times[0]
+    spikes_after  = spike_times > pos_times[-1]
+    spike_conj    = ~spikes_before & ~spikes_after
+    spike_times   = spike_times[spike_conj]
+    spike_ids     = spike_ids[spike_conj]
 
-    ripples = ripple_dict['Ripple_Events']
-    rip_idx = hseu.times_to_bool(ripples[:,0], run_times[0], run_times[1])
+    pos_before = pos_times < spike_times[0]
+    pos_after  = pos_times > spike_times[-1]
+    pos_conj   = ~pos_before & ~pos_after
+    pos_times  = pos_times[pos_conj]
+    x          = x[pos_conj]
+    y          = y[pos_conj]
 
-    pos = pos_dict['Position_Data']
-    pos_idx = hseu.times_to_bool(pos[:,0], run_times[0], run_times[1])
+    return spike_times, pos_times, spike_ids, x, y
 
-    if sweep_type == "theta":
-        spikes  = spikes[spike_ind,:]
-        ripples = ripples[rip_idx,:]
-        pos     = pos[pos_idx,:]
-    elif sweep_type == "replay":
-        spikes  = spikes[~spike_ind,:]    
-        ripples = ripples[~rip_idx,:]
-        pos     = pos[~pos_idx,:]
-    return pos,spikes,ripples
-
-
-
-def __calculate_velocity(pos_xy: np.ndarray) -> np.ndarray:
-    """Calculates the velocity of a given position data.
-
-    Args:
-        pos_xy (np.ndarray): Position data
-
-    Returns:
-        np.ndarray: Velocity data
-    """
-    xdiff = np.diff(pos_xy[:,0])
-    ydiff = np.diff(pos_xy[:,1])
-    return np.sqrt(xdiff**2 + ydiff**2) / PFEIFFER_RECORDING_FPS
-
-def __align_spikes_to_pos(rat_data: RatData) -> RatData:
-    """Align spike and position data by removing spikes and positions outside of each other's recording times.
-
-    Args:
-        rat_data (RatData): Data of the rat
-
-    Returns:
-        RatData: Aligned data
-    """
-    # Remove spikes outside of position recording
-    spike_times = rat_data.spike_times_sec
-    pos_times   = rat_data.pos_times_sec
-    spikes_before_pos = spike_times < pos_times[0]
-    spikes_after_pos  = spike_times > pos_times[-1]
-    spike_conj = ~spikes_before_pos & ~spikes_after_pos
-    rat_data.spike_ids = rat_data.spike_ids[spike_conj]
-    rat_data.spike_times_sec = rat_data.spike_times_sec[spike_conj]    
-
-    # Remove positions outside of spike recording
-    pos_before_spikes = pos_times < spike_times[0]
-    pos_after_spikes  = pos_times > spike_times[-1]
-    pos_conj = ~pos_before_spikes & ~pos_after_spikes
-    rat_data.pos_xy_cm = rat_data.pos_xy_cm[pos_conj]
-    rat_data.pos_times_sec = rat_data.pos_times_sec[pos_conj]
-    return rat_data
-
-def __clean_gaps(rat_data: RatData, position_gap_threshold_s: float) -> RatData:
-    """Cleans gaps in position data.
-
-    Removes any points in the position data that are more than
+def clean_gaps(x: np.ndarray, y: np.ndarray, time: np.ndarray, position_gap_threshold_s: float = 0.25):
+    """Cleans gaps in position data by removing points that are more than
     position_gap_threshold_s seconds apart from the previous point.
+    Gaps are filled with NaN so as to ignore them in place-field and velocity calculations
 
     Args:
-        rat_data (RatData): Dictionary containing rat data
+        x (np.ndarray): x position data
+        y (np.ndarray): y position data
+        time (np.ndarray): Times of the position data
         position_gap_threshold_s (float): Threshold for position gaps in seconds
 
     Returns:
-        RatData: Dictionary containing cleaned position data
+        x (np.ndarray): Cleaned x position data
+        y (np.ndarray): Cleaned y position data
     """
-    pos_diff = np.diff(rat_data.pos_times_sec)
-    pos_gaps = np.where(pos_diff > position_gap_threshold_s)[0]
-    pos_xy   = rat_data.pos_xy_cm[:]
-    if len(pos_gaps) > 0:
-        for ind in pos_gaps:
-            pos_xy[ind - 5 : ind + 5] = np.nan
-    rat_data.pos_xy_cm           = pos_xy
-    rat_data.large_position_gaps = pos_gaps
-    return rat_data
+    
+    pdiff = np.diff(time)
+    gaps  = np.where(pdiff > position_gap_threshold_s)[0]
+    if len(gaps) > 0:
+        print(f"Removing {len(gaps)} position gaps")
+        for i in gaps:
+            x[i - 5 : i + 5] = np.nan
+            y[i - 5 : i + 5] = np.nan
+            print(f"\t(x,y) = ({x[i]}, {y[i]})")
+    return x,y
 
-def load_rat(data_path: str, rat_name: str, session: int, sweep_type: str = "theta") -> RatData:
-    """Loads data for a given rat and session.
+def calculate_velocity(x: np.ndarray, y: np.ndarray, time: np.ndarray):
+    """
+    Calculates the velocity of the rat given position data.
 
     Args:
-        data_path (str): Path to data directory
-        rat_name (str): Name of the rat
-        session (int): Session number (1 or 2)
-        sweep_type (str): Type of sweep ("theta" or "replay")
+        x (np.ndarray): x position data
+        y (np.ndarray): y position data
+        time (np.ndarray): Times of the position data
 
     Returns:
-        hse.AttrDict: Dictionary containing rat data
+        velocity_t (np.ndarray): Times of the velocity
+        velocity (np.ndarray): Velocity
     """
-    assert rat_name in RAT_NAMES, f"{rat_name} not in {RAT_NAMES}"
+    velocity = np.sqrt(np.diff(x)**2 + np.diff(y)**2) / hseu.PFEIFFER_RECORDING_FPS
+    velocity_t = (time[1:] + time[:-1]) / 2
+
+    nv = np.isnan(velocity)
+    if np.any(nv):
+        velocity_t = velocity_t[~nv]
+        velocity   = velocity[~nv]
+    return velocity_t, velocity
+
+def calculate_run_periods(velocity: np.ndarray, velocity_times: np.ndarray, velocity_run_threshold: float = 5.0):
+    run_periods = velocity > velocity_run_threshold
+    run_start,run_end = hseu.extract_times_from_boolean(run_periods, velocity_times)
+    return run_start,run_end
+
+def load_clean_data(
+        data_path: str,
+        rat_name: str, 
+        session: int,
+        position_gap_threshold_s: float = 0.25,
+        velocity_run_threshold_s: float = 5.0
+    ) -> hseu.RatData:
+    assert rat_name in hseu.RAT_NAMES, f"{rat_name} not in {hseu.RAT_NAMES}"
     assert session in [1,2]
-    assert sweep_type in ["theta", "replay"]
-    dir_path = os.path.join(data_path, rat_name, f"Open{session}")
-    if not os.path.exists(dir_path):
-        raise FileNotFoundError(f"{dir_path} not found")
 
-    spike_file  = hseu.read_mat(os.path.join(dir_path, "Spike_Data.mat"))
-    pos_file    = hseu.read_mat(os.path.join(dir_path, "Position_Data.mat"))
-    ripple_file = hseu.read_mat(os.path.join(dir_path, "Ripple_Events.mat"))
-    epochs      = hseu.read_mat(os.path.join(dir_path, "Epochs.mat"))
-    well_seq    = hseu.read_mat(os.path.join(dir_path, "Well_Sequence.mat"))
+    path = os.path.join(data_path, rat_name, f"Open{session}")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} not found")
 
-    pos,spikes,ripples = __extract_runs(epochs, pos_file, spike_file, ripple_file, sweep_type)
+    pos_mat = hseu.read_mat(os.path.join(path, 'Position_Data.mat'))
+    raw_pos = pos_mat['Position_Data']
+    
+    time = raw_pos[:,0]
+    x    = raw_pos[:,1]
+    y    = raw_pos[:,2]
+    hd   = raw_pos[:,3]
 
-    # Where are the well sequence data used
-    # Where is significant_ripples found and where is it used
-    # It looks like both are used when calculating descriptive stats and not before. Nignore for now.
-    rat_data = RatData(
-            rat_name,
-            session,
-            pos[:,0], 
-            np.squeeze(pos[:,1:-1]),
-            ripples,
-            ripples[:,:2],
-            np.array(spikes[:,1], dtype=int) - 1,
-            spikes[:,0],
-            np.array(spike_file['Excitatory_Neurons'], dtype=int) - 1,
-            np.array(spike_file['Inhibitory_Neurons'], dtype=int) - 1,
-            well_seq["Well_Sequence"],
-            len(ripples),
-            int(np.max(spikes[:,1])),
-        )
-    return rat_data
+    # It looks like we don't really need this since
+    # we can just use the velocity to parse it all out, but we'll keep 
+    # it for now
+    epoch_mat = hseu.read_mat(os.path.join(path, 'Epochs.mat'))
+    rt = np.squeeze(epoch_mat['Run_Times']).astype(float)
 
+    start = rt[0]
+    end   = rt[1]
 
-def clean_data(rat_data: RatData, position_gap_threshold_s: float = 0.25) -> RatData:
-    """Cleans the given rat data by aligning spikes to positions and removing gaps in positions.
+    spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
+    spikes = spike_mat['Spike_Data']
+    
+    spike_ids = spikes[:,1].astype(int) - 1
+    spike_times = spikes[:,0]
 
-    Args:
-        rat_data (RatData): Dictionary containing rat data
-        position_gap_threshold_s (float): Threshold for position gaps in seconds. Defaults to 0.25.
+    excitatory_neurons = spike_mat['Excitatory_Neurons'].astype(int) - 1
+    inhibitory_neurons = spike_mat['Inhibitory_Neurons'].astype(int) - 1
 
-    Returns:
-        RatData: Dictionary containing cleaned rat data
-    """
-    rat_data = copy.deepcopy(rat_data)
-    rat_data = __align_spikes_to_pos(rat_data)
-    rat_data = __clean_gaps(rat_data, position_gap_threshold_s)
-    return rat_data
+    ripple_mat = hseu.read_mat(os.path.join(path, 'Ripple_Events.mat'))
+    ripples = ripple_mat['Ripple_Events']
 
+    try:
+        well_mat = hseu.read_mat(os.path.join(path, 'Well_Sequence.mat'))
+        well_seq = well_mat['Well_Sequence']
+    except FileNotFoundError:
+        print("No well sequence found, who cares")
+        well_seq = []
 
-def calculate_velocity(rat_data: RatData, velocity_run_threshold_s: float = 5.0) -> RatData:
-    """Calculates the velocity of the rat and determines when the rat is running.
+    # Align spike and position data, remove large gaps, and calculate velocity.
+    # Each spike should have a corresponding position, otherwise we just remove it.
+    # Other methods interpolate, but Krause et al chose to simply drop it
+    spike_times,time,spike_ids,x,y = fix_alignment(spike_times, time, spike_ids, x, y)
+    x,y = clean_gaps(x, y, time, position_gap_threshold_s)
+    velocity_t,velocity = calculate_velocity(x, y, time)
+    run_starts,run_ends = calculate_run_periods(velocity, velocity_t, velocity_run_threshold_s)
 
-    Args:
-        rat_data (RatData): Dictionary containing rat data
-        velocity_run_threshold_s (float): Threshold for determining if the rat is running in meters per second. Defaults to 5.0.
-
-    Returns:
-        RatData: Dictionary containing rat data with additional fields for velocity and run times
-    """
-    pos_times = rat_data.pos_times_sec
-    velocity_t = (pos_times[1:] + pos_times[:-1]) / 2
-    velocity   = __calculate_velocity(rat_data.pos_xy_cm)
-
-    nan_vel = np.isnan(velocity)
-    if np.any(nan_vel):
-        velocity_t = velocity_t[~nan_vel]
-        velocity   = velocity[~nan_vel]
-    run_b = velocity > velocity_run_threshold_s
-    run_starts,run_ends = hseu.extract_times_from_boolean(run_b, velocity_t)
-
-    rat_data.velocity_time_sec = velocity_t
-    rat_data.velocity          = velocity
-    rat_data.run_times_start   = run_starts
-    rat_data.run_times_end     = run_ends
-
-    return rat_data
+    raw_data = hseu.RawData(
+        time           = time,
+        x              = x,
+        y              = y,
+        head_direction = hd,
+        velocity       = velocity,
+        velocity_time  = velocity_t,
+        run_starts     = run_starts,
+        run_ends       = run_ends,
+        spike_ids      = spike_ids,
+        spike_times    = spike_times,
+        raw_ripples    = ripples
+    )
+    return hseu.RatData(
+        rat_name           = rat_name,
+        session            = session,
+        raw_data           = raw_data,
+        excitatory_neurons = excitatory_neurons,
+        inhibitory_neurons = inhibitory_neurons,
+        well_sequence      = well_seq,
+        n_ripples          = len(ripples),
+        n_cells            = np.max(spike_ids)
+    )
 
 def load_and_preprocess(
         data_path: str,
         rat_name: str, 
         session: int, 
-        sweep_type: str = "theta", 
         position_gap_threshold_s: float = 0.25,
         velocity_run_threshold_s: float = 5.0,
         bin_size_cm: int = 4,
@@ -223,25 +189,31 @@ def load_and_preprocess(
         place_field_scaling_factor: float = 2.9,
         velocity_scaling_factor: float = 6.75,
         seed: int|None = 42
-    ) -> RatData:
+    ) -> hseu.RatData:
     """Runs all preprocessing steps on the given rat data.
 
     Args:
         data_path (str): Path to data directory
         rat_name (str): Name of the rat
         session (int): Session number (1 or 2)
-        sweep_type (str): Type of sweep ("theta" or "replay")
         position_gap_threshold_s (float): Threshold for position gaps in seconds. Defaults to 0.25.
-        velocity_run_threshold_s (float): Threshold for determining if the rat is running in meters per second. Defaults to 5.0.
+        velocity_run_threshold_s (float): Threshold for determining if the rat is running in centimeters per second. Defaults to 5.0.
         bin_size_cm (int): Bin size for place field calculation in centimeters. Defaults to 4.
         place_field_gaussian_sd_cm (float): Standard deviation of Gaussian for place field calculation in centimeters. Defaults to 4.0.
 
     Returns:
-        RatData: Dictionary containing rat data with additional fields for velocity and place field data
+        hseu.RatData: Dictionary containing rat data with additional fields for velocity and place field data
     """
-    rat_data = load_rat(data_path, rat_name, session, sweep_type)
-    rat_data = clean_data(rat_data, position_gap_threshold_s)
-    rat_data = calculate_velocity(rat_data, velocity_run_threshold_s)
+    #rat_data = load_rat(data_path, rat_name, session, sweep_type)
+    #rat_data = clean_data(rat_data, position_gap_threshold_s)
+    #rat_data = calculate_velocity(rat_data, velocity_run_threshold_s)
+    rat_data = load_clean_data(
+        data_path, 
+        rat_name, 
+        session, 
+        position_gap_threshold_s, 
+        velocity_run_threshold_s
+    )
     rat_data.place_field_data = calculate_placefields(
         rat_data,
         bin_size_cm, 

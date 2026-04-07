@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.typing as npt
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -6,8 +7,8 @@ from scipy.optimize import least_squares
 from torch.utils.data import random_split
 
 import hippocampalseq.utils as hseu
-import hippocampalseq.models as hsem
 
+from .kalman_filter import *
 __all__ = [
     'Momentum'
 ]
@@ -26,11 +27,11 @@ def _init_momentum_params(z: np.ndarray):
     return a,b
 
 
-class Momentum(hsem.StateSpaceModel):
+class Momentum(KalmanFilter):
     def __init__(
             self,
-            place_fields: np.ndarray|torch.Tensor, 
-            spikemat: np.ndarray|torch.Tensor,
+            place_fields: npt.ArrayLike, 
+            spikemat: npt.ArrayLike,
             dt: float, 
             bins: tuple,
             seed: int|None = 42
@@ -452,7 +453,14 @@ class Momentum(hsem.StateSpaceModel):
         elif maximization_type == 'autograd':
             return self._em_autograd(values, None, normalize, **autograd_args)
 
-    def em(self, X=None, normalize: bool = True, n_iter: int = 100, emtol: float = 1e-3, **diff_args):
+    def fit(self, 
+            X=None, 
+            normalize: bool = True, 
+            n_iter: int = 100, 
+            emtol: float = 1e-3, 
+            maximization_type: str = 'autograd', 
+            **diff_args
+        ) -> hsem.KalmanResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
@@ -505,6 +513,7 @@ class Momentum(hsem.StateSpaceModel):
             ll = self._em(
                 Xtrain,
                 normalize,
+                maximization_type,
                 **diff_args
             )
 

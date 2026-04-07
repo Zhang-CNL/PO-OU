@@ -1,10 +1,11 @@
 import numpy as np
-import torch 
-from torch.distributions import MultivariateNormal
+#import torch 
+#from torch.distributions import MultivariateNormal
 
 from hippocampalseq.utils import atleast_2d
 
-def laplacian_approximation(z: torch.Tensor, pz: torch.Tensor, kl: str = "pq", lr: float = .01, n_epochs: int = 1000):
+#def laplacian_approximation(z: torch.Tensor, pz: torch.Tensor, kl: str = "pq", lr: float = .01, n_epochs: int = 1000):
+def laplacian_approximation(z, pz, kl: str = "pq", lr: float = .01, n_epochs: int = 1000):
     r"""Laplacian approximation for the parameters of a Gaussian distribution.
     Finds the maximum point of the distribution $P(z)$ and then optimizes for the 
     value of $\Sigma$ that minimizes the KL divergence between $P(z)$ and $Q(z)$

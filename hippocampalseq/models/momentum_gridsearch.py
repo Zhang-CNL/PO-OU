@@ -8,11 +8,11 @@ class MomentumGridsearch():
         if theta:
             self.decays = torch.tensor([1., 25., 50., 75., 100., 200., 300., 400., 500., 800.])
             self.diffusions = torch.round(torch.logspace(1.6, 2.6, 30), decimals=2)
-            self.initial_diffusion = 10
+            self.initial_diffusion = 10 * dt
         else:
             self.decays = torch.tensor([1., 10., 20., 40., 80., 120., 200., 400., 800., 1200., 2000., 4000.])
             self.diffusions = torch.logspace(-.3, 2.4, 25)
-            self.initial_diffusion = 5
+            self.initial_diffusion = 5 * dt
         self.bins = bins
         self.total_bins = self.bins[0] * self.bins[1]
         self.prior = torch.ones(self.total_bins) / self.total_bins

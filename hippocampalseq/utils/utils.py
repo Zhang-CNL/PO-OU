@@ -1,3 +1,4 @@
+import os
 import mat73 
 import scipy.io as sio
 from scipy.special import factorial
@@ -5,7 +6,9 @@ from scipy.stats import multivariate_normal
 from scipy.optimize import minimize
 from itertools import product
 import numpy as np
+import numpy.typing as npt
 import torch
+import compress_pickle
 
 class AttrDict(dict):
     def __init__(self, dct):
@@ -29,7 +32,19 @@ def changeover_functions(type, *args):
     return attrs
 
 
+def save_pickle(data, fname):
+    s = compress_pickle.dumps(data, "gzip")
+    with open(fname, 'wb') as f:
+        f.write(s)
+
+def read_pickle(fname):
+    with open(fname, 'rb') as f:
+        raw = f.read()
+    return compress_pickle.loads(raw, "gzip")
+
 def read_mat(file: str):
+    if not os.path.exists(file):
+        raise FileNotFoundError(f"{file} not found, make sure you have the complete dataset.")
     try:
         return mat73.loadmat(file)
     except:
@@ -37,18 +52,18 @@ def read_mat(file: str):
 
 def extract_times_from_boolean(boolean_arr, run_times):
     start_times = []
-    end_times = []
-    previous_val = boolean_arr[0]
-    if previous_val:
+    end_times   = []
+    prev        = boolean_arr[0]
+    if prev:
         start_times.append(run_times[0])
     for count, val in enumerate(boolean_arr[1:]):
         i = count + 1
-        if val != previous_val:
+        if val != prev:
             if val:
                 start_times.append(run_times[i])
             else:
                 end_times.append(run_times[i])
-        previous_val = val
+        prev = val
     if val:
         end_times.append(run_times[-1])
     return np.array(start_times), np.array(end_times)
@@ -73,7 +88,7 @@ def placefield_matrix(place_fields: np.ndarray, place_cell_ids: np.ndarray) -> n
         (np.ndarray): 2d array of place fields, where each row is a cell id and each column is a place field.
     """
     tuning_curves = place_fields[place_cell_ids]
-    return tuning_curves.reshape((len(place_cell_ids), np.prod(tuning_curves.shape[1:3])))
+    return tuning_curves.reshape((len(place_cell_ids), -1))
 
 # Poisson distribution:  $Pois(k=x_{t,i}|\lambda=f_i(z_t)\gamma\delta t) = \frac{\lambda^ke^{-\lambda}}{k!}$
 
@@ -139,20 +154,20 @@ def calc_poisson_emission_probabilities(
     return emission_probabilities
 
 def calc_poisson_emission_probabilities_log_2d(
-        spikemat     : np.ndarray|torch.Tensor,
-        place_fields : np.ndarray|torch.Tensor, 
-        dt: float|torch.Tensor,
-    ) -> np.ndarray|torch.Tensor:
+        spikemat     : npt.ArrayLike,
+        place_fields : npt.ArrayLike, 
+        dt: float|npt.ArrayLike,
+    ) -> npt.ArrayLike:
     r"""Calculate emission probabilities $ln\ P(x_t|z_t) = ln\ \prod_{i,j} Pois(x_{t,i,j}f_{i,j}(z_t)\gamma\delta t)$ for a 2D place field.
     Same function as `calc_poisson_emission_probabilities_log` except the output is a 2D matrix.
 
     Args:
-        spikemat (np.ndarray|torch.Tensor): Spikemat of shape (T, Ncell) $x_{t,i,j}$
-        place_fields (np.ndarray|torch.Tensor): Place fields of shape (Ncell, Nbx, Nby) $f_{i,j}(z_t)$
+        spikemat (npt.ArrayLike): Spikemat of shape (T, Ncell) $x_{t,i,j}$
+        place_fields (npt.ArrayLike): Place fields of shape (Ncell, Nbx, Nby) $f_{i,j}(z_t)$
         dt (float|torch.Tensor): Time window in seconds
 
     Returns:
-        (np.ndarray|torch.Tensor): (T, Nbx, Nby) matrix of emission probabilities
+        (npt.ArrayLike): (T, Nbx, Nby) matrix of emission probabilities
     """
     log, sum, einsum = changeover_functions(type(spikemat), 'log', 'sum', 'einsum')
     fac = factorial if type(spikemat) == np.ndarray else lambda x: torch.exp(torch.lgamma(x+1))
@@ -173,10 +188,10 @@ def calc_poisson_emission_probabilities_log_2d(
     return emission_probabilities_log
 
 def calc_poisson_emission_probabilities_2d(
-        spikemat: np.ndarray|torch.Tensor,
-        place_fields: np.ndarray|torch.Tensor,
-        dt: float|torch.Tensor
-    ) -> np.ndarray|torch.Tensor:
+        spikemat: npt.ArrayLike,
+        place_fields: npt.ArrayLike,
+        dt: float|npt.ArrayLike
+    ) -> npt.ArrayLike:
     exp = changeover_functions(type(spikemat), 'exp')
     lemission = calc_poisson_emission_probabilities_log_2d(spikemat, place_fields, dt)
     emission_probabilities = exp(lemission)

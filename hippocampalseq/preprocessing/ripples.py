@@ -1,8 +1,7 @@
 import numpy as np 
 import scipy.stats as sp
-import hippocampalseq.utils as hseu
 from typing import Optional
-from .data import *
+import hippocampalseq.utils as hseu
 
 def __select_population_burst(
         spikemat_fullripple: np.ndarray, 
@@ -42,7 +41,7 @@ def __select_population_burst(
     timebins_above_threshold = avg_spikes_per_s_smoothed > avg_spikes_per_s_threshold
     if timebins_above_threshold.sum() > 1:
         start_timebin = np.argwhere(timebins_above_threshold)[0,0]
-        end_timebin = np.argwhere(timebins_above_threshold)[-1,0]
+        end_timebin   = np.argwhere(timebins_above_threshold)[-1,0]
         if (end_timebin - start_timebin) >= min_popburst_n_time_windows:
             spikemat_popburst = spikemat_fullripple[start_timebin:end_timebin]
             spikemat_popburst_start = ripple_start + start_timebin * time_window_s
@@ -64,7 +63,7 @@ def __select_population_burst(
     )
 
 def __calc_spikemats(
-        rat_data: RatData, 
+        rat_data: hseu.RatData, 
         time_window_s: float, 
         time_window_advance_s: float,
         avg_fr_smoothing_convolution: np.ndarray,
@@ -76,7 +75,7 @@ def __calc_spikemats(
     for all ripples in the given rat data.
 
     Args:
-        rat_data (RatData): Data of the rat
+        rat_data (hseu.RatData): Data of the rat
         time_window_s (float): Length of time window in seconds
         time_window_advance_s (float): Advance of time window in seconds
         avg_fr_smoothing_convolution (np.ndarray): Convolution to smooth the average firing rate
@@ -87,21 +86,19 @@ def __calc_spikemats(
         tuple: Contains the spike matrices for the full ripple and population burst,
                the start and end times of the population bursts, and the smoothed average firing rate
     """
-    spike_ids      = rat_data.spike_ids
-    spike_times    = rat_data.spike_times_sec
+    spike_ids      = rat_data.raw_data.spike_ids
+    spike_times    = rat_data.raw_data.spike_times
     place_cell_ids = rat_data.place_field_data.place_cell_ids
     place_fields   = rat_data.place_field_data.place_fields
-    ripple_times   = rat_data.ripple_times_sec
+    ripple_times   = rat_data.raw_data.raw_ripples[:,:2]
     n_ripples      = rat_data.n_ripples
 
-    spikemats_fullripple = dict()
-    spikemats_popburst = dict()
-    avg_spikes_per_s_smoothed = dict()
+    spike_ripples = []
     spikemat_times = np.zeros((n_ripples, 2))
     for i in range(n_ripples):
         ripple_start = ripple_times[i,0]
-        ripple_end = ripple_times[i,1]
-        spikemats_fullripple[i] = hseu.extract_spikemat(
+        ripple_end   = ripple_times[i,1]
+        spikemats_fullripple = hseu.extract_spikemat(
             spike_ids,
             spike_times,
             place_cell_ids,
@@ -111,27 +108,30 @@ def __calc_spikemats(
             time_window_advance_s,
         )
         (
-            spikemats_popburst[i],
+            spikemats_popburst,
             spikemat_times[i],
-            avg_spikes_per_s_smoothed[i],
+            avg_spikes_per_s_smoothed,
         ) = __select_population_burst(
-                spikemats_fullripple[i], 
-                ripple_start, 
-                ripple_end,
-                rat_data.place_field_data.n_place_cells,
-                time_window_s,
-                avg_fr_smoothing_convolution,
-                avg_spikes_per_s_threshold,
-                min_popburst_n_time_windows
-            )
-    return (
-        spikemats_fullripple,
-        spikemats_popburst,
-        spikemat_times,
-        avg_spikes_per_s_smoothed
-    )
+            spikemats_fullripple, 
+            ripple_start, 
+            ripple_end,
+            rat_data.place_field_data.n_place_cells,
+            time_window_s,
+            avg_fr_smoothing_convolution,
+            avg_spikes_per_s_threshold,
+            min_popburst_n_time_windows
+        )
 
-def __calc_popburst_firing_rate_array(spikemats: dict, n_place_cells: int, time_window_s: float) -> np.ndarray:
+        spike_ripple = hseu.RippleSpike(
+            spikemats_fullripple,
+            spikemats_popburst,
+            avg_spikes_per_s_smoothed
+        )
+        spike_ripples.append(spike_ripple)
+
+    return (spike_ripples, spikemat_times)
+
+def __calc_popburst_firing_rate_array(spike_data, n_place_cells: int, time_window_s: float) -> np.ndarray:
     """
     Calculate the firing rate of the population bursts.
 
@@ -145,13 +145,14 @@ def __calc_popburst_firing_rate_array(spikemats: dict, n_place_cells: int, time_
     Returns:
         np.ndarray: Firing rate of the population bursts (spikes per second)
     """
-    firing_rate_matrix = np.full((n_place_cells, len(spikemats)), np.nan)
+    firing_rate_matrix = np.full((n_place_cells, len(spike_data)), np.nan)
     total_spikes = np.zeros(n_place_cells)
     total_time = 0
-    for i in range(len(spikemats)):
-        if spikemats[i] is not None:
-            total_spikes += spikemats[i].sum(axis=0)
-            total_time += spikemats[i].shape[0] * time_window_s
+    for i in range(len(spike_data)):
+        popburst = spike_data[i].spikemat_popburst
+        if popburst is not None:
+            total_spikes += popburst.sum(axis=0)
+            total_time   += popburst.shape[0] * time_window_s
             firing_rate_matrix[:, i] = total_spikes / total_time
     firing_rate_array = total_spikes / total_time
     return firing_rate_array, firing_rate_matrix
@@ -177,13 +178,13 @@ def __calc_firing_rate_scaling(run_mean_frs: np.ndarray, ripple_mean_frs: np.nda
     #return {"scaling_factors": scaling_factors, "alpha": 1, "beta": 1}
 
 def process_ripples(
-        rat_data: RatData, 
+        rat_data: hseu.RatData, 
         time_window_ms: float = 3.0, 
         time_window_advance_ms: Optional[float] = None,
         avg_fr_smoothing_convolution: np.ndarray = np.array([.25, .25, .25, .25]),
         avg_spikes_per_s_threshold: int = 2,
         min_popburst_duration_ms: int = 30
-    ) -> RippleData:
+    ) -> hseu.RippleData:
     """
     Process ripple data.
 
@@ -191,7 +192,7 @@ def process_ripples(
     and then calculating the firing rate of the population bursts and the scaling factors.
 
     Args:
-        rat_data (RatData): Data of the rat
+        rat_data (hseu.RatData): Data of the rat
         time_window_ms (float): Time window in milliseconds. Defaults to 3.0.
         time_window_advance_ms (Optional[float]): Time window advance in milliseconds. Defaults to None.
         avg_fr_smoothing_convolution (np.ndarray): Smoothing convolution for average firing rate. Defaults to np.array([.25, .25, .25, .25]).
@@ -199,18 +200,16 @@ def process_ripples(
         min_popburst_duration_ms (int): Minimum duration of population bursts in milliseconds. Defaults to 30.
 
     Returns:
-        RippleData: Dictionary containing ripple data with additional fields for population burst firing rate and scaling factors.
+        hseu.RippleData: Dictionary containing ripple data with additional fields for population burst firing rate and scaling factors.
     """
     time_window_s = time_window_ms / 1000
-    time_window_advance_s = time_window_s if time_window_advance_ms is None else time_window_advance_ms / 1000
+    if time_window_advance_ms is None:
+        time_window_advance_s = time_window_s
+    else:
+        time_window_advance_s = time_window_advance_ms / 1000
     min_popburst_n_time_windows = int(np.ceil(min_popburst_duration_ms / time_window_ms))
 
-    place_field_mat = hseu.placefield_matrix(
-            rat_data.place_field_data.place_fields,
-            rat_data.place_field_data.place_cell_ids
-        )
-
-    fullripple,popburst,times,avg = __calc_spikemats(
+    spike_data, spike_times = __calc_spikemats(
         rat_data, 
         time_window_s, 
         time_window_advance_s,
@@ -219,7 +218,7 @@ def process_ripples(
         min_popburst_n_time_windows
     )
     firing_rate_array, firing_rate_matrix = __calc_popburst_firing_rate_array(
-        popburst,
+        spike_data,
         rat_data.place_field_data.n_place_cells,
         time_window_s
     )
@@ -228,13 +227,11 @@ def process_ripples(
         firing_rate_array
     )
 
-    ripple_info = RippleData(
-        spikemats_ripple   = fullripple,
-        spikemats_popburst = popburst,
-        popburst_time_s    = times,
-        avg_sps_smoothed   = avg,
+    ripple_info = hseu.RippleData(
+        popburst_time_s    = spike_times,
         mean_popburst_arr  = firing_rate_array,
         mean_popburst_mat  = firing_rate_matrix,
-        firing_rate_scale  = firing_rate_scale
+        firing_rate_scale  = firing_rate_scale,
+        ripple_spikes      = spike_data
     )
     return ripple_info

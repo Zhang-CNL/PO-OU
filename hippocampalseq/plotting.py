@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-import hippocampalseq.preprocessing as hsep
+import hippocampalseq.utils as hseu
 
 def init_plotting():
     SMALL_SIZE = 5
@@ -16,8 +16,10 @@ def init_plotting():
     plt.rc('lines', linewidth=2, color='r')
     #plt.rcParams['font.sans-serif'] = ['Helvetica']
 
-def plot_placefields(place_fields, pfs):
+def plot_placefields(place_fields: hseu.PlacefieldData, pfs):
     fig, ax = plt.subplots(1,len(pfs), figsize=(2,.5), dpi=300)
+
+    place_fields = place_fields.place_fields#[place_fields.place_cell_ids]
 
     for i in range(len(pfs)):
         ax[i].imshow(place_fields[pfs[i]], origin='lower')
@@ -48,6 +50,22 @@ def plot_placefields(place_fields, pfs):
     fig.patches.extend([rect])
 
 def spike_raster_plot(spike_data):
-    plt.eventplot(spike_data, color='black', linelengths=.5)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Neurons")
+    fig = plt.figure(figsize=(1.5, 1.2), dpi=300)
+    ax = fig.add_axes([.2, .05, .75, .8])
+
+    ax.eventplot(spike_data, color='black', linelengths=4, linewidths=.1)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_linewidth(.5)
+    ax.set_ylabel('cell number', rotation=90, labelpad=-5)
+    ax.set_yticks([0, len(spike_data)])
+    ax.tick_params(direction='out', length=1, width=.5)
+
+    ax.set_yticklabels([1, len(spike_data) + 1])
+    ax.set_ylim([0, len(spike_data)])
+    ax.set_xticks([])
+    #ax.set_xticklabels(['',''])
+
+    #ax.set_xlim([plot_start_time, plot_end_time])
+    #ax.hlines(0,plot_end_time-.1, plot_end_time, linewidth=1)
