@@ -1,41 +1,14 @@
 import os
 import copy
 import numpy as np
-import hippocampalseq.utils as hseu
 from typing import Optional
+
+import hippocampalseq.utils as hseu
 from .placefields import * 
 from .ripples import *
 from .theta import *
 
-def fix_alignment(spike_times, pos_times, spike_ids, x, y):
-    """Fixes alignment between spike times and position times by removing spikes
-     that are not within the position recording period and position points that 
-     are not within the spike recording period.
 
-    Args:
-        spike_times (np.ndarray): Times of the spikes
-        pos_times (np.ndarray): Times of the position data
-        spike_ids (np.ndarray): IDs of the spikes
-        x (np.ndarray): x position data
-        y (np.ndarray): y position data
-
-    Returns:
-        tuple: spike_times, pos_times, spike_ids, x, y
-    """
-    spikes_before = spike_times < pos_times[0]
-    spikes_after  = spike_times > pos_times[-1]
-    spike_conj    = ~spikes_before & ~spikes_after
-    spike_times   = spike_times[spike_conj]
-    spike_ids     = spike_ids[spike_conj]
-
-    pos_before = pos_times < spike_times[0]
-    pos_after  = pos_times > spike_times[-1]
-    pos_conj   = ~pos_before & ~pos_after
-    pos_times  = pos_times[pos_conj]
-    x          = x[pos_conj]
-    y          = y[pos_conj]
-
-    return spike_times, pos_times, spike_ids, x, y
 
 def clean_gaps(x: np.ndarray, y: np.ndarray, time: np.ndarray, position_gap_threshold_s: float = 0.25):
     """Cleans gaps in position data by removing points that are more than
@@ -76,7 +49,16 @@ def calculate_velocity(x: np.ndarray, y: np.ndarray, time: np.ndarray):
         velocity_t (np.ndarray): Times of the velocity
         velocity (np.ndarray): Velocity
     """
-    velocity = np.sqrt(np.diff(x)**2 + np.diff(y)**2) / hseu.PFEIFFER_RECORDING_FPS
+    dx = np.diff(x)
+    dy = np.diff(y)
+    dt = np.diff(time)
+    #dx = np.concatenate((dx, dx[-1]))
+    #dy = np.concatenate((dy, dy[-1]))
+    #dt = np.concatenate((dt, dt[-1]))
+
+    distance = np.sqrt(dx**2 + dy**2)
+    velocity = np.abs(distance / dt)
+    #velocity = np.sqrt(np.diff(x)**2 + np.diff(y)**2) / hseu.PFEIFFER_RECORDING_FPS
     velocity_t = (time[1:] + time[:-1]) / 2
 
     nv = np.isnan(velocity)
@@ -94,11 +76,14 @@ def load_clean_data(
         data_path: str,
         rat_name: str, 
         session: int,
+        ripple_type: str = 'awake',
         position_gap_threshold_s: float = 0.25,
-        velocity_run_threshold_s: float = 5.0
+        velocity_run_threshold_s: float = 5.0,
+        drop_misaligned: bool = False
     ) -> hseu.RatData:
     assert rat_name in hseu.RAT_NAMES, f"{rat_name} not in {hseu.RAT_NAMES}"
     assert session in [1,2]
+    assert ripple_type in ['awake', 'rem', 'sleep', 'sleep_immobile']
 
     path = os.path.join(data_path, rat_name, f"Open{session}")
     if not os.path.exists(path):
@@ -112,26 +97,37 @@ def load_clean_data(
     y    = raw_pos[:,2]
     hd   = raw_pos[:,3]
 
-    # It looks like we don't really need this since
-    # we can just use the velocity to parse it all out, but we'll keep 
-    # it for now
     epoch_mat = hseu.read_mat(os.path.join(path, 'Epochs.mat'))
-    rt = np.squeeze(epoch_mat['Run_Times']).astype(float)
-
+    if ripple_type == 'awake':
+        rt = np.squeeze(epoch_mat['Run_Times']).astype(float)
+    elif ripple_type == 'rem':
+        rt = np.squeeze(epoch_mat['REM_Times']).astype(float)
+    elif ripple_type == 'sleep':
+        rt = np.squeeze(epoch_mat['Sleep_Times']).astype(float)
+    elif ripple_type == 'sleep_immobile':
+        rt = np.squeeze(epoch_mat['Sleep_Box_Immobile_Times']).astype(float)
+    
     start = rt[0]
     end   = rt[1]
 
     spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
     spikes = spike_mat['Spike_Data']
-    
-    spike_ids = spikes[:,1].astype(int) - 1
+
+    spike_ids   = spikes[:,1].astype(int) - 1
     spike_times = spikes[:,0]
+
+    # Restrict to desired epoch
+    restrict_start = np.searchsorted(spike_times, start, side='left')
+    restrict_end   = np.searchsorted(spike_times, end, side='right')
+    spike_ids   = spike_ids[restrict_start:restrict_end]
+    spike_times = spike_times[restrict_start:restrict_end]
 
     excitatory_neurons = spike_mat['Excitatory_Neurons'].astype(int) - 1
     inhibitory_neurons = spike_mat['Inhibitory_Neurons'].astype(int) - 1
 
     ripple_mat = hseu.read_mat(os.path.join(path, 'Ripple_Events.mat'))
     ripples = ripple_mat['Ripple_Events']
+
 
     try:
         well_mat = hseu.read_mat(os.path.join(path, 'Well_Sequence.mat'))
@@ -143,10 +139,17 @@ def load_clean_data(
     # Align spike and position data, remove large gaps, and calculate velocity.
     # Each spike should have a corresponding position, otherwise we just remove it.
     # Other methods interpolate, but Krause et al chose to simply drop it
-    spike_times,time,spike_ids,x,y = fix_alignment(spike_times, time, spike_ids, x, y)
+    if drop_misaligned:
+        spike_times,time,spike_ids,x,y = fix_alignment(spike_times, time, spike_ids, x, y)
     x,y = clean_gaps(x, y, time, position_gap_threshold_s)
     velocity_t,velocity = calculate_velocity(x, y, time)
     run_starts,run_ends = calculate_run_periods(velocity, velocity_t, velocity_run_threshold_s)
+
+    unique_cells = np.unique(spike_ids).astype(int)
+    cell_spikes = []
+    for cell in unique_cells:
+        spikes = spike_times[spike_ids == cell]
+        cell_spikes.append(spikes)
 
     raw_data = hseu.RawData(
         time           = time,
@@ -159,8 +162,11 @@ def load_clean_data(
         run_ends       = run_ends,
         spike_ids      = spike_ids,
         spike_times    = spike_times,
-        raw_ripples    = ripples
+        raw_ripples    = ripples,
+        unique_cells   = unique_cells,
+        cell_spikes    = cell_spikes
     )
+
     return hseu.RatData(
         rat_name           = rat_name,
         session            = session,
@@ -169,13 +175,14 @@ def load_clean_data(
         inhibitory_neurons = inhibitory_neurons,
         well_sequence      = well_seq,
         n_ripples          = len(ripples),
-        n_cells            = np.max(spike_ids)
+        n_cells            = np.max(spike_ids) + 1
     )
 
 def load_and_preprocess(
         data_path: str,
         rat_name: str, 
         session: int, 
+        ripple_type: str = 'awake',
         position_gap_threshold_s: float = 0.25,
         velocity_run_threshold_s: float = 5.0,
         bin_size_cm: int = 4,
@@ -211,6 +218,7 @@ def load_and_preprocess(
         data_path, 
         rat_name, 
         session, 
+        ripple_type,
         position_gap_threshold_s, 
         velocity_run_threshold_s
     )

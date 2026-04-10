@@ -1,10 +1,51 @@
 import numpy as np
+from typing import Tuple
 from scipy.ndimage import gaussian_filter
+
 import hippocampalseq.utils as hseu
 
+def fix_alignment(spike_times, pos_times, spike_ids, x, y, drop_spikes: bool = False):
+    """Fixes alignment between spike times and position times by removing spikes
+     that are not within the position recording period and position points that 
+     are not within the spike recording period.
 
+    Args:
+        spike_times (np.ndarray): Times of the spikes
+        pos_times (np.ndarray): Times of the position data
+        spike_ids (np.ndarray): IDs of the spikes
+        x (np.ndarray): x position data
+        y (np.ndarray): y position data
 
-def __get_run_data(rat_data: hseu.RatData) -> hseu.RunData:
+    Returns:
+        tuple: spike_times, pos_times, spike_ids, x, y
+    """
+    if drop_spikes:
+        spikes_before = spike_times >= pos_times[0]
+        spikes_after  = spike_times <= pos_times[-1]
+        spike_conj    = spikes_before & spikes_after
+        spike_times   = spike_times[spike_conj]
+        spike_ids     = spike_ids[spike_conj]
+
+        pos_before = pos_times >= spike_times[0]
+        pos_after  = pos_times <= spike_times[-1]
+        pos_conj   = pos_before & pos_after
+        pos_times  = pos_times[pos_conj]
+        x          = x[pos_conj]
+        y          = y[pos_conj]
+    else:
+        pass
+
+    return spike_times, pos_times, spike_ids, x, y
+
+def __get_run_data(
+        spike_ids: np.ndarray,
+        spike_times: np.ndarray,
+        x: np.ndarray,
+        y: np.ndarray,
+        time: np.ndarray,
+        run_starts: np.ndarray,
+        run_ends: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Extracts spikes and positions from the given rat data in the given runs.
 
@@ -14,14 +55,6 @@ def __get_run_data(rat_data: hseu.RatData) -> hseu.RunData:
     Returns:
         hseu.AttrDict: Dictionary containing extracted spike and position data
     """
-    spike_ids   = rat_data.raw_data.spike_ids
-    spike_times = rat_data.raw_data.spike_times
-    x           = rat_data.raw_data.x 
-    y           = rat_data.raw_data.y
-    time        = rat_data.raw_data.time
-    run_starts  = rat_data.raw_data.run_starts
-    run_ends    = rat_data.raw_data.run_ends
-
     _spike_times = []
     _spike_ids   = []
     _run_x_pos   = []
@@ -29,15 +62,17 @@ def __get_run_data(rat_data: hseu.RatData) -> hseu.RunData:
     for epoch in range(len(run_starts)):
         start = run_starts[epoch]
         end   = run_ends[epoch]
-        # extract window indices
-        spike_window_bool = hseu.times_to_bool(spike_times, start, end)
-        pos_window_bool   = hseu.times_to_bool(time, start, end)
-        # extract spikes and positions in this window
-        window_spike_times = spike_times[spike_window_bool]
-        window_spike_ids   = spike_ids[spike_window_bool]
-        window_x_pos       = x[pos_window_bool]
-        window_y_pos       = y[pos_window_bool]
-        # append to list
+
+        spike_window_start = np.searchsorted(spike_times, start, side='left')
+        spike_window_end   = np.searchsorted(spike_times, end)
+        pos_window_start   = np.searchsorted(time, start, side='left')
+        pos_window_end     = np.searchsorted(time, end)
+
+        window_spike_times = spike_times[spike_window_start:spike_window_end]
+        window_spike_ids   = spike_ids[spike_window_start:spike_window_end] 
+        window_x_pos       = x[pos_window_start:pos_window_end]
+        window_y_pos       = y[pos_window_start:pos_window_end]
+        
         _spike_times.append(window_spike_times)
         _spike_ids.append(window_spike_ids)
         _run_x_pos.append(window_x_pos)
@@ -47,7 +82,7 @@ def __get_run_data(rat_data: hseu.RatData) -> hseu.RunData:
     _spike_ids   = np.hstack(_spike_ids)
     _x = np.hstack(_run_x_pos)
     _y = np.hstack(_run_y_pos)
-    return hseu.RunData(_spike_times, _spike_ids, _x, _y)
+    return _spike_times, _spike_ids, _x, _y
 
 def __calculate_one_placefield(
         position_hist: np.ndarray,
@@ -74,9 +109,6 @@ def __calculate_one_placefield(
         place_field_raw = spike_hist_with_prior / pos_hist_with_prior_s
     else:
         place_field_raw = np.nan_to_num(spike_hist / position_hist)
-    #if self.params.rotate_placefields:
-    #    place_field_raw = np.roll(place_field_raw, np.random.randint(50), axis=0)
-    #    place_field_raw = np.roll(place_field_raw, np.random.randint(50), axis=1)
     pf_gaussian_sd_bins = hseu.cm_to_bins(place_field_sd_gaussian)
     place_field_smoothed = gaussian_filter(
         place_field_raw, sigma=pf_gaussian_sd_bins
@@ -84,82 +116,47 @@ def __calculate_one_placefield(
     return place_field_smoothed
 
 def __get_spike_positions(
-        cell_spike_times: np.ndarray,
+        cell_spike_times: np.ndarray, 
         x: np.ndarray, 
-        y: np.ndarray,
-        pos_times: np.ndarray,
-        position_gap_threshold_s: float
-    ) -> np.ndarray:
-    """Extracts the positions corresponding to the given spike times.
-
-    Args:
-        cell_spike_times (np.ndarray): Spike times of a cell
-        pos_xy (np.ndarray): Position data
-        pos_times (np.ndarray): Position times
-        position_gap_threshold_s (float): Threshold for position gaps in seconds
-
-    Returns:
-        np.ndarray: Positions corresponding to the given spike times
-    """
-    cell_spikes = [
-        __find_position_during_spike(x, y, pos_times, t, position_gap_threshold_s)
-        for t in cell_spike_times
-    ]
-    cell_spike_x,cell_spike_y = zip(*cell_spikes)
-    return np.array(cell_spike_x),np.array(cell_spike_y)
-
-def __find_position_during_spike(
-        x: np.ndarray,
-        y: np.ndarray,
+        y: np.ndarray, 
         pos_times: np.ndarray, 
-        spike_time: float,
-        position_gap_threshold_s: float
-    ) -> np.ndarray:
-    """
-    Finds the position corresponding to the given spike time.
+        position_gap_threshold_s: float = 0.25
+    ):
+
+    """Finds the positions of a given set of spike times.
 
     Args:
-        pos_xy (np.ndarray): Position data
-        pos_times (np.ndarray): Position times
-        spike_time (float): Spike time
-        position_gap_threshold_s (float): Threshold for position gaps in seconds
+        cell_spike_times (np.ndarray): Times of the spikes
+        x (np.ndarray): x position data
+        y (np.ndarray): y position data
+        pos_times (np.ndarray): Time of the position data
+        position_gap_threshold_s (float, optional): Threshold in seconds for which spikes are not considered. Defaults to 0.25.
 
     Returns:
-        np.ndarray: Positions corresponding to the given spike times
-
-    Notes:
-        If the spike time does not have a position within the given threshold,
-        the function prints a message with the minimum difference and its index.
+        tuple: x and y positions of the spikes
     """
-    abs_diff = np.abs(pos_times - spike_time)
-    min_diff = np.min(abs_diff)
-    if min_diff > position_gap_threshold_s:
-        print(
-            "find_pos_ind_nearest_spike() returning value larger than gap "
-            f"threshold: {min_diff, np.where(abs_diff == min_diff)}"
-        )
-    nearest_x = x[abs_diff == min_diff][0]
-    nearest_y = y[abs_diff == min_diff][0]
-    #nearest_pos_xy = pos_xy[abs_diff == min_diff][0]
-    #if nearest_pos_xy.shape != (2,):
-    #    nearest_pos_xy = nearest_pos_xy[0]
-    #return nearest_pos_xy
-    return nearest_x, nearest_y
+    # Find the indices where spike_times would be inserted in pos_times
+    # This assumes pos_times is sorted (which it usually is for time-series)
+    idx = np.searchsorted(pos_times, cell_spike_times)
 
-def __mean_firing_rate(position_histogram: np.ndarray, spiking_histograms: np.ndarray) -> float:
-    """
-    Calculate the mean firing rate for a given position histogram and a set of spiking histograms.
+    # Clip indices to stay within array bounds
+    idx_right = np.clip(idx, 0, len(pos_times) - 1)
+    idx_left = np.clip(idx - 1, 0, len(pos_times) - 1)
 
-    Args:
-        position_histogram (np.ndarray): Position histogram
-        spiking_histograms (np.ndarray): Spiking histograms
+    # Determine which is closer: the index to the left or the right?
+    diff_right = np.abs(pos_times[idx_right] - cell_spike_times)
+    diff_left = np.abs(pos_times[idx_left] - cell_spike_times)
+    
+    # Use the index that gives the minimum difference
+    closer_to_right = diff_right < diff_left
+    final_idx = np.where(closer_to_right, idx_right, idx_left)
+    min_diffs = np.where(closer_to_right, diff_right, diff_left)
 
-    Returns:
-        np.array: Mean firing rate (spikes per second)
-    """
-    total_run_time = np.sum(position_histogram)
-    total_spikes = np.sum(spiking_histograms, axis=(1, 2))
-    return total_spikes / total_run_time
+    if np.any(min_diffs > position_gap_threshold_s):
+        over_threshold = min_diffs[min_diffs > position_gap_threshold_s]
+        print(f"Warning: {len(over_threshold)} spikes exceeded the gap threshold.")
+
+    return x[final_idx], y[final_idx]
 
 def calculate_placefields(
         rat_data: hseu.RatData,
@@ -187,7 +184,24 @@ def calculate_placefields(
         Finally, it calculates the mean firing rate and the maximum firing rate for each cell.
     """
     prior_alpha_s = prior_beta_s * prior_mean_rat_sps + 1
-    run_data = __get_run_data(rat_data)
+
+    spike_times, time_aligned, spike_ids, x_aligned, y_aligned = fix_alignment(
+        rat_data.raw_data.spike_times,
+        rat_data.raw_data.time,
+        rat_data.raw_data.spike_ids,
+        rat_data.raw_data.x, 
+        rat_data.raw_data.y,
+        True
+    )
+
+    spike_times, spike_ids, x, y = __get_run_data(
+        spike_ids,
+        spike_times,
+        x_aligned, y_aligned,
+        time_aligned,
+        rat_data.raw_data.run_starts,
+        rat_data.raw_data.run_ends
+    )
 
     nbinsx = int(hseu.PFEIFFER_ENV_WIDTH_CM / bin_size_cm)
     nbinsy = int(hseu.PFEIFFER_ENV_HEIGHT_CM / bin_size_cm)
@@ -195,26 +209,21 @@ def calculate_placefields(
     spatial_grid_y = np.linspace(0, hseu.PFEIFFER_ENV_WIDTH_CM, nbinsy + 1)
 
     position_hist,_,_ = np.histogram2d(
-        run_data.x,
-        run_data.y,
+        x,
+        y,
         bins=(spatial_grid_x,spatial_grid_y)
     )
     position_hist = position_hist.T * hseu.PFEIFFER_RECORDING_FPS
 
-
-    spike_times = run_data.spike_times 
-    spike_ids   = run_data.spike_ids 
-    x           = rat_data.raw_data.x
-    y           = rat_data.raw_data.y
-    pos_times   = rat_data.raw_data.time
 
     spike_histograms = np.zeros((rat_data.n_cells, nbinsx, nbinsy))
     for cell_id in range(rat_data.n_cells):
         cell_spike_times = spike_times[spike_ids == cell_id]
         cell_x,cell_y = __get_spike_positions(
             cell_spike_times,
-            x, y, 
-            pos_times, 
+            x_aligned,
+            y_aligned, 
+            time_aligned, 
             position_gap_threshold_s
         )
 
@@ -238,7 +247,7 @@ def calculate_placefields(
                 posterior
             )
 
-    mean_fr_array = __mean_firing_rate(position_hist, spike_histograms)
+    mean_fr_array = np.sum(spike_histograms, axis=(1, 2)) / np.sum(position_hist)
 
     max_fr_array = np.max(place_fields, axis=(1, 2))
 
@@ -256,7 +265,6 @@ def calculate_placefields(
         max_firing_rate  = max_fr_array,
         place_cell_ids   = place_cell_ids,
         n_place_cells    = len(place_cell_ids),
-        run_data         = run_data
     )
 
     return place_field_data

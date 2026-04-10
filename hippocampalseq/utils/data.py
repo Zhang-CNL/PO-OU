@@ -9,13 +9,6 @@ PFEIFFER_PLACEFIELD_MIN_TUNE_SPIKES_PSEC = 2
 PFEIFFER_RECORDING_FPS = 1 / 30
 
 @dataclass
-class RunData:
-    spike_times : np.ndarray = None 
-    spike_ids   : np.ndarray = None
-    x           : np.ndarray = None 
-    y           : np.ndarray = None 
-
-@dataclass
 class PlacefieldData:
     place_fields    : np.ndarray = None # (n_place_cells, K, K): Number of cells and each position corresponds to excitation strength in real environment.
     place_field_mat : np.ndarray = None # (n_place_cells, K^2): Flattened place fields
@@ -23,7 +16,6 @@ class PlacefieldData:
     max_firing_rate : np.ndarray = None # (n_place_cells, 1): Max firing rate for each cell
     place_cell_ids  : np.ndarray = None # (n_place_cells, 1): IDs of place cells
     n_place_cells   : int        = None
-    run_data        : RunData    = None
 
 @dataclass
 class RippleSpike:
@@ -62,31 +54,20 @@ class RawData:
     spike_ids      : np.ndarray # (T, 1): id of the cell that spiked at corresponding time in spike_times
     spike_times    : np.ndarray # (T, 1): time that the cell spiked at corresponding position in (x,y)
     raw_ripples    : np.ndarray # (Nripples, 6): Ripple start time, ripple end time, ripple peak time, raw ripple power, z-scored ripple power across whole recording, z-scored ripple power across epoch
-
-@dataclass
-class RunSpikes:
-    time        : np.ndarray
-    x           : np.ndarray
-    y           : np.ndarray 
-    spike_times : np.ndarray
-    spike_ids   : np.ndarray
-    run_starts  : np.ndarray
-    run_ends    : np.ndarray
+    unique_cells   : np.ndarray
+    cell_spikes    : List[np.ndarray]
 
 @dataclass 
 class RatData:
     rat_name           : str            = None
     session            : int            = None
     raw_data           : RawData        = None
-    run_spikes         : RunSpikes      = None
     excitatory_neurons : np.ndarray     = None # List of IDs corresponding to excitatory neurons in spike_ids
     inhibitory_neurons : np.ndarray     = None # List of IDs corresponding to inhibitory neurons in spike_ids
     well_sequence      : np.ndarray     = None
     n_ripples          : int            = None
     n_cells            : int            = None
     large_position_gaps: np.ndarray     = None
-    run_times_start    : np.ndarray     = None # (?, 1): time at which rat hit a velocity above the set threshold
-    run_times_end      : np.ndarray     = None # (?, 1): time at which rat dropped below velocity at set threshold
     place_field_data   : PlacefieldData = None 
     ripple_data        : RippleData     = None
     theta_data         : Theta          = None

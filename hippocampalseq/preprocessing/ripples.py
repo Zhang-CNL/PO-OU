@@ -36,9 +36,13 @@ def __select_population_burst(
     """
     spikes_per_timebin = spikemat_fullripple.sum(axis=1)
     avg_spikes_per_s_smoothed = np.convolve(
-        spikes_per_timebin / (n_place_cells * time_window_s), avg_fr_smoothing_convolution, mode="same"
+        spikes_per_timebin / (n_place_cells * time_window_s),
+        avg_fr_smoothing_convolution, 
+        mode="same"
     )
     timebins_above_threshold = avg_spikes_per_s_smoothed > avg_spikes_per_s_threshold
+    spikemat_popburst = None
+    spikemat_popburst_start, spikemat_popburst_end = np.nan,np.nan
     if timebins_above_threshold.sum() > 1:
         start_timebin = np.argwhere(timebins_above_threshold)[0,0]
         end_timebin   = np.argwhere(timebins_above_threshold)[-1,0]
@@ -50,12 +54,6 @@ def __select_population_burst(
                 - (spikemat_fullripple.shape[0] - end_timebin)
                 * time_window_s
             )
-        else:
-            spikemat_popburst = None
-            spikemat_popburst_start, spikemat_popburst_end = [np.nan, np.nan]
-    else:
-        spikemat_popburst = None
-        spikemat_popburst_start, spikemat_popburst_end = [np.nan, np.nan]
     return (
         spikemat_popburst,
         [spikemat_popburst_start, spikemat_popburst_end],
@@ -175,7 +173,6 @@ def __calc_firing_rate_scaling(run_mean_frs: np.ndarray, ripple_mean_frs: np.nda
     scaling_factors = scaling_factors[scaling_factors > 0]
     k, _, scale = sp.gamma.fit(scaling_factors, floc=0)
     return {"scaling_factors": scaling_factors, "alpha": k, "beta": 1 / scale}
-    #return {"scaling_factors": scaling_factors, "alpha": 1, "beta": 1}
 
 def process_ripples(
         rat_data: hseu.RatData, 

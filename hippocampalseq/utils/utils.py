@@ -68,6 +68,7 @@ def extract_times_from_boolean(boolean_arr, run_times):
         end_times.append(run_times[-1])
     return np.array(start_times), np.array(end_times)
 
+
 def times_to_bool(data_times, start_time, end_time):
     times_after_start = data_times >= start_time
     times_before_end = data_times <= end_time
@@ -154,9 +155,9 @@ def calc_poisson_emission_probabilities(
     return emission_probabilities
 
 def calc_poisson_emission_probabilities_log_2d(
-        spikemat     : npt.ArrayLike,
-        place_fields : npt.ArrayLike, 
-        dt: float|npt.ArrayLike,
+        spikemat: npt.ArrayLike,
+        place_fields: npt.ArrayLike,
+        dt: float|npt.ArrayLike
     ) -> npt.ArrayLike:
     r"""Calculate emission probabilities $ln\ P(x_t|z_t) = ln\ \prod_{i,j} Pois(x_{t,i,j}f_{i,j}(z_t)\gamma\delta t)$ for a 2D place field.
     Same function as `calc_poisson_emission_probabilities_log` except the output is a 2D matrix.
@@ -169,23 +170,20 @@ def calc_poisson_emission_probabilities_log_2d(
     Returns:
         (npt.ArrayLike): (T, Nbx, Nby) matrix of emission probabilities
     """
-    log, sum, einsum = changeover_functions(type(spikemat), 'log', 'sum', 'einsum')
-    fac = factorial if type(spikemat) == np.ndarray else lambda x: torch.exp(torch.lgamma(x+1))
-
-    log_pfs = log(place_fields)
-
-    #pf_spikes_sum = spikemat[None,:,:] @ log_pfs # (T,n_bx,n_by) matrix
-    pf_spikes_sum = einsum('ij,jkl->ikl', spikemat, log_pfs)
-
-    time_window_spikes_sum = sum(spikemat * log(dt), axis=1) # (T,) matrix
-
-    pf_sum = dt * sum(place_fields, axis=0) # (n_bx,n_by) matrix
-
-    spikes_sum = sum(log(fac(spikemat)), axis=1) # (T,) matrix
-    # calculate emission probs
-    pf_sum_norm = (pf_spikes_sum + time_window_spikes_sum[:,None,None]) - pf_sum
-    emission_probabilities_log = pf_sum_norm - spikes_sum[:,None,None]
-    return emission_probabilities_log
+    sum,log,einsum,max = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'max')
+    lambdas = place_fields * dt
+    
+    sum_lambda = sum(lambdas, axis=0)
+    
+    log_lambdas = log(lambdas + 1e-10)
+    term1 = einsum('tn,nhw->thw', spikemat, log_lambdas)
+    log_likelihood_maps = term1 - sum_lambda
+    
+    # Numerical stability trick per time bin
+    # Subtract max along spatial dimensions (H, W) for each T
+    max_log = max(log_likelihood_maps, axis=(1, 2), keepdims=True)
+    
+    return log_likelihood_maps - max_log
 
 def calc_poisson_emission_probabilities_2d(
         spikemat: npt.ArrayLike,
@@ -222,21 +220,39 @@ def extract_spikemat(
     Returns:
         np.ndarray: An individual spike matrix.
     """
-    spikemat = np.empty(shape=(0, len(place_cell_ids)), dtype=int)
-    timebin_start_time = start_time
-    timebin_end_time = start_time + time_window_s
-    while timebin_end_time < end_time:
-        spikes_after_start = spike_times >= timebin_start_time
-        spikes_before_end = spike_times < timebin_end_time
-        timebin_bool = spikes_after_start == spikes_before_end
-        spike_ids_in_window = spike_ids[timebin_bool]
-        spikevector = np.array(
-            [[np.sum(spike_ids_in_window == cell_id) for cell_id in place_cell_ids]]
-        )
-        spikemat = np.append(spikemat, spikevector, axis=0)
-        timebin_start_time = timebin_start_time + time_window_advance_s
-        timebin_end_time = timebin_end_time + time_window_advance_s
-    return np.array(spikemat, dtype=int)
+    bin_starts = np.arange(start_time, end_time - time_window_s, time_window_advance_s)
+
+    place_idx = np.isin(spike_ids, place_cell_ids)
+    s_ids = spike_ids[place_idx]
+    s_times = spike_times[place_idx]
+    
+    if np.isclose(time_window_s, time_window_advance_s):
+        time_edges = np.append(bin_starts, bin_starts[-1] + time_window_s)
+        cell_edges = np.append(place_cell_ids, place_cell_ids[-1])
+        spikemat, _, _ = np.histogram2d(s_times, s_ids, bins=[time_edges, cell_edges])
+        return spikemat.astype(int)
+
+    else:
+        num_bins = len(bin_starts)
+        num_cells = len(place_cell_ids)
+        spikemat = np.zeros((num_bins, num_cells), dtype=int)
+        
+        sort_idx = np.argsort(s_times)
+        s_times = s_times[sort_idx]
+        s_ids = s_ids[sort_idx]
+
+        for i, start in enumerate(bin_starts):
+            end = start + time_window_s
+            idx_start = np.searchsorted(s_times, start, side='left')
+            idx_end = np.searchsorted(s_times, end, side='right')
+            
+            window_spike_ids = s_ids[idx_start:idx_end]
+            
+            if len(window_spike_ids) > 0:
+                counts = np.bincount(window_spike_ids, minlength=int(place_cell_ids.max() + 1))
+                spikemat[i, :] = counts[place_cell_ids]
+                
+        return spikemat
 
 def bin_points(x,y):
     vstack,hstack = changeover_functions(type(x), 'vstack', 'hstack')
