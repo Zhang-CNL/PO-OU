@@ -31,6 +31,13 @@ def changeover_functions(type, *args):
         return attrs[0]
     return attrs
 
+def create_interval_mask(length, starts, ends):
+    """Helper to create a boolean mask from start/end indices."""
+    mask = np.zeros(length + 1, dtype=int)
+    np.add.at(mask, starts, 1)
+    np.add.at(mask, ends, -1)
+    return np.cumsum(mask)[:-1] > 0
+
 def save_pickle(data, fname):
     s = compress_pickle.dumps(data, "gzip")
     with open(fname, 'wb') as f:
@@ -139,6 +146,55 @@ def calc_poisson_emission_probabilities_2d(
     lemission = calc_poisson_emission_probabilities_log_2d(spikemat, place_fields, dt)
     emission_probabilities = exp(lemission)
     return emission_probabilities
+
+def extract_cellspikes(
+        cell_spikes,
+        place_cell_ids,
+        start,
+        end,
+        time_window_s,
+        time_window_advance_s   
+    ):
+    spike_times,spike_ids = [],[]
+    for cell_id in place_cell_ids:
+        t = np.asarray(cell_spikes.get(cell_id,[]))
+        valid_slice = restrict_indices(t, start, end)
+        spike_times.append(t[valid_slice])
+        spike_ids.append(np.full(len(t[valid_slice]), cell_id))
+
+    bin_starts = np.arange(start, end, time_window_advance_s)
+    num_bins = len(bin_starts)
+    num_cells = len(place_cell_ids)
+    if not np.any(len(t) for t in spike_times):
+        return np.zeros((num_bins, num_cells), dtype=int)
+
+    spike_times = np.concatenate(spike_times)
+    spike_ids   = np.concatenate(spike_ids)
+
+    sorted_indices = np.argsort(spike_times)
+    spike_times = spike_times[sorted_indices]
+    spike_ids   = spike_ids[sorted_indices]
+
+    cell_map = {cid:i for i, cid in enumerate(place_cell_ids)}
+    if np.isclose(time_window_advance_s, time_window_s):
+        mapped_ids = np.array([cell_map[sid] for sid in s_ids])
+        cell_edges = np.arange(num_cells + 1)
+        spikemat, _, _ = np.histogram2d(s_times, mapped_ids, bins=[time_edges, cell_edges])
+        return spikemat.astype(int)
+    else:
+        spikemat = np.zeros((num_bins, num_cells), dtype=int)
+        mapped_s_ids = np.array([cell_map[sid] for sid in s_ids])
+
+        for i, start in enumerate(bin_starts):
+            end = start + time_window_s
+            win_slice = hseu.restrict_indices(s_times, start, end)
+            window_ids = mapped_s_ids[win_slice]
+            if len(window_ids) > 0:
+                counts = np.bincount(window_ids, minlength=num_cells)
+                spikemat[i, :] = counts
+                
+        return spikemat
+
 
 def extract_spikemat(
         spike_ids: np.ndarray, 

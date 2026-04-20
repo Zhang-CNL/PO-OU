@@ -1,5 +1,7 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
+import functools
 from typing import Optional, List, Dict 
 
 import hippocampalseq.utils as hseu
@@ -25,12 +27,23 @@ def __init_plotting():
     plt.rc('lines', linewidth=2, color='r')
     #plt.rcParams['font.sans-serif'] = ['Helvetica']
 
-def plot_placefields(place_fields: hseu.PlacefieldData, pfs: Optional[List[int]] = None, show_titles: bool = True):
-    global __plotting_initialized
-    if not __plotting_initialized:
-        __init_plotting()
+def __save_wrapper(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, file_path=None, file_name=None, **kwargs):
+        __init_plotting() 
+        res = fn(*args, **kwargs)
+        if file_path is None:
+            file_path = "./results/"
+        if not os.path.exists(file_path):
+            os.makedirs(file_path)
+        if file_name is not None:
+            plt.savefig(os.path.join(file_path, file_name), dpi=300)
+        return res
+    return wrapper
 
-    place_fields = place_fields.place_fields
+@__save_wrapper
+def plot_placefields(rat_data: hseu.RatData, pfs: Optional[List[int]] = None, show_titles: bool = True):
+    place_fields = rat_data.place_field_data.place_fields
 
     if pfs is None:
         pfs = np.arange(len(place_fields))
@@ -83,6 +96,7 @@ def plot_placefields(place_fields: hseu.PlacefieldData, pfs: Optional[List[int]]
     )
     fig.patches.extend([rect])
 
+@__save_wrapper
 def spikemat_raster_plot(spike_mat: np.ndarray, **fig_kwargs):
     fig = plt.figure(**fig_kwargs, dpi=300)
     ax = fig.add_axes([.2, .05, .75, .8])
@@ -151,16 +165,13 @@ def spike_raster_plot(
         **fig_kwargs
     )
 
+@__save_wrapper
 def cell_spike_raster_plot(
         cell_spikes: Dict[int, np.ndarray]|List[np.ndarray],
         plot_start_time: Optional[float] = None, 
         plot_end_time: Optional[float] = None, 
         **fig_kwargs 
     ):
-    global __plotting_initialized
-    if not __plotting_initialized:
-        __init_plotting()
-
     if plot_start_time is None:
         plot_start_time = min([spikes.min() for spikes in cell_spikes])
     if plot_end_time is None:
@@ -198,15 +209,15 @@ def cell_spike_raster_plot(
 
     return fig
 
-def plot_trajectory(trajectory: np.ndarray, ax=None, **kwargs):
-    global __init_plotting
-    if not __init_plotting:
-        __init_plotting()
-    assert trajectory.shape[1] == 2, "Trajectory must be 2D"
-
+@__save_wrapper
+def plot_trajectories(trajectories: List[np.ndarray], ax=None, **kwargs):
+    if not isinstance(trajectories, list):
+        trajectories = [trajectories]
     if ax is None:
         ax = plt.gca()
-    ax.plot(trajectory[:,0], trajectory[:,1])
+    for trajectory in trajectories:
+        assert trajectory.shape[1] == 2, "Trajectory must be 2D"
+        ax.plot(trajectory[:,0], trajectory[:,1], 'k-', alpha=.5, linewidth=.5)
 
     ax.set_yticks([0, 200])
     ax.set_xticks([0, 200])
@@ -214,11 +225,8 @@ def plot_trajectory(trajectory: np.ndarray, ax=None, **kwargs):
     ax.set_ylim([0, 200])
     ax.set_xlim([0, 200])
 
+@__save_wrapper
 def plot_spikemat_position_aligned(spike_ids, place_cell_ids, x, y, n_cells=4, cell_selection=None):
-    global __plotting_initialized
-    if not __plotting_initialized:
-        __init_plotting()
-
     if isinstance(cell_selection, list):
         cell_ids = cell_selection
     elif cell_selection == 'random':
