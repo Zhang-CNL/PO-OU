@@ -4,7 +4,7 @@ from scipy.ndimage import gaussian_filter
 
 import hippocampalseq.utils as hseu
 
-def fix_alignment(spike_times, pos_times, spike_ids, x, y, drop_spikes: bool = False):
+def fix_alignment(spike_times, pos_times, spike_ids, x, y, min_time_diff=np.inf):
     """Fixes alignment between spike times and position times by removing spikes
      that are not within the position recording period and position points that 
      are not within the spike recording period.
@@ -19,23 +19,77 @@ def fix_alignment(spike_times, pos_times, spike_ids, x, y, drop_spikes: bool = F
     Returns:
         tuple: spike_times, pos_times, spike_ids, x, y
     """
-    if drop_spikes:
-        spikes_before = spike_times >= pos_times[0]
-        spikes_after  = spike_times <= pos_times[-1]
-        spike_conj    = spikes_before & spikes_after
-        spike_times   = spike_times[spike_conj]
-        spike_ids     = spike_ids[spike_conj]
 
-        pos_before = pos_times >= spike_times[0]
-        pos_after  = pos_times <= spike_times[-1]
-        pos_conj   = pos_before & pos_after
-        pos_times  = pos_times[pos_conj]
-        x          = x[pos_conj]
-        y          = y[pos_conj]
-    else:
-        pass
+    _st = []
+    _id = []
+    _x  = []
+    _y  = []
+    _t  = []
+    uids = np.unique(spike_ids)
+    for uid in uids:
+        st = spike_times[spike_ids == uid]
+        idx = np.searchsorted(pos_times, st)
+
+        idp = np.clip(idx - 1, 0, len(pos_times) - 1)
+        idc = np.clip(idx, 0, len(pos_times) - 1)
+
+        dtp = np.abs(st - pos_times[idp])
+        dtc = np.abs(st - pos_times[idc])
+        prev = dtp <= dtc
+
+        nn = np.where(prev, idp, idc)
+        td = np.where(prev, dtp, dtc)
+
+        valid = td <= min_time_diff
+        selectioni = nn[valid]
+        selectiont = st[valid]
+
+        _x.append(x[selectioni])
+        _y.append(y[selectioni])
+        _t.append(pos_times[selectioni])
+        _st.append(selectiont)
+        _id.append(np.full(len(selectiont), uid))
+
+    x           = np.concatenate(_x)
+    y           = np.concatenate(_y)
+    pos_times   = np.concatenate(_t)
+    spike_times = np.concatenate(_st)
+    spike_ids   = np.concatenate(_id)
+
+    idx         = np.argsort(pos_times)
+    x           = x[idx]
+    y           = y[idx]
+    pos_times   = pos_times[idx]
+    spike_times = spike_times[idx]
+    spike_ids   = spike_ids[idx]
 
     return spike_times, pos_times, spike_ids, x, y
+
+def clean_gaps(x: np.ndarray, y: np.ndarray, time: np.ndarray, position_gap_threshold_s: float = 0.25):
+    """Cleans gaps in position data by removing points that are more than
+    position_gap_threshold_s seconds apart from the previous point.
+    Gaps are filled with NaN so as to ignore them in place-field and velocity calculations
+
+    Args:
+        x (np.ndarray): x position data
+        y (np.ndarray): y position data
+        time (np.ndarray): Times of the position data
+        position_gap_threshold_s (float): Threshold for position gaps in seconds
+
+    Returns:
+        x (np.ndarray): Cleaned x position data
+        y (np.ndarray): Cleaned y position data
+    """
+    
+    pdiff = np.diff(time)
+    gaps  = np.where(pdiff > position_gap_threshold_s)[0]
+    if len(gaps) > 0:
+        print(f"Removing {len(gaps)} position gaps")
+        for i in gaps:
+            x[i - 5 : i + 5] = np.nan
+            y[i - 5 : i + 5] = np.nan
+            print(f"\t(x,y) = ({x[i]}, {y[i]})")
+    return x,y
 
 def __get_run_data(
         spike_ids: np.ndarray,
@@ -90,6 +144,7 @@ def __calculate_one_placefield(
         place_field_sd_gaussian: float,
         prior_alpha_s: float,
         prior_beta_s: float,
+        bin_size_cm: float = 2.0,
         posterior: bool = True
     ) -> np.ndarray:
     """
@@ -109,7 +164,7 @@ def __calculate_one_placefield(
         place_field_raw = spike_hist_with_prior / pos_hist_with_prior_s
     else:
         place_field_raw = np.nan_to_num(spike_hist / position_hist)
-    pf_gaussian_sd_bins = hseu.cm_to_bins(place_field_sd_gaussian)
+    pf_gaussian_sd_bins = hseu.cm_to_bins(place_field_sd_gaussian, bin_size_cm)
     place_field_smoothed = gaussian_filter(
         place_field_raw, sigma=pf_gaussian_sd_bins
     )
@@ -160,8 +215,8 @@ def __get_spike_positions(
 
 def calculate_placefields(
         rat_data: hseu.RatData,
-        bin_size_cm: int = 4,
-        place_field_gaussian_sd_cm: float = 4,
+        bin_size_cm: int = 2,
+        place_field_gaussian_sd_cm: float = 2.0,
         position_gap_threshold_s: float = 0.25,
         prior_mean_rat_sps: float = 1.0,
         prior_beta_s: float = .01,
@@ -185,22 +240,32 @@ def calculate_placefields(
     """
     prior_alpha_s = prior_beta_s * prior_mean_rat_sps + 1
 
+    spike_times  = rat_data.raw_data.spike_times
+    time         = rat_data.raw_data.time
+    spike_ids    = rat_data.raw_data.spike_ids
+    x            = rat_data.raw_data.x
+    y            = rat_data.raw_data.y
+
     spike_times, time_aligned, spike_ids, x_aligned, y_aligned = fix_alignment(
-        rat_data.raw_data.spike_times,
-        rat_data.raw_data.time,
-        rat_data.raw_data.spike_ids,
-        rat_data.raw_data.x, 
-        rat_data.raw_data.y,
-        True
+        spike_times,
+        time,
+        spike_ids,
+        x,y,0.1
     )
+    # spike_times = rat_data.run_data.spike_times
+    # spike_ids = rat_data.run_data.spike_ids
+    # time_aligned = rat_data.raw_data.time
+    # x_aligned = rat_data.run_data.x
+    # y_aligned = rat_data.run_data.y
 
     spike_times, spike_ids, x, y = __get_run_data(
         spike_ids,
         spike_times,
-        x_aligned, y_aligned,
-        time_aligned,
-        rat_data.raw_data.run_starts,
-        rat_data.raw_data.run_ends
+        rat_data.raw_data.x, 
+        rat_data.raw_data.y,
+        rat_data.raw_data.time,
+        rat_data.run_data.run_starts,
+        rat_data.run_data.run_ends
     )
 
     nbinsx = int(hseu.PFEIFFER_ENV_WIDTH_CM / bin_size_cm)
@@ -209,8 +274,7 @@ def calculate_placefields(
     spatial_grid_y = np.linspace(0, hseu.PFEIFFER_ENV_WIDTH_CM, nbinsy + 1)
 
     position_hist,_,_ = np.histogram2d(
-        x,
-        y,
+        x, y,
         bins=(spatial_grid_x,spatial_grid_y)
     )
     position_hist = position_hist.T * hseu.PFEIFFER_RECORDING_FPS
@@ -244,6 +308,7 @@ def calculate_placefields(
                 place_field_gaussian_sd_cm,
                 prior_alpha_s,
                 prior_beta_s,
+                bin_size_cm,
                 posterior
             )
 
@@ -256,11 +321,9 @@ def calculate_placefields(
         np.argwhere(max_fr_array > hseu.PFEIFFER_PLACEFIELD_MIN_TUNE_SPIKES_PSEC)
     )
     place_cell_ids = np.intersect1d(rat_data.excitatory_neurons, max_tuning_curve_above_thresh)
-    place_field_mat = hseu.placefield_matrix(place_fields, place_cell_ids)
 
     place_field_data = hseu.PlacefieldData(
         place_fields     = place_fields[place_cell_ids],
-        place_field_mat  = place_field_mat,
         mean_firing_rate = mean_fr_array,
         max_firing_rate  = max_fr_array,
         place_cell_ids   = place_cell_ids,

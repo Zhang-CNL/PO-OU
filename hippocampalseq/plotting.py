@@ -25,18 +25,35 @@ def __init_plotting():
     plt.rc('lines', linewidth=2, color='r')
     #plt.rcParams['font.sans-serif'] = ['Helvetica']
 
-def plot_placefields(place_fields: hseu.PlacefieldData, pfs: List[int]):
+def plot_placefields(place_fields: hseu.PlacefieldData, pfs: Optional[List[int]] = None, show_titles: bool = True):
     global __plotting_initialized
     if not __plotting_initialized:
         __init_plotting()
 
-    fig, ax = plt.subplots(1,len(pfs), figsize=(2,.5), dpi=300)
+    place_fields = place_fields.place_fields
 
-    place_fields = place_fields.place_fields#[place_fields.place_cell_ids]
+    if pfs is None:
+        pfs = np.arange(len(place_fields))
+
+    rows = 10
+    if rows > len(pfs):
+        rows = 1
+    cols = len(pfs) // rows 
+    if cols == 0 or len(pfs) % cols > 0:
+        cols += 1
+
+    fig, ax = plt.subplots(rows, cols, figsize=(2*(len(pfs) // cols),.5*rows), dpi=300)
+    ax = ax.flatten()
+
+    max_firing = np.max(place_fields, axis=(1,2))
 
     for i in range(len(pfs)):
+        if show_titles:
+            ax[i].set_title(f"Max FR: {max_firing[i]:.2f}", fontsize=4)
         ax[i].imshow(place_fields[pfs[i]], origin='lower')
-        #print(rat_data.PlaceFieldData['place_fields'][pfs[i]].max())
+
+    for i in range(len(pfs), len(ax)):
+        ax[i].axis('off')
 
     binned_len = len(place_fields[pfs[0]])
         
@@ -57,12 +74,52 @@ def plot_placefields(place_fields: hseu.PlacefieldData, pfs: List[int]):
         ax[i].spines['left'].set_visible(False)
         ax[i].set_xticks([])
         ax[i].set_yticks([])
-        
+
+    plt.tight_layout()
+       
     rect = plt.Rectangle(
         (0, 0), 1, 1, fill=False, color="k", lw=.5, alpha=.2,
         zorder=1000, transform=fig.transFigure, figure=fig
     )
     fig.patches.extend([rect])
+
+def spikemat_raster_plot(spike_mat: np.ndarray, **fig_kwargs):
+    fig = plt.figure(**fig_kwargs, dpi=300)
+    ax = fig.add_axes([.2, .05, .75, .8])
+
+    T,n_cells = spike_mat.shape
+    
+
+    im = ax.imshow(spike_mat, cmap=plt.cm.gray_r)
+
+    ax.spines['top'].set_linewidth(.5)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+
+    ax.tick_params(
+        axis='x',
+        direction='in', 
+        length=1, 
+        width=.5, 
+        top=True, 
+        labeltop=True, 
+        bottom=False, 
+        labelbottom=False, 
+        labelleft=False
+    )
+    ax.xaxis.set_label_position('top')
+    ax.set_xlabel('cell number')
+
+
+    ax.set_xticks([0, n_cells])
+    ax.set_xticklabels([1, n_cells + 1])
+    ax.set_xlim([0, n_cells])
+
+    ax.set_yticks([])
+
+    #fig.colorbar(im, ax=ax, orientation='vertical', ticks=np.unique(spike_mat))
+
 
 def spike_raster_plot(
         spike_ids: np.ndarray, 
@@ -139,4 +196,49 @@ def cell_spike_raster_plot(
     ax.set_xticks([])
     ax.set_xlim([plot_start_time, plot_end_time])
 
+    return fig
+
+def plot_trajectory(trajectory: np.ndarray, ax=None, **kwargs):
+    global __init_plotting
+    if not __init_plotting:
+        __init_plotting()
+    assert trajectory.shape[1] == 2, "Trajectory must be 2D"
+
+    if ax is None:
+        ax = plt.gca()
+    ax.plot(trajectory[:,0], trajectory[:,1])
+
+    ax.set_yticks([0, 200])
+    ax.set_xticks([0, 200])
+
+    ax.set_ylim([0, 200])
+    ax.set_xlim([0, 200])
+
+def plot_spikemat_position_aligned(spike_ids, place_cell_ids, x, y, n_cells=4, cell_selection=None):
+    global __plotting_initialized
+    if not __plotting_initialized:
+        __init_plotting()
+
+    if isinstance(cell_selection, list):
+        cell_ids = cell_selection
+    elif cell_selection == 'random':
+        cell_ids = np.random.choice(place_cell_ids, n_cells, replace=False)
+    else:
+        cell_ids = place_cell_ids[:n_cells]
+
+    fig,ax = plt.subplots(figsize=(16,16), dpi=300)
+
+    ax.plot(x,y, 'k-', alpha=.2, linewidth=.5, label='Rat Trajectory')
+
+    colors = plt.cm.tab10(np.linspace(0, 1, len(cell_ids)))
+    for i,cell in enumerate(cell_ids):
+        idx = np.where(spike_ids == cell)[0]
+        ax.scatter(x[idx], y[idx], s=5, c=colors[i], alpha=.5, label=f'Cell {cell}')
+    ax.set_xlim([0, 200])
+    ax.set_ylim([0, 200])
+
+    ax.set_xlabel("X Position (cm)")
+    ax.set_ylabel("Y Position (cm)")
+    ax.set_title("Spike Positions on Trajectory")
+    ax.legend()
     return fig

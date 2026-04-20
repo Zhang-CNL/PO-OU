@@ -12,32 +12,42 @@ class BayesianMAPResults:
     trajectories: List[npt.ArrayLike]
 
 class BayesianMAP(StateSpace):
-    def __init__(self, place_fields: npt.ArrayLike, dt: float):
+    def __init__(self, place_fields: npt.ArrayLike, dt: float, bin_size_cm: float):
         self.place_fields = place_fields
         self.dt = dt
+        self.bin_size = bin_size_cm
 
-    @staticmethod
     def bayesian_decoding_one(
-            place_fields: npt.ArrayLike,
+            self,
             spikemat: npt.ArrayLike, 
-            dt: npt.ArrayLike|float,
             decoding_method: str = 'max'
         ) -> npt.ArrayLike:
         assert decoding_method in ['max', 'center_of_mass']
-        emission_probability = hseu.calc_poisson_emission_probabilities_2d(spikemat, place_fields, dt)
+        spikemat_nonzero = spikemat[np.where(spikemat.sum(axis=1) > 0)]
+        emission_probability = hseu.calc_poisson_emission_probabilities_2d(
+            spikemat_nonzero, 
+            self.place_fields, 
+            self.dt
+        )
+        norm_factor           = emission_probability.sum(axis=(1, 2))
+        emission_probability  = emission_probability[~(norm_factor == 0),...]
+        norm_factor           = norm_factor[~(norm_factor == 0)]
+        emission_probability /= norm_factor[:,None,None]
+
+        T,H,W = emission_probability.shape
+
         if decoding_method == 'max':
-            N,R,C = emission_probability.shape
-            indices = np.argmax(emission_probability.reshape(N,-1), axis=1)
-            rows = indices // C
-            cols = indices % C
+            indices = np.nanargmax(emission_probability.reshape(T,-1), axis=1)
+            rows, cols = np.unravel_index(indices, (H, W))
         elif decoding_method == 'center_of_mass':
-            T, H, W = emission_probability.shape
             yy, xx = np.indices((H, W))
+            rows = np.sum(emission_probability * yy, axis=(1, 2)) / norm_factor
+            cols = np.sum(emission_probability * xx, axis=(1, 2)) / norm_factor
 
-            rows = np.sum(emission_probability * yy, axis=(1, 2)) / np.sum(emission_probability, axis=(1, 2))
-            cols = np.sum(emission_probability * xx, axis=(1, 2)) / np.sum(emission_probability, axis=(1, 2))
+        rows = rows * self.bin_size + self.bin_size / 2
+        cols = cols * self.bin_size + self.bin_size / 2
 
-        return np.column_stack((rows, cols))
+        return np.column_stack((cols, rows))
 
     def fit(self, 
             X: List[npt.ArrayLike], 
@@ -48,7 +58,7 @@ class BayesianMAP(StateSpace):
         ) -> BayesianMAPResults:
         trajectories = []
         for spike in X:
-            trajectory = self.bayesian_decoding_one(self.place_fields, spike, self.dt)
+            trajectory = self.bayesian_decoding_one(spike, decoding_method)
             trajectories.append(trajectory)
         return BayesianMAPResults(trajectories)
 
