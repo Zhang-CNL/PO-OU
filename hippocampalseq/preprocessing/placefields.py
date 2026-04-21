@@ -134,5 +134,4 @@ def calculate_placefields(
     above_thresh = np.squeeze(np.argwhere(max_firingrate > min_spike_rate))
     place_cell_ids = np.intersect1d(excitatory_neurons, above_thresh)
 
-    #return place_fields[place_cell_ids], place_cell_ids
-    return place_fields, np.arange(ncells)
+    return place_fields[place_cell_ids], place_cell_ids

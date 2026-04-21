@@ -7,6 +7,7 @@ from scipy.optimize import minimize
 from itertools import product
 import numpy as np
 import numpy.typing as npt
+import pynapple as nap
 import torch
 import compress_pickle
 
@@ -147,119 +148,44 @@ def calc_poisson_emission_probabilities_2d(
     emission_probabilities = exp(lemission)
     return emission_probabilities
 
-def extract_cellspikes(
-        cell_spikes,
-        place_cell_ids,
-        start,
-        end,
-        time_window_s,
-        time_window_advance_s   
-    ):
-    spike_times,spike_ids = [],[]
-    for cell_id in place_cell_ids:
-        t = np.asarray(cell_spikes.get(cell_id,[]))
-        valid_slice = restrict_indices(t, start, end)
-        spike_times.append(t[valid_slice])
-        spike_ids.append(np.full(len(t[valid_slice]), cell_id))
-
-    bin_starts = np.arange(start, end, time_window_advance_s)
-    num_bins = len(bin_starts)
-    num_cells = len(place_cell_ids)
-    if not np.any(len(t) for t in spike_times):
-        return np.zeros((num_bins, num_cells), dtype=int)
-
-    spike_times = np.concatenate(spike_times)
-    spike_ids   = np.concatenate(spike_ids)
-
-    sorted_indices = np.argsort(spike_times)
-    spike_times = spike_times[sorted_indices]
-    spike_ids   = spike_ids[sorted_indices]
-
-    cell_map = {cid:i for i, cid in enumerate(place_cell_ids)}
-    if np.isclose(time_window_advance_s, time_window_s):
-        mapped_ids = np.array([cell_map[sid] for sid in s_ids])
-        cell_edges = np.arange(num_cells + 1)
-        spikemat, _, _ = np.histogram2d(s_times, mapped_ids, bins=[time_edges, cell_edges])
-        return spikemat.astype(int)
-    else:
-        spikemat = np.zeros((num_bins, num_cells), dtype=int)
-        mapped_s_ids = np.array([cell_map[sid] for sid in s_ids])
-
-        for i, start in enumerate(bin_starts):
-            end = start + time_window_s
-            win_slice = hseu.restrict_indices(s_times, start, end)
-            window_ids = mapped_s_ids[win_slice]
-            if len(window_ids) > 0:
-                counts = np.bincount(window_ids, minlength=num_cells)
-                spikemat[i, :] = counts
-                
-        return spikemat
-
-
 def extract_spikemat(
-        spike_ids: np.ndarray, 
-        spike_times: np.ndarray,
-        place_cell_ids: np.ndarray,
-        start_time: float, 
-        end_time: float,
+        spiking_data: nap.TsGroup,
+        run_start: float,
+        run_end: float,
         time_window_s: float,
-        time_window_advance_s: float
-    ) -> np.ndarray:
-    """
-    Extracts a spikemat (a matrix where each row corresponds
-     to a timebin and each column corresponds to a place cell) from the given spike data.
+        time_window_step_s: float
+    ):
+    bins = np.arange(run_start, run_end, time_window_step_s)
+    epoch = nap.IntervalSet(run_start, run_end)
+    spikes = spiking_data.restrict(epoch)
 
-    Args:
-        spike_ids (np.ndarray): IDs of the spikes
-        spike_times (np.ndarray): Times of the spikes
-        place_cell_ids (np.ndarray): IDs of the place cells
-        start_time (float): Start time of the epoch
-        end_time (float): End time of the epoch
-        time_window_s (float): Length of time window in seconds
-        time_window_advance_s (float): Advance of time window in seconds
-
-    Returns:
-        np.ndarray: An individual spike matrix.
-    """
-    sid = np.searchsorted(spike_times, start_time, side='left')
-    eid = np.searchsorted(spike_times, end_time, side='right')
-    start = spike_times[sid]
-    end   = spike_times[eid]
-    bin_starts = np.arange(start, end, time_window_advance_s)
-    #bin_starts = np.arange(start_time, end_time - time_window_s, time_window_advance_s)
-
-    
-    if np.isclose(time_window_s, time_window_advance_s):
-        place_idx = np.isin(spike_ids, place_cell_ids)
-        s_ids     = spike_ids[place_idx]
-        s_times   = spike_times[place_idx]
-
-        time_edges = np.append(bin_starts, bin_starts[-1] + time_window_s)
-        cell_edges = np.append(place_cell_ids, place_cell_ids[-1])
-        spikemat, _, _ = np.histogram2d(s_times, s_ids, bins=[time_edges, cell_edges])
-        return spikemat.astype(int)
+    if np.isclose(time_window_s, time_window_step_s):
+        spikemat = spikes.count(time_window_s, ep=epoch).values
     else:
-        num_bins = len(bin_starts)
-        num_cells = len(place_cell_ids)
-        spikemat = np.zeros((num_bins, num_cells), dtype=int)
-        
-        s_times = spike_times
-        s_ids = spike_ids
-        u_ids = np.unique(s_ids)
-        
-        for i, start in enumerate(bin_starts):
-            end = start + time_window_s
-            idx_start = np.searchsorted(s_times, start, side='left')
-            idx_end   = np.searchsorted(s_times, end, side='left')
-            
-            window_spike_ids = s_ids[idx_start:idx_end]
-            
-            if len(window_spike_ids) > 0:
-                counts = np.bincount(window_spike_ids, minlength=int(u_ids.max()+1))
-                spikemat[i, :] = counts[place_cell_ids]
-                
-        return spikemat
+        t,uids = [],[]
+        for uid, ts in spikes.items():
+            times = ts.index.values
+            t.append(times)
+            uids.append(np.full(len(times), uid))
 
+        t = np.concatenate(t)
+        uids = np.concatenate(uids)
+
+        sidx = np.argsort(t)
+        t = t[sidx]
+        uids = uids[sidx]
+
+        spikemat = np.zeros((len(bins), ncells), dtype=int)
+       
+        start_idx = np.searchsorted(t, bins, side='left')
+        end_idx   = np.searchsorted(t, bins + time_window_s, side='right')
+        for i in range(len(bins)):
+            wuid = uids[start_idx[i]:end_idx[i]]
+            if len(wuid) > 0:
+                counts = np.bincount(wuid, minlength=ncells)
+                spikemat[i,:] = counts
+    return spikemat
+    
 def bin_points(x,y):
     vstack,hstack = changeover_functions(type(x), 'vstack', 'hstack')
     grid = vstack((x,y))

@@ -1,7 +1,8 @@
 import numpy as np
 import pynapple as nap
-import hippocampalseq.utils as hseu
 from typing import Optional
+
+import hippocampalseq.utils as hseu
 
 def extract_trajectories(run_position_data, starts, ends):
     true_trajectories = []
@@ -56,44 +57,13 @@ def process_theta(
     ncells = len(run_spikes)
     spikemats = []
     for start,end in zip(starts,ends):
-        bins = np.arange(start, end, time_window_advance_s)
-        spikemat = np.zeros((len(bins), ncells), dtype=int)
-        epoch = nap.IntervalSet(start, end)
-        spikes = run_spikes.restrict(epoch)
-
-        #"""
-        if np.isclose(time_window_s, time_window_advance_s):
-            spikemat = spikes.count(time_window_s, ep=epoch).values
-        else:
-            t,uids = [],[]
-            for uid, ts in spikes.items():
-                times = ts.index.values
-                t.append(times)
-                uids.append(np.full(len(times), uid))
-
-            t = np.concatenate(t)
-            uids = np.concatenate(uids)
-
-            sidx = np.argsort(t)
-            t = t[sidx]
-            uids = uids[sidx]
-            
-            start_idx = np.searchsorted(t, bins, side='left')
-            end_idx   = np.searchsorted(t, bins + time_window_s, side='right')
-            for i in range(len(bins)):
-                wuid = uids[start_idx[i]:end_idx[i]]
-                if len(wuid) > 0:
-                    counts = np.bincount(wuid, minlength=ncells)
-                    spikemat[i,:] = counts
-        """
-        for i,bin in enumerate(bins):
-            iv = nap.IntervalSet(bin, bin + time_window_s)
-            spike_subset = run_spikes.restrict(iv)
-            for uid,ts in spike_subset.items():
-                if len(ts) > 0:
-                    spikemat[i,uid] = len(ts)
-        #"""
-            
+        spikemat = hseu.extract_spikemat(
+            run_spikes,
+            start,
+            end,
+            time_window_s,
+            time_window_advance_s
+        )
         spikemats.append(spikemat[:,place_cell_ids].astype(int))
 
     return true_trajectories,spikemats

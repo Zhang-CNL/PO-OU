@@ -3,11 +3,23 @@ import numpy as np
 import pynapple as nap 
 import warnings
 from scipy.signal import butter, filtfilt
+from typing import Tuple, Dict
 
 from .metadata import *
 import hippocampalseq.utils as hseu
 
-def calc_velocity(x, y, t):
+def calc_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Calculate velocity from position and time data.
+
+    Args:
+        x (np.ndarray): x position data.
+        y (np.ndarray): y position data.
+        t (np.ndarray): time data.
+
+    Returns:
+        (np.ndarray): velocity data.
+        (np.ndarray): time data.
+    """
     dt = np.diff(t)
     dx = np.diff(x)
     dy = np.diff(y)
@@ -30,7 +42,25 @@ def calc_velocity(x, y, t):
     velocity[velocity < 0] = 0
     return velocity, dt_filtered
 
-def align_spikes_to_position(spikeframe, posframe, minimum_dt=0.1):
+def align_spikes_to_position(
+        spikeframe: nap.TsGroup, 
+        posframe: nap.TsdFrame, 
+        minimum_dt: float = 0.1
+    ) -> Tuple[nap.TsdFrame, Dict[int, nap.TsdFrame]]:
+    """Align spikes to position data using nearest neighbor.
+    Eliminates spikes that occur when no position data is available.
+
+    Args:
+        spikeframe (nap.TsGroup): Spike data.
+        posframe (nap.TsdFrame): Position data.
+        minimum_dt (float, optional): Minimum allowed time difference between spikes and position data. Spikes are
+            discarded if the time difference is greater than this value. If set to np.inf, all spikes are kept.
+            Defaults to 0.1.
+
+    Returns:
+        (nap.TsdFrame): Place cell spike times aligned to positions
+        (Dict[int, nap.TsdFrame]): Dictionary of position information for each place cell's spikes.
+    """
     spike_info = {}
     spike_times_filt = {}
 
@@ -135,6 +165,7 @@ def load_clean_data(
     rt = np.atleast_2d(np.squeeze(rt))
     starts = rt[:,0]
     ends   = rt[:,1]
+    warnings.warn(rt)
 
     spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
     spikes = spike_mat['Spike_Data']
@@ -149,6 +180,10 @@ def load_clean_data(
 
     ripple_mat = hseu.read_mat(os.path.join(path, 'Ripple_Events.mat'))
     ripples    = ripple_mat['Ripple_Events']
+
+    ripple_starts = ripples[:,0]
+    ripple_ends   = ripples[:,1]
+    ripple_periods = nap.IntervalSet(start=ripple_starts, end=ripple_ends)
 
 
     v, dt = calc_velocity(x, y, time)
@@ -185,6 +220,7 @@ def load_clean_data(
         spike_data,
         running_spike_info,
         running_spikes,
+        ripple_intervals,
         excitatory_neurons,
         inhibitory_neurons
     )

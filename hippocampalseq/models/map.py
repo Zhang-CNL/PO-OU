@@ -10,6 +10,7 @@ from .statespace import *
 @dataclass
 class BayesianMAPResults:
     trajectories: List[npt.ArrayLike]
+    cumulative_probabilities: List[npt.ArrayLike]
 
 class BayesianMAP(StateSpace):
     def __init__(self, place_fields: npt.ArrayLike, dt: float, bin_size_cm: float):
@@ -47,7 +48,9 @@ class BayesianMAP(StateSpace):
         rows = rows * self.bin_size + self.bin_size / 2
         cols = cols * self.bin_size + self.bin_size / 2
 
-        return np.column_stack((cols, rows))
+        cum_prob = emission_probability.sum(axis=0)
+
+        return np.column_stack((cols, rows)),cum_prob
 
     def fit(self, 
             X: List[npt.ArrayLike], 
@@ -57,9 +60,14 @@ class BayesianMAP(StateSpace):
             maximization_type: str = 'em'
         ) -> BayesianMAPResults:
         trajectories = []
+        cum_probs    = []
         for spike in X:
-            trajectory = self.bayesian_decoding_one(spike, decoding_method)
+            trajectory,cum_prob = self.bayesian_decoding_one(spike, decoding_method)
             trajectories.append(trajectory)
-        return BayesianMAPResults(trajectories)
+            cum_probs.append(cum_prob)
+        return BayesianMAPResults(
+            trajectories,
+            cum_probs
+        )
 
 
