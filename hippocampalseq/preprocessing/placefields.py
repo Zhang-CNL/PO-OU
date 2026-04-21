@@ -1,7 +1,7 @@
 import numpy as np
 import pynapple as nap
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
-from typing import Optional
+from typing import Optional, Tuple, Dict
 
 import hippocampalseq.utils as hseu
 
@@ -14,6 +14,21 @@ def calculate_one_placefield(
         bin_size_cm: float = 2.0,
         posterior: bool = True
     ) -> np.ndarray:
+    """
+    Calculate a place field from a position histogram and a spike histogram.
+
+    Args:
+        position_hist (np.ndarray): Position histogram.
+        spike_hist (np.ndarray): Spike histogram.
+        place_field_sd_gaussian (float): Standard deviation of the Gaussian filter used to smooth the place field.
+        prior_alpha_s (float): Prior alpha parameter for the spike histogram.
+        prior_beta_s (float): Prior beta parameter for the position histogram.
+        bin_size_cm (float): Bin size in centimeters. Defaults to 2.0.
+        posterior (bool): Whether to use a posterior place field. Defaults to True.
+
+    Returns:
+        (np.ndarray): Place field.
+    """
     if posterior:
         spike_hist_with_prior = spike_hist + prior_alpha_s - 1
         pos_hist_with_prior_s = position_hist + prior_beta_s
@@ -26,7 +41,24 @@ def calculate_one_placefield(
     )
     return place_field_smoothed
 
-def calculate_linear_placefield(spike_hists, position_hists, axis, pf_gaussian_sd):
+def calculate_linear_placefield(
+        spike_hists: np.ndarray, 
+        position_hists: np.ndarray, 
+        axis: int, 
+        pf_gaussian_sd: float 
+    ) -> np.ndarray:
+    """Calculate a linear place field from a position histogram and a spike histogram.
+    In the linear case it sums along either the x or y axis depending on which is chosen.
+
+    Args:
+        position_hist (np.ndarray): Position histogram.
+        spike_hist (np.ndarray): Spike histogram.
+        axis (int): Axis along which to sum the position and spike histograms. 1 for the y axis, 2 for the x axis.
+        place_field_sd_gaussian (float): Standard deviation of the Gaussian filter used to smooth the place field.
+
+    Returns:
+        (np.ndarray): Linear place field.
+    """
     linear_spike_hist = np.sum(spike_hists, axis=axis)
     linear_position_hist = np.sum(position_hists, axis=axis-1)
 
@@ -44,20 +76,42 @@ def calculate_linear_placefield(spike_hists, position_hists, axis, pf_gaussian_s
     return linear_placefield[...,None]
 
 def calculate_placefields(
-        run_position_data,
-        run_spike_info,
-        run_spikes,
-        excitatory_neurons,
+        run_position_data: nap.TsdFrame,
+        run_spike_info: Dict[int, nap.TsdFrame],
+        run_spikes: nap.TsGroup,
+        excitatory_neurons: np.ndarray,
         environment_size: Optional[Tuple[int]] = (0,0,200,200),
-        track_type = 'Open',
+        track_type = 'Linear',
         bin_size_cm: int = 2,
-        place_field_gaussian_sd_cm: float = 2.0,
+        place_field_gaussian_sd_cm: float = 4.0,
         prior_mean_rat_sps: float = 1.0,
         prior_beta_s: float = .01,
         posterior: bool = True,
         min_spike_rate: float = 1.0,
-        velocity_cutoff = 5.0
-    ):
+        velocity_cutoff: float = 5.0
+    ) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calculate place fields from position and spike data.
+
+    Args:
+        run_position_data (nap.TsdFrame): X,Y, and delta time data.
+        run_spike_info (Dict[int, nap.TsdFrame]): Position data corresponding to, and aligned with, individual cells.
+        run_spikes (nap.TsGroup): Spike time data for each cell aligned to position data.
+        excitatory_neurons (np.ndarray): Excitatory neuron ids.
+        environment_size (Optional[Tuple[int]]): Environment size. If None, adapts bins from data. Defaults to (0,0,200,200).
+        track_type (str): Track type. Can be one of ("Open", "Linear"). Defaults to 'Linear'.
+        bin_size_cm (int): Bin size in centimeters. Defaults to 2.
+        place_field_gaussian_sd_cm (float): Standard deviation of the Gaussian filter used to smooth the place field in centimeters. Defaults to 4.0.
+        prior_mean_rat_sps (float): Prior mean ratio of spikes per second. Defaults to 1.0.
+        prior_beta_s (float): Prior beta parameter for the position histogram. Defaults to .01.
+        posterior (bool): Whether to use a posterior place field. Defaults to True.
+        min_spike_rate (float): Minimum spike rate. Defaults to 1.0.
+        velocity_cutoff (float): Velocity cutoff in cm/s. Defaults to 5.0.
+
+    Returns:
+        (np.ndarray): Place fields.
+        (np.ndarray): Place cell ids.
+    """
     assert track_type in ['Open', 'Linear']
     prior_alpha_s = prior_beta_s * prior_mean_rat_sps + 1
     pf_gaussian_sd = hseu.cm_to_bins(place_field_gaussian_sd_cm, bin_size_cm)
@@ -89,7 +143,6 @@ def calculate_placefields(
         weights=dt
     )
     position_hist = position_hist.T
-    print(position_hist.shape)
 
     spike_hists  = np.zeros((ncells,nby,nbx))
     for cell_id in range(ncells):
@@ -109,7 +162,7 @@ def calculate_placefields(
     if track_type == 'Linear':
         xspan = x.max() - x.min()
         yspan = y.max() - y.min()
-        axis = 1 if xspan >= xspan else 2
+        axis = 1 if xspan >= yspan else 2
         place_fields = calculate_linear_placefield(
             spike_hists, 
             position_hist, 
@@ -129,6 +182,8 @@ def calculate_placefields(
                 posterior
             )
 
+    # Filter out place fields that are from inhibitory neurons
+    # or fall below the minimum firing rate threshold.
     naxes = place_fields.ndim - 1
     max_firingrate = np.max(place_fields, axis=tuple(range(1,naxes+1)))
     above_thresh = np.squeeze(np.argwhere(max_firingrate > min_spike_rate))

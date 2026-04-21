@@ -134,6 +134,28 @@ def load_clean_data(
         ripple_type: str = 'awake',
         minimum_dt: float = 0.1
     ):
+    """Load and segment data.
+
+    Args:
+        data_path (str): Path to data directory.
+        rat_name (str): Rat name.
+        session (int): Session number.
+        track_type (str, optional): Track type. Can be one of ("Open", "Linear") Defaults to 'Linear'.
+        ripple_type (str, optional): Ripple epoch to be extracted. Can be one of ("awake", "rem", "sleep", "sleep_immobile"). Defaults to 'awake'.
+        minimum_dt (float, optional): Minimum allowed time difference between spikes and position data. Spikes are
+            discarded if the time difference is greater than this value. If set to np.inf, all spikes are kept.
+            Defaults to 0.1.
+
+    Returns:
+        (nap.TsdFrame): Raw, unfiltered position data.
+        (nap.TsdFrame): Running position data. Filtered out according to `ripple_type`.
+        (nap.TsGroup): Raw spiking data.
+        (Dict[int, nap.TsdFrame]): Dictionary of position information for each cell's spikes.
+        (nap.TsGroup): Filtered spiking data aligned to positions and run times according to `ripple_type`.
+        (nap.IntervalSet): Start and end periods of sharp-wave ripples.
+        (np.ndarray): Indices of excitatory neurons.
+        (np.ndarray): Indices of inhibitory neurons.
+    """
     assert rat_name in RAT_NAMES, f"{rat_name} not in {RAT_NAMES}"
     assert ripple_type in ['awake', 'rem', 'sleep', 'sleep_immobile']
     assert track_type in ['Linear', 'Open']
@@ -161,11 +183,9 @@ def load_clean_data(
     elif ripple_type == 'sleep_immobile':
         rt = np.squeeze(epoch_mat['Sleep_Box_Immobile_Times']).astype(float)
     
-    warnings.warn("Check the number of epochs in rt")
     rt = np.atleast_2d(np.squeeze(rt))
     starts = rt[:,0]
     ends   = rt[:,1]
-    warnings.warn(rt)
 
     spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
     spikes = spike_mat['Spike_Data']
@@ -220,7 +240,7 @@ def load_clean_data(
         spike_data,
         running_spike_info,
         running_spikes,
-        ripple_intervals,
+        ripple_periods,
         excitatory_neurons,
         inhibitory_neurons
     )

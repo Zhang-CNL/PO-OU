@@ -154,10 +154,27 @@ def extract_spikemat(
         run_end: float,
         time_window_s: float,
         time_window_step_s: float
-    ):
+    ) -> np.ndarray:
+    """Extract a discretized spiking matrix from a group of spike times.
+
+    Args:
+        spiking_data (nap.TsGroup): Group of spike times. N cells with spikes.
+        run_start (float): Start time of the run.
+        run_end (float): End time of the run.
+        time_window_s (float): Size of the time window in seconds.
+        time_window_step_s (float): Step size of the time window in seconds.
+
+    Returns:
+        (np.ndarray): Discretized spiking matrix. Will have shape (T,N)
+    """
+    ncells = len(spiking_data)
+    
     bins = np.arange(run_start, run_end, time_window_step_s)
     epoch = nap.IntervalSet(run_start, run_end)
     spikes = spiking_data.restrict(epoch)
+
+    if len(spikes) == 0:
+        return np.zeros((0, len(spikes)), dtype=int)
 
     if np.isclose(time_window_s, time_window_step_s):
         spikemat = spikes.count(time_window_s, ep=epoch).values
