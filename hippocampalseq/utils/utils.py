@@ -75,8 +75,8 @@ def extract_times_from_boolean(boolean_arr, run_times):
     return np.array(start_times), np.array(end_times)
 
 def restrict_indices(t_array, start, end):
-    start_ind = np.searchsorted(t_array, start, side='left')
-    end_ind   = np.searchsorted(t_array, end, side='right')
+    start_ind = int(np.searchsorted(t_array, start, side='left'))
+    end_ind   = int(np.searchsorted(t_array, end, side='right'))
     return slice(start_ind, end_ind)
 
 def times_to_bool(data_times, start_time, end_time):
