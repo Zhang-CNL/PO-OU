@@ -21,7 +21,7 @@ def plot_trajectories(trajectories: List[np.ndarray], ax=None, **kwargs):
     ax.set_xlim([0, 200])
 
 @save_wrapper
-def plot_spikemat_position_aligned(spike_ids, place_cell_ids, x, y, n_cells=4, cell_selection=None):
+def plot_spikemat_position_aligned(spike_info, position_info, place_cell_ids, n_cells=4, cell_selection=None):
     if isinstance(cell_selection, list):
         cell_ids = cell_selection
     elif cell_selection == 'random':
@@ -31,12 +31,12 @@ def plot_spikemat_position_aligned(spike_ids, place_cell_ids, x, y, n_cells=4, c
 
     fig,ax = plt.subplots(figsize=(16,16), dpi=300)
 
-    ax.plot(x,y, 'k-', alpha=.2, linewidth=.5, label='Rat Trajectory')
+    ax.plot(position_info['x'], position_info['y'], c='black',alpha=.4, linewidth=.5, label='Rat Trajectory')
 
     colors = plt.cm.tab10(np.linspace(0, 1, len(cell_ids)))
     for i,cell in enumerate(cell_ids):
-        idx = np.where(spike_ids == cell)[0]
-        ax.scatter(x[idx], y[idx], s=5, c=colors[i], alpha=.5, label=f'Cell {cell}')
+        subset = spike_info[cell] 
+        ax.scatter(subset['x'], subset['y'], s=5, c=colors[i], alpha=.5, label=f'Cell {cell}')
     ax.set_xlim([0, 200])
     ax.set_ylim([0, 200])
 

@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List
+from typing import List, Tuple, Any
 from dataclasses import dataclass
 
 import hippocampalseq.utils as hseu
@@ -55,9 +55,7 @@ class BayesianMAP(StateSpace):
     def fit(self, 
             X: List[npt.ArrayLike], 
             decoding_method: str = 'max',
-            n_iter: int = 100, 
-            emtol: float = 1e-3, 
-            maximization_type: str = 'em'
+            *_: Tuple[Any,...]
         ) -> BayesianMAPResults:
         trajectories = []
         cum_probs    = []

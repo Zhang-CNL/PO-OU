@@ -1,5 +1,5 @@
 import numpy.typing as npt
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, Tuple, Any
 
 __all__ = [
     'StateSpace',
@@ -25,8 +25,6 @@ class StateSpace:
 
     def fit(self,
             X: npt.ArrayLike, 
-            n_iter: int = 100, 
-            emtol: float = 1e-3,
-            maximization_type: str = 'em',
+            *_: Tuple[Any,...],
         ) -> StateSpaceResults:
         raise NotImplementedError

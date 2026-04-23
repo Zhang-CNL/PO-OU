@@ -18,7 +18,10 @@ def plot_open_placefields(place_fields: np.ndarray, pfs: Optional[List[int]] = N
         cols += 1
 
     fig, ax = plt.subplots(rows, cols, figsize=(2*(len(pfs) // cols),.5*rows), dpi=300)
-    ax = ax.flatten()
+    if isinstance(ax, np.ndarray):
+        ax = ax.flatten()
+    else:
+        ax = [ax]
 
     max_firing = np.max(place_fields, axis=(1,2))
 
