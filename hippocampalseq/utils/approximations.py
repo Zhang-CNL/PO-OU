@@ -1,6 +1,6 @@
 import numpy as np
-#import torch 
-#from torch.distributions import MultivariateNormal
+import torch 
+from torch.distributions import MultivariateNormal
 
 from hippocampalseq.utils import atleast_2d
 
@@ -25,7 +25,7 @@ def laplacian_approximation(z, pz, kl: str = "pq", lr: float = .01, n_epochs: in
 
     mu = torch.unravel_index(torch.argmax(pz), pz.shape)
     mu = torch.tensor(mu, dtype=torch.double)[:,None]
-    mu = torch.flip(mu, dims=(0,))
+    #mu = torch.flip(mu, dims=(0,))
 
     pz = pz.ravel()
     lpz = torch.log(pz)

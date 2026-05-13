@@ -5,7 +5,12 @@ from typing import Optional, List
 from .core import save_wrapper
 
 @save_wrapper
-def plot_open_placefields(place_fields: np.ndarray, pfs: Optional[List[int]] = None, show_titles: bool = True):
+def plot_open_placefields(
+        place_fields: np.ndarray, 
+        pfs: Optional[List[int]] = None, 
+        show_titles: bool = True, 
+        cmap: str|plt.Colormap = 'hot'
+    ):
 
     if pfs is None:
         pfs = np.arange(len(place_fields))
@@ -28,7 +33,7 @@ def plot_open_placefields(place_fields: np.ndarray, pfs: Optional[List[int]] = N
     for i in range(len(pfs)):
         if show_titles:
             ax[i].set_title(f"Max FR: {max_firing[i]:.2f}", fontsize=4)
-        ax[i].imshow(place_fields[pfs[i]], origin='lower')
+        ax[i].imshow(place_fields[pfs[i]], origin='lower', cmap=cmap)
 
     for i in range(len(pfs), len(ax)):
         ax[i].axis('off')
@@ -62,7 +67,7 @@ def plot_open_placefields(place_fields: np.ndarray, pfs: Optional[List[int]] = N
     fig.patches.extend([rect])
 
 @save_wrapper
-def plot_linear_placefields(spike_info, place_fields: np.ndarray, pfs: Optional[List[int]] = None, **fig_kwargs):
+def plot_linear_placefields(place_fields: np.ndarray, pfs: Optional[List[int]] = None, cmap: str|plt.Colormap = 'hot', **fig_kwargs):
     if pfs is None:
         pfs = np.arange(len(place_fields))
 
@@ -77,7 +82,7 @@ def plot_linear_placefields(spike_info, place_fields: np.ndarray, pfs: Optional[
     im = ax.imshow(
         sorted_place_fields[pfs],
         aspect='auto',
-        cmap='hot',
+        cmap=cmap,
         origin='lower',
         interpolation='nearest'
     )

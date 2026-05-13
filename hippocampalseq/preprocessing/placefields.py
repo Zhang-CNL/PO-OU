@@ -130,16 +130,14 @@ def calculate_placefields(
             np.max(y)
         )
 
-    spatial_grid_x = np.arange(environment_size[0], environment_size[2], bin_size_cm) + bin_size_cm/2
-    spatial_grid_y = np.arange(environment_size[1], environment_size[3], bin_size_cm) + bin_size_cm/2
-    nbx = len(spatial_grid_x)
-    nby = len(spatial_grid_y)
-    print(spatial_grid_x)
+    nbx = int((environment_size[2] - environment_size[0]) / bin_size_cm)
+    nby = int((environment_size[3] - environment_size[1]) / bin_size_cm)
+    spatial_grid_x = np.linspace(environment_size[0], environment_size[2], nbx + 1) + bin_size_cm / 2
+    spatial_grid_y = np.linspace(environment_size[1], environment_size[3], nby + 1) + bin_size_cm / 2
 
-
-    position_hist,_,_ = np.histogram2d(
+    position_hist,xedges,_ = np.histogram2d(
         x, y,
-        bins=(nbx,nby),
+        bins=(spatial_grid_x,spatial_grid_y),
         weights=dt
     )
     position_hist = position_hist.T
@@ -156,7 +154,7 @@ def calculate_placefields(
             spike_hist ,_,_ = np.histogram2d(
                 cell_x,
                 cell_y,
-                bins=(nbx,nby),
+                bins=(spatial_grid_x,spatial_grid_y),
             )
             spike_hists[cell_id] = spike_hist.T
     if track_type == 'Linear':

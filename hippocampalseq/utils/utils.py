@@ -8,8 +8,11 @@ from itertools import product
 import numpy as np
 import numpy.typing as npt
 import pynapple as nap
-import torch
 import compress_pickle
+import torch
+from torch.masked import masked_tensor
+from torch.nn.utils.rnn import pad_sequence
+from typing import List
 
 class AttrDict(dict):
     def __init__(self, dct):
@@ -123,7 +126,7 @@ def calc_poisson_emission_probabilities_log_2d(
     Returns:
         (npt.ArrayLike): (T, Nbx, Nby) matrix of emission probabilities
     """
-    sum,log,einsum,max = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'max')
+    sum,log,einsum,amax = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'amax')
     lambdas = place_fields * dt
     
     sum_lambda = sum(lambdas, axis=0)
@@ -134,7 +137,7 @@ def calc_poisson_emission_probabilities_log_2d(
     
     # Numerical stability trick per time bin
     # Subtract max along spatial dimensions (H, W) for each T
-    max_log = max(log_likelihood_maps, axis=(1, 2), keepdims=True)
+    max_log = amax(log_likelihood_maps, axis=(1, 2), keepdims=True)
     
     return log_likelihood_maps - max_log
 
@@ -265,3 +268,8 @@ def mulinv(B, A):
     if type(A) == torch.Tensor:
         return torch.linalg.solve(B, A)
     return np.linalg.solve(B, A)
+
+def concatenate_jagged(tfs: List[torch.Tensor]):
+    padded = pad_sequence(tfs, batch_first=True, padding_value=torch.nan)
+    mt     = masked_tensor(padded, mask=~torch.isnan(padded))
+    return mt

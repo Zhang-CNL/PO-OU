@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.typing as npt
+import pynapple as nap
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -31,9 +32,10 @@ class Momentum(KalmanFilter):
     def __init__(
             self,
             place_fields: npt.ArrayLike, 
-            spikemat: npt.ArrayLike,
+            spikemat: List[npt.ArrayLike],
             dt: float, 
-            bins: tuple,
+            environment_size: tuple,
+            bin_size: int, 
             seed: int|None = 42
         ):
         """Initialize the momentum SSM.
@@ -47,12 +49,13 @@ class Momentum(KalmanFilter):
         """
         super().__init__(2, 2, 2)
 
-        self.dt   = torch.tensor(dt)
-        self.bins = bins 
-        assert len(bins) == self.latent_dim, "Number of bins and latent dimensions must match"
+        self.dt               = torch.tensor(dt)
+        self.environment_size = environment_size
+        self.bin_size         = bin_size
+        assert len(environment_size) == 2*self.latent_dim, "Environment shape and latent dimensions must match"
 
-        x = torch.arange(0, self.bins[0], 1)
-        y = torch.arange(0, self.bins[1], 1)
+        x = torch.arange(environment_size[0], environment_size[2], bin_size) + bin_size/2
+        y = torch.arange(environment_size[1], environment_size[3], bin_size) + bin_size/2
         self.grid = hseu.bin_points(x,y)
 
         if seed is not None:
@@ -61,7 +64,7 @@ class Momentum(KalmanFilter):
         place_fields = torch.from_numpy(place_fields)
 
         self.data_batches = dict()
-        for k,v in spikemat.items():
+        for k,v in enumerate(spikemat):
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 torch.from_numpy(v).double(), 
                 place_fields,
@@ -98,9 +101,9 @@ class Momentum(KalmanFilter):
         """
 
         # Random initialization of parameters
-        self.decay             = torch.rand(1)# * (800 - 1) + 1 
-        self.diffusion         = torch.rand(1)# * (400 - 40) + 40
-        self.initial_diffusion = torch.rand(1)# * 1000
+        self.decay             = torch.rand(1) * (800 - 1) + 1 
+        self.diffusion         = torch.rand(1) * (400 - 40) + 40
+        self.initial_diffusion = torch.rand(1) * 1000
         # with torch.no_grad():
         #     self.decay, self.diffusion = self._adjust_parameters(
         #         self.decay, self.diffusion, self.dt
@@ -209,7 +212,7 @@ class Momentum(KalmanFilter):
         H = None
         return C,H
 
-    def _filter_init(self, values: hsem.KalmanResults):
+    def _filter_init(self, values: KalmanResults):
         """
         Initialize the filter for the first observation.
         Since we have a uniform prior for this model, we use the information filter
@@ -236,7 +239,7 @@ class Momentum(KalmanFilter):
         # Now we can calculate it for $P(z_1|z_0)$
         return values
 
-    def _filter(self, values: hsem.KalmanResults, t: int):
+    def _filter(self, values: KalmanResults, t: int):
         """
         Run the Kalman filter for a single time step.
         Use our initial transition and covariance matrices for t == 0
@@ -267,7 +270,7 @@ class Momentum(KalmanFilter):
 
         return values
 
-    def _smooth(self, values: hsem.KalmanResults, t: int):
+    def _smooth(self, values: KalmanResults, t: int):
         """
         Smooth the Kalman filter results for one timestep.
 
@@ -318,7 +321,7 @@ class Momentum(KalmanFilter):
         ell = torch.sum(ell, axis=0)
         ll += torch.trace(ell) 
 
-        ll += T * self.augmented_dim * torch.log(2 * hsem.PI)
+        ll += T * self.augmented_dim * torch.log(2 * PI)
         ll /= 2
 
         return ll
@@ -328,7 +331,7 @@ class Momentum(KalmanFilter):
 
     def _em_autograd(self, 
             values: stats,
-            stats: hsem.SufficientStatistics,
+            stats: SufficientStatistics,
             normalize: bool,
             lr: float = 1e-3, 
             n_epochs: int = 1000, 
@@ -338,8 +341,8 @@ class Momentum(KalmanFilter):
         """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
 
         Args:
-            values (hsem.KalmanResults): Kalman filter results.
-            stats (hsem.SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
+            values (KalmanResults): Kalman filter results.
+            stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
             normalize (bool): If True, normalize the transition and observation matrices.
             lr (float): Learning rate for the optimizer.
             n_epochs (int): Number of epochs for SGD.
@@ -455,12 +458,12 @@ class Momentum(KalmanFilter):
 
     def fit(self, 
             X=None, 
-            normalize: bool = True, 
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
+            normalize: bool = True, 
             **diff_args
-        ) -> hsem.KalmanResults:
+        ) -> KalmanResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
@@ -484,16 +487,16 @@ class Momentum(KalmanFilter):
 
         for k,v in X.items():
             x = v['approx_mean']
-            values = hsem.KalmanResults(
-                observations  =x,
-                predicted_mean=torch.zeros(x.shape[0], self.augmented_dim, 1),
-                predicted_cov =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
-                filtered_mean =torch.zeros(x.shape[0], self.augmented_dim, 1),
-                filtered_cov  =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
-                smoothed_gain =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
-                smoothed_mean =torch.zeros(x.shape[0], self.augmented_dim, 1),
-                smoothed_cov  =torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
-                negloglike    =[]
+            values = KalmanResults(
+                observations   = x,
+                predicted_mean = torch.zeros(x.shape[0], self.augmented_dim, 1),
+                predicted_cov  = torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                filtered_mean  = torch.zeros(x.shape[0], self.augmented_dim, 1),
+                filtered_cov   = torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                smoothed_gain  = torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                smoothed_mean  = torch.zeros(x.shape[0], self.augmented_dim, 1),
+                smoothed_cov   = torch.zeros(x.shape[0], self.augmented_dim, self.augmented_dim),
+                negloglike     = []
             )
             X[k]['kf_results'] = values
 
