@@ -29,11 +29,11 @@ def save_wrapper(fn):
     def wrapper(*args, file_path=None, file_name=None, **kwargs):
         __init_plotting() 
         res = fn(*args, **kwargs)
-        if file_path is None:
-            file_path = "./results/"
-        if not os.path.exists(file_path):
-            os.makedirs(file_path)
         if file_name is not None:
+            if file_path is None:
+                file_path = "./results/"
+            if not os.path.exists(file_path):
+                os.makedirs(file_path)
             plt.savefig(os.path.join(file_path, file_name), dpi=300)
         return res
     return wrapper

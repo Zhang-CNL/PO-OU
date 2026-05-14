@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pynapple as nap
-from typing import List, Optional, Dict 
+from typing import List, Optional, Dict, Tuple
 
 from .core import save_wrapper
 
@@ -26,8 +26,10 @@ def plot_spikemat_position_aligned(
         spike_info: Dict[int, nap.TsdFrame], 
         position_info: nap.TsdFrame, 
         place_cell_ids: np.ndarray, 
+        environment_size: Optional[Tuple[int]] = (0,0,200,200),
         n_cells: int = 4, 
-        cell_selection: Optional[List[int]]|str = None
+        cell_selection: Optional[List[int]]|str = None,
+        ax = None,
     ):
     if isinstance(cell_selection, list):
         cell_ids = cell_selection
@@ -36,7 +38,10 @@ def plot_spikemat_position_aligned(
     else:
         cell_ids = place_cell_ids[:n_cells]
 
-    fig,ax = plt.subplots(figsize=(16,16), dpi=300)
+    if ax is None:
+        fig,ax = plt.subplots(figsize=(16,16), dpi=300)
+    else:
+        fig = plt.gcf()
 
     ax.plot(position_info['x'], position_info['y'], color='black',alpha=.4, linewidth=.5, label='Rat Trajectory')
 
@@ -44,8 +49,15 @@ def plot_spikemat_position_aligned(
     for i,cell in enumerate(cell_ids):
         subset = spike_info[cell] 
         ax.scatter(subset['x'], subset['y'], s=5, color=colors[i], alpha=.5, label=f'Cell {cell}')
-    ax.set_xlim([0, 200])
-    ax.set_ylim([0, 200])
+    if environment_size is None:
+        environment_size = (
+            np.min(position_info['x']),
+            np.min(position_info['y']),
+            np.max(position_info['x']),
+            np.max(position_info['y'])
+        )
+    ax.set_xlim([environment_size[0], environment_size[2]])
+    ax.set_ylim([environment_size[1], environment_size[3]])
 
     ax.set_xlabel("X Position (cm)")
     ax.set_ylabel("Y Position (cm)")

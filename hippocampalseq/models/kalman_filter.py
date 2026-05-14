@@ -442,8 +442,8 @@ class KalmanFilter(StateSpace):
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
-            normalize: bool = True, 
-            seed: Optional[int] =42,
+            normalize: bool = False, 
+            seed: Optional[int] = None,
             **diff_args
         ) -> KalmanResults:
         """Expectation-Maximization (EM) algorithm for the state-space model.

@@ -9,7 +9,8 @@ def plot_open_placefields(
         place_fields: np.ndarray, 
         pfs: Optional[List[int]] = None, 
         show_titles: bool = True, 
-        cmap: str|plt.Colormap = 'hot'
+        cmap: str|plt.Colormap = 'hot',
+        ax = None,
     ):
 
     if pfs is None:
@@ -22,7 +23,10 @@ def plot_open_placefields(
     if cols == 0 or len(pfs) % cols > 0:
         cols += 1
 
-    fig, ax = plt.subplots(rows, cols, figsize=(2*(len(pfs) // cols),.5*rows), dpi=300)
+    if ax is None:
+        fig, ax = plt.subplots(rows, cols, figsize=(2*(len(pfs) // cols),.5*rows), dpi=300)
+    else:
+        fig = plt.gcf()
     if isinstance(ax, np.ndarray):
         ax = ax.flatten()
     else:
@@ -67,20 +71,28 @@ def plot_open_placefields(
     fig.patches.extend([rect])
 
 @save_wrapper
-def plot_linear_placefields(place_fields: np.ndarray, pfs: Optional[List[int]] = None, cmap: str|plt.Colormap = 'hot', **fig_kwargs):
-    if pfs is None:
-        pfs = np.arange(len(place_fields))
+def plot_linear_placefields(
+        place_fields: np.ndarray, 
+        pfs: Optional[List[int]] = None, 
+        cmap: str|plt.Colormap = 'hot', 
+        ax = None,
+        **fig_kwargs
+    ):
 
-    fig = plt.figure(**fig_kwargs, dpi=300)
-    ax = fig.add_axes([.2, .05, .75, .8])
+    if ax is None:
+        fig = plt.figure(**fig_kwargs, dpi=300)
+        ax = fig.add_axes([.2, .05, .75, .8])
 
     # Plot sorted colormap
-    max_fr = np.squeeze(np.max(place_fields, axis=1))
-    sort_idx = np.argsort(max_fr)
-    sorted_place_fields = place_fields[sort_idx]
+    if pfs is None:
+        max_fr = np.squeeze(np.max(place_fields, axis=1))
+        sort_idx = np.argsort(max_fr)
+        sorted_place_fields = place_fields[sort_idx]
+    else:
+        sorted_place_fields = place_fields[pfs]
 
     im = ax.imshow(
-        sorted_place_fields[pfs],
+        sorted_place_fields,
         aspect='auto',
         cmap=cmap,
         origin='lower',
