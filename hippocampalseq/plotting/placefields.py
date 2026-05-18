@@ -88,12 +88,14 @@ def plot_linear_placefields(
         max_fr = np.squeeze(np.max(place_fields, axis=1))
         sort_idx = np.argsort(max_fr)
         sorted_place_fields = place_fields[sort_idx]
+        aspect='auto'
     else:
         sorted_place_fields = place_fields[pfs]
+        aspect=None
 
     im = ax.imshow(
         sorted_place_fields,
-        aspect='auto',
+        aspect=aspect,
         cmap=cmap,
         origin='lower',
         interpolation='nearest'

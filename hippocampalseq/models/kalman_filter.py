@@ -1,6 +1,6 @@
 import torch 
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 import hippocampalseq.utils as hseu
@@ -17,15 +17,15 @@ PI = torch.tensor(np.pi)
 
 @dataclass
 class KalmanResults:
-    observations   : List[torch.Tensor]
-    predicted_mean : List[torch.Tensor]
-    predicted_cov  : List[torch.Tensor]
-    filtered_mean  : List[torch.Tensor]
-    filtered_cov   : List[torch.Tensor]
-    smoothed_gain  : List[torch.Tensor]
-    smoothed_mean  : List[torch.Tensor]
-    smoothed_cov   : List[torch.Tensor]
-    negloglike     : List[float]
+    observations   : List[torch.Tensor] = field(default_factory=list)
+    predicted_mean : List[torch.Tensor] = field(default_factory=list)
+    predicted_cov  : List[torch.Tensor] = field(default_factory=list)
+    filtered_mean  : List[torch.Tensor] = field(default_factory=list)
+    filtered_cov   : List[torch.Tensor] = field(default_factory=list)
+    smoothed_gain  : List[torch.Tensor] = field(default_factory=list)
+    smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
+    smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
+    negloglike     : List[float] = field(default_factory=list)
 
 @dataclass
 class KalmanStatistics:
@@ -178,7 +178,6 @@ class KalmanFilter(StateSpace):
             smoothed_gain  = _copy(cov_base),
             smoothed_mean  = _copy(tf_base),
             smoothed_cov   = _copy(cov_base),
-            negloglike     = [],
         )
 
     def _calc_sufficient_stats(self, values: KalmanResults):
@@ -203,7 +202,7 @@ class KalmanFilter(StateSpace):
             Cov, Ez, Ezz, Ezz1, Ez1z, Exx, Exz, Ezx
         )
 
-    def _loglikelihood(self, values: KalmanResults, stats: KalmanStatistics) -> torch.T:
+    def _loglikelihood(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         """Calculate the log likelihood of the model given the sufficient statistics and current 
         parameters.
 
@@ -221,9 +220,9 @@ class KalmanFilter(StateSpace):
             if torch.isfinite(icd):
                 ll += icd
 
-            ll += torch.logdet(self.transition_covariance) * (T - 1)
-            ll += torch.logdet(self.observation_covariance) * T
-            ll /= 2 
+            _ll = 0
+            _ll += torch.logdet(self.transition_covariance) * (T - 1)
+            _ll += torch.logdet(self.observation_covariance) * T
 
             ip1 = stats.Ezz[b][0]
             ip2 = self.initial_state_mean @ values.smoothed_mean[b][0].mT
@@ -231,7 +230,7 @@ class KalmanFilter(StateSpace):
             ip4 = self.initial_state_mean @ self.initial_state_mean.mT
             ill = hseu.mulinv(self.initial_state_covariance + .001 * torch.eye(self.augmented_dim), ip1 - ip2 - ip3 + ip4)
             ill = torch.trace(ill) / 2
-            ll += ill
+            _ll += ill
 
             tp1 = stats.Ezz[b][1:]
             tp2 = stats.Ezz1[b] @ self.transition_matrices.mT
@@ -240,7 +239,7 @@ class KalmanFilter(StateSpace):
             tll = torch.sum(tp1 - tp2 - tp3 + tp4, axis=0) 
             tll = hseu.mulinv(self.transition_covariance, tll)
             tll = torch.trace(tll) / 2
-            ll += tll
+            _ll += tll
 
             ep1 = stats.Exx[b]
             ep2 = self.observation_matrices @ stats.Ezx[b]
@@ -249,9 +248,10 @@ class KalmanFilter(StateSpace):
             ell = torch.sum(ep1 - ep2 - ep3 + ep4, axis=0)
             ell = hseu.mulinv(self.observation_covariance, ell)
             ell = torch.trace(ell) / 2
-            ll += ell
+            _ll += ell
 
-            ll += T * self.latent_dim * torch.log(2*PI)
+            _ll += T * self.latent_dim * torch.log(2*PI)
+            ll += _ll / 2
         return ll
 
     def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics):
@@ -431,7 +431,8 @@ class KalmanFilter(StateSpace):
             torch.Tensor: The negative log likelihood of the data given the model parameters.
         """
         assert maximization_type in ['mle', 'autograd']
-        stats = self._calc_sufficient_stats(values)
+        with torch.no_grad():
+            stats = self._calc_sufficient_stats(values)
         if maximization_type == 'mle':
             return self._em_mle(values, stats, normalize)
         elif maximization_type == 'autograd':

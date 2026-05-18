@@ -29,6 +29,12 @@ def run_model(
     elif model_selection == "gridsearch":
         pass
 
+    values = model.fit(
+        spikemats,
+        n_iter = 1000
+    )
+    return model,values
+
 def plot_place_fields(
         place_field_data: hsep.PlaceFields, 
         raw_data: nap.TsdFrame, 
@@ -65,6 +71,18 @@ def plot_place_fields(
         plt.close()
 
 
+def plot_decoded_trajectories(
+        values: hsem.KalmanResults, 
+        place_field_data: hsep.PlaceFields, 
+        raw_data: nap.TsdFrame, 
+        track_type: str, 
+        results_path: str
+    ):
+    pass
+    # TODO: Create 3x1 plot of cumulative PD, decoded trajectory, and true trajectory
+    # TODO: Figure out how to calculate cumulative PD for momentum model
+    # TODO: Better logging for slurm jobs
+
 
 @click.command()
 @click.option("--data-dir", default="../data/")
@@ -76,6 +94,7 @@ def plot_place_fields(
 @click.option("--replay-time-step-ms", default=5)
 @click.option("--velocity-cutoff", default=10)
 @click.option("--model", default="map", type=click.Choice(['map', 'momentum', 'gridsearch']))
+@click.option("--bin-size-cm", default=2)
 def main(
         data_dir, 
         results_dir, 
@@ -86,6 +105,7 @@ def main(
         replay_time_step_ms,
         velocity_cutoff,
         model,
+        bin_size_cm
     ):
     for rat in tqdm(hsep.RAT_NAMES):
         rat_data = os.path.join(data_dir, rat)
@@ -96,6 +116,7 @@ def main(
             track_type = session[:-1]
 
             try: 
+                env_size = None if track_type == "Linear" else (0,0,200,200)
                 (
                     raw_data,
                     place_field_data,
@@ -111,7 +132,15 @@ def main(
                     theta_time_window_advance_ms  = theta_time_step_ms,
                     ripple_time_window_ms         = replay_delta_t_ms,
                     ripple_time_window_advance_ms = replay_time_step_ms,
-                    environment_size              = None if track_type == "Linear" else (0,0,200,200)
+                    environment_size              = env_size,
+                    bin_size_cm                   = bin_size_cm
+                )
+
+                env_size = (
+                    np.min(raw_data.raw_position['x']),
+                    np.min(raw_data.raw_position['y']),
+                    np.max(raw_data.raw_position['x']),
+                    np.max(raw_data.raw_position['y'])
                 )
 
                 plot_place_fields(
@@ -120,9 +149,31 @@ def main(
                     track_type,
                     results
                 )
+                theta_model,theta_values = run_model(
+                    model_selection  = model,
+                    place_field_data = place_field_data,
+                    dt               = theta_delta_t_ms/ 1000,
+                    bin_size         = bin_size_cm,
+                    spikemats        = theta_data.spikemats,
+                    environment_size = env_size
+                )
+                hseu.save_pickle(theta_model, os.path.join(results, f"theta_{model}_model.pkl"))
+                hseu.save_pickle(theta_values, os.path.join(results, f"theta_{model}values.pkl"))
+
+                ripple_model,ripple_values = run_model(
+                    model_selection  = model,
+                    place_field_data = place_field_data,
+                    dt               = replay_delta_t_ms / 1000,
+                    bin_size         = bin_size_cm,
+                    spikemats        = ripple_data.spikemats,
+                    environment_size = env_size
+                )
+                hseu.save_pickle(ripple_model, os.path.join(results, f"ripple_{model}_model.pkl"))
+                hseu.save_pickle(ripple_values, os.path.join(results, f"ripple_{model}_values.pkl"))
+
             except Exception as e:
-                print(f"Failed to process {rat}:{session}. Skipping...")
-                print(e)
+                print(f"Failed to process {rat}:{session}. Skipping...", file=sys.stderr)
+                print(e, file=sys.stderr)
 
 if __name__ == '__main__':
     main()
