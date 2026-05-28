@@ -16,15 +16,15 @@ def plot_open_placefields(
     if pfs is None:
         pfs = np.arange(len(place_fields))
 
-    rows = 10
-    if rows > len(pfs):
-        rows = 1
-    cols = len(pfs) // rows 
-    if cols == 0 or len(pfs) % cols > 0:
-        cols += 1
+    cols = 10
+    if cols > len(pfs):
+        cols = 1
+    rows = len(pfs) // cols 
+    if rows == 0 or len(pfs) % rows > 0:
+        rows += 1
 
     if ax is None:
-        fig, ax = plt.subplots(rows, cols, figsize=(2*(len(pfs) // cols),.5*rows), dpi=300)
+        fig,ax = plt.subplots(rows, cols, figsize=(.5*rows, 2*len(pfs)//cols), dpi=300)
     else:
         fig = plt.gcf()
     if isinstance(ax, np.ndarray):

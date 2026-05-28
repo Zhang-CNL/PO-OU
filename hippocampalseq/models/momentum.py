@@ -3,6 +3,7 @@ import numpy.typing as npt
 import pynapple as nap
 import torch
 import torch.nn as nn
+import warnings
 from dataclasses import dataclass, field
 from scipy.optimize import least_squares
 from torch.utils.data import random_split
@@ -494,5 +495,11 @@ class Momentum(KalmanFilter):
             if i > 0 and abs((values.negloglike[-1] - values.negloglike[-2]) / values.negloglike[-2]) < emtol:
                 print(f"Converged after {i} epochs, exiting")
                 break
+
+        
+        if i == n_iter - 1:
+            warnings.warn(f"Failed to converge after {i} epochs, exiting")
+
+        values.cumulative_probabilities = self._calculate_marginals(values)
 
         return values

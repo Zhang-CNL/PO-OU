@@ -1,5 +1,6 @@
 import torch 
 import numpy as np
+from torch.distributions import MultivariateNormal
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -26,6 +27,7 @@ class KalmanResults:
     smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
     smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
     negloglike     : List[float] = field(default_factory=list)
+    cumulative_probabilities : torch.Tensor = field(default_factory=lambda: torch.empty(0))
 
 @dataclass
 class KalmanStatistics:
@@ -438,6 +440,21 @@ class KalmanFilter(StateSpace):
         elif maximization_type == 'autograd':
             return self._em_autograd(values, stats, normalize, **autograd_args)
 
+    def _calculate_marginals(self, values: KalmanResults):
+        X = torch.arange(self.environment_size[0], self.environment_size[2], self.bin_size) + self.bin_size / 2
+        Y = torch.arange(self.environment_size[1], self.environment_size[3], self.bin_size) + self.bin_size / 2
+        cumulative_probabilities = torch.zeros((len(values.smoothed_mean), len(X), len(Y)))
+
+        X,Y = torch.meshgrid(X,Y)
+        for i in range(values.smoothed_mean):
+            for t in range(values.smoothed_mean[i].shape[0]):
+                mvn = MultivariateNormal(values.smoothed_mean[i][t], values.smoothed_covariance[i][t])
+                log_prob = mvn.log_prob(torch.stack([X.ravel(), Y.ravel()]).T)
+                cumulative_probabilities[i] += log_prob.reshape(len(X), len(Y)).T 
+        cumulative_probabilities = torch.exp(cumulative_probabilities)
+        cumulative_probabilities /= cumulative_probabilities.sum(axis=(1, 2), keepdims=True)
+        return cumulative_probabilities
+
     def fit(self, 
             X: List[torch.Tensor],
             n_iter: int = 100, 
@@ -493,6 +510,8 @@ class KalmanFilter(StateSpace):
             if i > 0 and abs((values.negloglike[-1] - values.negloglike[-2]) / values.negloglike[-2]) < emtol:
                 print(f"Converged after {i} epochs, exiting")
                 break
+
+        values.cumulative_probabilities = self._calculate_marginals(values)
 
         return values
 

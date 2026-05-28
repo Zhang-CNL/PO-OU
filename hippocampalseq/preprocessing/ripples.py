@@ -1,4 +1,5 @@
 from typing import Optional
+import numpy as np
 import pynapple as nap
 
 import hippocampalseq.utils as hseu
@@ -27,7 +28,7 @@ def process_ripples(
             time_window_s,
             time_window_advance_s
         )
-        if spikemat.shape[0] == 0:
+        if spikemat.shape[0] == 0 or np.sum(spikemat) == 0:
             continue
         spikemats.append(spikemat[:,place_cell_ids])
 

@@ -58,7 +58,7 @@ def laplacian_approximation(z, pz, kl: str = "pq", lr: float = .01, n_epochs: in
     
     mu = torch.reshape(mu, (n_dims, 1)).detach()
     sigma = (csigma @ csigma.T).detach()
-    return mu,sigma
+    return mu,sigma,entropy
 
 def calc_normal_params(z: np.ndarray, pz: np.ndarray, dz: float|tuple):
     """Calculate normal parameters from a multivariate normal distribution.

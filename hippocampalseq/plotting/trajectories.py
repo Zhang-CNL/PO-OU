@@ -64,3 +64,11 @@ def plot_spikemat_position_aligned(
     ax.set_title("Spike Positions on Trajectory")
     ax.legend()
     return fig
+
+@save_wrapper
+def plot_kalman_2d_trajectories(
+        means: np.ndarray, 
+        covs: np.ndarray, 
+        ax = None
+    ):
+    pass
