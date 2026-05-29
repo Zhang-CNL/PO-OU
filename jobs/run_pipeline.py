@@ -4,7 +4,6 @@ import click
 import glob
 sys.path.append(os.path.realpath(".."))
 
-from tqdm import tqdm
 from typing import List
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.stats import multivariate_normal
@@ -28,9 +27,19 @@ def run_model(
         environment_size: tuple
     ):
     if model_selection == "map":
-        model = hsem.BayesianMAP(place_field_data.place_fields, dt, bin_size)
+        model = hsem.BayesianMAP(
+            place_field_data.place_fields, 
+            dt, 
+            bin_size
+        )
     elif model_selection == "momentum":
-        model = hsem.Momentum(place_field_data.place_fields, spikemats, dt, environment_size, bin_size)
+        model = hsem.Momentum(
+            place_field_data.place_fields, 
+            spikemats, 
+            dt, 
+            environment_size, 
+            bin_size
+        )
     elif model_selection == "gridsearch":
         pass
 
@@ -47,7 +56,7 @@ def plot_place_fields(
     ):
     with PdfPages(os.path.join(results_path, "place_fields.pdf")) as pdf:
         for i in range(len(place_field_data.place_fields)):
-            fig,ax = plt.subplots(1,2,figsize=(20,10), dpi=300)
+            fig,ax = plt.subplots(1,3,figsize=(20,10), dpi=300)
             plt.title(f"Place cell {i}")
             if track_type == 'Open':
                 hsepl.plot_open_placefields(
@@ -181,7 +190,7 @@ def plot_model_approximations(
 @click.command()
 @click.option("--data-dir", default="../data/")
 @click.option("--results-dir", default="../results")
-@click.option("--place-field-posterior", default=False)
+@click.option("--place-field-posterior", is_flag=True)
 @click.option("--theta-delta-t-ms", default=10)
 @click.option("--theta-time-step-ms", default=5)
 @click.option("--replay-delta-t-ms", default=5)
@@ -203,7 +212,7 @@ def main(
         bin_size_cm,
         rerun
     ):
-    for rat in tqdm(hsep.RAT_NAMES):
+    for rat in hsep.RAT_NAMES:
         rat_data = os.path.join(data_dir, rat)
         for session in os.listdir(rat_data):
             results = os.path.join(results_dir, rat, session, model)
@@ -289,6 +298,8 @@ def main(
                     ripple_model,
                     results
                 )
+
+                print(f"Rat {rat} session {session} complete.")
 
             except Exception as e:
                 print(f"Failed to process {rat}:{session}. Skipping...", file=sys.stderr)

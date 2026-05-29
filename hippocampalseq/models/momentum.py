@@ -12,7 +12,8 @@ import hippocampalseq.utils as hseu
 
 from .kalman_filter import *
 __all__ = [
-    'Momentum'
+    'Momentum',
+    'MomentumResults'
 ]
 
 __SCALING_FACTOR = 1000
@@ -69,6 +70,7 @@ class Momentum(KalmanFilter):
         self.emission_probabilities = []
         self.approximate_mean       = []
         self.approximate_covariance = []
+        self.entropy                = []
         for k,v in enumerate(spikemat):
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 torch.from_numpy(v).double(), 
@@ -79,8 +81,9 @@ class Momentum(KalmanFilter):
             T = emission_probability.shape[0]
             approx_mean = torch.zeros(T, self.latent_dim, 1)
             approx_cov  = torch.zeros(T, self.latent_dim, self.latent_dim)
+            entropy     = torch.zeros(T)
             for t in range(T):
-                approx_mean[t], approx_cov[t] = hseu.laplacian_approximation(
+                approx_mean[t], approx_cov[t],entropy[t] = hseu.laplacian_approximation(
                     self.grid,
                     emission_probability[t]
                 )
@@ -88,6 +91,7 @@ class Momentum(KalmanFilter):
             self.emission_probabilities.append(emission_probability)
             self.approximate_mean.append(approx_mean)
             self.approximate_covariance.append(approx_cov)
+            self.entropy.append(entropy)
 
 
         # Random initialization of parameters
@@ -160,7 +164,9 @@ class Momentum(KalmanFilter):
     def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0):
         I = torch.eye(self.latent_dim)
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
-        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion * initial_diffusion * self.dt * I
+        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion * initial_diffusion \
+                                                        * self.dt * I \
+                                                        * __SCALING_FACTOR**2
         init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
         return init_cov
 
@@ -168,8 +174,8 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
-        A1     = I * (1 + torch.exp(-decay * self.dt))
-        A2     = I * torch.exp(-decay * self.dt)
+        A1     = I * (1 + torch.exp(-decay * __SCALING_FACTOR * self.dt))
+        A2     = I * torch.exp(-decay * __SCALING_FACTOR * self.dt)
         top    = torch.cat((A1, A2), dim=1)
         bottom = torch.cat((I, Z), dim=1)
         A = torch.cat((top, bottom), dim=0)
@@ -179,7 +185,7 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
-        Q = (diffusion * self.dt) ** 2 / (2*decay) * (1 - torch.exp(-2*decay * self.dt)) * I
+        Q = __SCALING_FACTOR * (diffusion * self.dt) ** 2 / (2*decay) * (1 - torch.exp(-2*decay * _SCALING_FACTOR * self.dt)) * I
         top    = torch.cat((Q, Z), dim=1)
         bottom = torch.cat((Z, I * jitter), dim=1)
         Gamma = torch.cat((top, bottom), dim=0)

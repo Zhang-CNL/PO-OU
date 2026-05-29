@@ -69,6 +69,7 @@ def plot_open_placefields(
         zorder=1000, transform=fig.transFigure, figure=fig
     )
     fig.patches.extend([rect])
+    return fig
 
 @save_wrapper
 def plot_linear_placefields(
