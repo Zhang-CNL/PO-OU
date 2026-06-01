@@ -53,6 +53,10 @@ class MomentumResults(KalmanResults):
     approximate_covariance : List[torch.Tensor] = field(default_factory=list)
 
 class Momentum(KalmanFilter):
+    """State-space model that includes momentum as a parameters.
+    Essentially, this collapses down to a second-order markov chain, so we can use kalman filtering.
+    We have a uniform prior and our observation covariance shifts over time, so we take that into account here as well.
+    """
     def __init__(
             self,
             place_fields: npt.ArrayLike, 
@@ -69,7 +73,9 @@ class Momentum(KalmanFilter):
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
             dt (float): Time step for the transition matrix.
-            bins (tuple): Number of bins for each latent dimension.
+            environment_size (tuple): Size of the environment. (xmin, ymin, xmax, ymax)
+            bins (int): Number of bins for each latent dimension.
+            adjust_parameters (bool): Whether to adjust the parameters. Not sure why we would do this, but it comes from Krause & Drugowitsch.
             seed: (int|None): Seed for the random number generator
         """
         super().__init__(2, 2, 2)
@@ -256,11 +262,17 @@ class Momentum(KalmanFilter):
         H = self.approximate_covariance
         return C,H
 
-    def _filter_init(self, values: KalmanResults, batch: int):
-        """
-        Initialize the filter for the first observation.
+    def _filter_init(self, values: MomentumResults, batch: int):
+        """Initialize the filter for the first observation.
         Since we have a uniform prior for this model, we use the information filter
         to handle it.
+
+        Args:
+            values (MomentumResults): Results from previous filter passes.
+            batch (int): Batch index
+        
+        Results:
+            (MomentumResults): Filtered results
         """
         I = torch.eye(self.augmented_dim)
         # Deal with the uniform prior using the information filter
@@ -283,10 +295,17 @@ class Momentum(KalmanFilter):
         # Now we can calculate it for $P(z_1|z_0)$
         return values
 
-    def _filter(self, values: KalmanResults, batch: int, t: int):
-        """
-        Run the Kalman filter for a single time step.
+    def _filter(self, values: MomentumResults, batch: int, t: int):
+        """Run the Kalman filter for a single time step.
         Use our initial transition and covariance matrices for t == 0
+
+        Args:
+            values (MomentumResults): Results from previous filter passes.
+            batch (int): Batch index.
+            t (int): Time index.
+
+        Returns:
+            MomentumResults: Filtered results
         """
         
         A = self.transition_matrices if t > 1 else self.initial_state_mean
@@ -314,12 +333,19 @@ class Momentum(KalmanFilter):
 
         return values
 
-    def _smooth(self, values: KalmanResults, batch: int, t: int):
-        """
-        Smooth the Kalman filter results for one timestep.
+    def _smooth(self, values: MomentumResults, batch: int, t: int):
+        """Smooth the Kalman filter results for one timestep.
 
         If t == 0, use the initial state mean and covariance to calculate the smoothed values.
         Otherwise, use the previous smoothed values and the transition matrices to calculate the current smoothed values.
+
+        Args:
+            values (MomentumResults): Results from previous filter and smoothing passes.
+            batch (int): Batch index.
+            t (int): Time index.
+
+        Returns:
+            MomentumResults: Smoothed results.
         """
         if t == 0:
             Amt = values.predicted_mean[batch][t]
@@ -337,6 +363,15 @@ class Momentum(KalmanFilter):
             return super()._smooth(values, batch, t)
 
     def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
+        """Calculate the log-likelihood for the model given the current state.
+        
+        Args:
+            values (MomentumResults): The current decoded values for hidden states.
+            stats (KalmanStatistics): Sufficient statistics calculated from these values.
+
+        Returns:
+            torch.Tensor: The log-likelihood for the model.
+        """
         ll = 0
         A = self.transition_matrices
         C = self.observation_matrices
@@ -378,7 +413,7 @@ class Momentum(KalmanFilter):
         raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
 
     def _em_autograd(self, 
-            values: stats,
+            values: MomentumResults,
             stats: SufficientStatistics,
             normalize: bool,
             lr: float = 1e-3, 
@@ -389,7 +424,7 @@ class Momentum(KalmanFilter):
         """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
 
         Args:
-            values (KalmanResults): Kalman filter results.
+            values (MomentumResults): Momentum filtering pass results.
             stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
             normalize (bool): If True, normalize the transition and observation matrices.
             lr (float): Learning rate for the optimizer.
@@ -484,7 +519,6 @@ class Momentum(KalmanFilter):
 
     def _resume_from_checkpoint(self, 
             last_iter: int,
-            X=None, 
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
@@ -492,6 +526,21 @@ class Momentum(KalmanFilter):
             checkpoint_path: str|None = "./checkpoint/",
             **diff_args
         ) -> MomentumResults:
+        """Resume training from a checkpoint. 
+        Checkpoint files have the pattern `momentum_epoch_{i}.pkl` where `i` is the epoch number.
+
+        Args:
+            last_iter (int): The last epoch number from which to resume training.
+            n_iter (int, optional): The number of epochs to train for. Defaults to 100.
+            emtol (float, optional): The tolerance for the EM algorithm. Defaults to 1e-3.
+            maximization_type (str, optional): The type of maximization to use. Defaults to 'autograd'.
+            normalize (bool, optional): Whether to normalize the transition and observation matrices. Defaults to False.
+            checkpoint_path (str, optional): The path to save checkpoint files to. Defaults to "./checkpoint/".
+            **diff_args: Keyword arguments to pass to the `_em` method.
+
+        Returns:
+            MomentumResults: The results of the EM algorithm. Estimated parameters can be accessed from this class itself.
+        """
         values = self._initialize(self.temp_values.approximate_mean)
 
 
@@ -539,11 +588,16 @@ class Momentum(KalmanFilter):
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
-            X (torch.Tensor, optional): Value ignored. We fit to self.approx_mean.
-            **em_args: Keyword arguments to pass to the parent class's em method.
+            X (None): Value ignored. We treat self.approx_mean as the observed variable.
+            n_iter (int): Number of EM iterations.
+            emtol (float): Tolerance for the change in log-likelihood between iterations.
+            maximization_type (str): Type of maximization algorithm to use. In this model, only 'autograd' is implemented.
+            normalize (bool): Whether to normalize the transition and observation matrices. Defaults to False.
+            checkpoint_path (str|None): Path to save checkpoint files. Checkpoint files are deleted after a successful run.
+            **diff_args: Keyword arguments to pass to the parent class's maximization method.
 
         Returns:
-            torch.Tensor: The negative log likelihood of the data given the model parameters.
+            MomentumResults: Results of fitting the model to the data.
         """
         (
             self.transition_matrices,

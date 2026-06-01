@@ -203,7 +203,7 @@ def plot_model_approximations(
 @click.option("--rerun", is_flag=True)
 @click.option("--skip-linear", is_flag=True)
 @click.option("--rats", multiple=True, type=click.Choice(hsep.RAT_NAMES), default=hsep.RAT_NAMES)
-@click.option("--checkpoint-path", default="./checkpoints/")
+@click.option("--checkpoint-path", default="../checkpoints/")
 def main(
         data_dir, 
         results_dir, 

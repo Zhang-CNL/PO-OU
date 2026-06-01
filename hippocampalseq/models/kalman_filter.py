@@ -342,7 +342,6 @@ class KalmanFilter(StateSpace):
             n_epochs (int): Number of epochs for SGD.
             lr (float): Learning rate for the optimizer.
             gd_tol (float): Tolerance for SGD.
-            seed (int): Seed for the random number generator.
 
         Returns:
             torch.Tensor: The final negative log likelihood.
@@ -424,7 +423,7 @@ class KalmanFilter(StateSpace):
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
-            values (hsem.KalmanResults): Kalman filter results.
+            values (KalmanResults): Kalman filter results.
             normalize (bool): If True, normalize the transition and observation matrices.
             maximization_type (str): Type of maximization algorithm to use. Can be either 'mle' or 'autograd'.
             **autograd_args: Keyword arguments for the autograd maximization algorithm.
@@ -441,6 +440,15 @@ class KalmanFilter(StateSpace):
             return self._em_autograd(values, stats, normalize, **autograd_args)
 
     def _calculate_marginals(self, values: KalmanResults):
+        """Calculates the marginal probabilities for each bin in the environment.
+        What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
+
+        Args:
+            values (KalmanResults): Kalman filter results.
+
+        Returns:
+            torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
+        """
         X = torch.arange(self.environment_size[0], self.environment_size[2], self.bin_size) + self.bin_size / 2
         Y = torch.arange(self.environment_size[1], self.environment_size[3], self.bin_size) + self.bin_size / 2
         cumulative_probabilities = torch.zeros((len(values.smoothed_mean), len(X), len(Y)))
@@ -467,14 +475,16 @@ class KalmanFilter(StateSpace):
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
-            X (torch.Tensor): The observations to fit the model to.
-            normalize (bool, optional): Whether to normalize the transition and observation matrices. Defaults to True.
+            X (torch.Tensor): The observations to fit the model to. Each individual observation time-series can have variable length.
             n_iter (int, optional): The number of EM iterations to run. Defaults to 100.
             emtol (float, optional): The tolerance for the change in log-likelihood between iterations. Defaults to 1e-3.
+            maximization_type (str, optional): The type of maximization to use. Can be either 'mle' or 'autograd'. Defaults to 'autograd'.
+            normalize (bool, optional): Whether to normalize the transition and observation matrices. Defaults to True.
+            seed (int, optional): The seed to use for the random number generator. Defaults to None.
             **diff_args: Keyword arguments to pass to the `_em` method.
 
         Returns:
-            KalmanResults: The results of the EM algorithm. Estimated parameters can be accessed from this class itself.
+            KalmanResults: The results of the EM algorithm. Estimated sequences can be accessed from this class itself.
         """
         if seed: 
             torch.manual_seed(seed)

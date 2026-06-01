@@ -10,9 +10,9 @@ import numpy.typing as npt
 import pynapple as nap
 import compress_pickle
 import torch
-from torch.masked import masked_tensor
-from torch.nn.utils.rnn import pad_sequence
-from typing import List
+#from torch.masked import masked_tensor
+#from torch.nn.utils.rnn import pad_sequence
+from typing import List, Any
 
 class AttrDict(dict):
     def __init__(self, dct):
@@ -42,12 +42,12 @@ def create_interval_mask(length, starts, ends):
     np.add.at(mask, ends, -1)
     return np.cumsum(mask)[:-1] > 0
 
-def save_pickle(data, fname):
+def save_pickle(data: Any, fname: str):
     s = compress_pickle.dumps(data, "gzip")
     with open(fname, 'wb') as f:
         f.write(s)
 
-def read_pickle(fname):
+def read_pickle(fname: str):
     with open(fname, 'rb') as f:
         raw = f.read()
     return compress_pickle.loads(raw, "gzip")
@@ -251,25 +251,25 @@ def atleast_2d(x):
         x = x[:,None]
     return x
 
-def mT(x):
-    """Shorthand for np.matrix_transpose"""
+def mT(x: np.ndarray|torch.Tensor):
+    """Shorthand for np.matrix_transpose or torch.Tensor.mT"""
     if isinstance(x, torch.Tensor):
         return x.mT
     return np.matrix_transpose(x)
 
-def invmul(A, B):
+def invmul(A: np.ndarray|torch.Tensor, B: np.ndarray|torch.Tensor):
     """Computes :math:`AB^{-1}`"""
     if isintance(A, torch.Tensor):
         return mT(torch.linalg.solve(mT(B), mT(A)))
     return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
 
-def mulinv(B, A):
+def mulinv(B: np.ndarray|torch.Tensor, A: np.ndarray|torch.Tensor):
     """Computes :math:`B^{-1}A`"""
     if isintance(A, torch.Tensor):
         return torch.linalg.solve(B, A)
     return np.linalg.solve(B, A)
 
-def concatenate_jagged(tfs: List[torch.Tensor]):
-    padded = pad_sequence(tfs, batch_first=True, padding_value=torch.nan)
-    mt     = masked_tensor(padded, mask=~torch.isnan(padded))
-    return mt
+#def concatenate_jagged(tfs: List[torch.Tensor]):
+#    padded = pad_sequence(tfs, batch_first=True, padding_value=torch.nan)
+#    mt     = masked_tensor(padded, mask=~torch.isnan(padded))
+#    return mt
