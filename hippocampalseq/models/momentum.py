@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import numpy.typing as npt
 import pynapple as nap
@@ -17,6 +18,33 @@ __all__ = [
 ]
 
 __SCALING_FACTOR = 1000
+
+def resume_from_checkpoint(
+        checkpoint_path: str, 
+        n_iter: int = 100, 
+        emtol: float = 1e-3, 
+        maximization_type: str = 'autograd', 
+        normalize: bool = False, 
+        **diff_args
+    ):
+    nums = []
+    for path in os.listdir(checkpoint_path):
+        if path.endswith(".pkl"):
+            nums.append(int(path.split("_")[2].split(".")[0]))
+    nums.sort()
+    last_iter = nums[-1]
+    model = hseu.load_pickle(f"./{checkpoint_path}/momentum_epoch_{last_iter}.pkl")
+    values = model._resume_from_checkpoint(
+        last_iter,
+        None,
+        n_iter,
+        emtol,
+        maximization_type,
+        normalize,
+        **diff_args
+    )
+    return model,values
+    
 
 @dataclass
 class MomentumResults(KalmanResults):
@@ -454,14 +482,60 @@ class Momentum(KalmanFilter):
 
         return torch.tensor(prev_loss)
 
+    def _resume_from_checkpoint(self, 
+            last_iter: int,
+            X=None, 
+            n_iter: int = 100, 
+            emtol: float = 1e-3, 
+            maximization_type: str = 'autograd', 
+            normalize: bool = False, 
+            checkpoint_path: str|None = "./checkpoint/",
+            **diff_args
+        ) -> MomentumResults:
+        values = self._initialize(self.temp_values.approximate_mean)
+
+
+        for i in range(last_iter + 1, n_iter):
+            with torch.no_grad():
+                values = self.filter(values)
+                values = self.smooth(values)
+            ll = self._em(
+                values,
+                normalize,
+                maximization_type,
+                **diff_args
+            )
+
+            values.negloglike.append(-ll)
+            if not torch.isfinite(values.negloglike[-1]):
+                print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
+                break
+
+            if i > 0 and abs((values.negloglike[-1] - values.negloglike[-2]) / values.negloglike[-2]) < emtol:
+                print(f"Converged after {i} epochs, exiting")
+                break
+
+            if checkpoint_path and i % 50 == 0:
+                hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
+        
+        if i == n_iter - 1:
+            warnings.warn(f"Failed to converge after {i} epochs, exiting")
+
+        values.cumulative_probabilities = self._calculate_marginals(values)
+
+        os.rmdir(checkpoint_path)
+
+        return values
+
     def fit(self, 
             X=None, 
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
             normalize: bool = False, 
+            checkpoint_path: str|None = "./checkpoint/",
             **diff_args
-        ) -> KalmanResults:
+        ) -> MomentumResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
@@ -481,6 +555,9 @@ class Momentum(KalmanFilter):
         ) = self._initialize_parameters()
 
         values = self._initialize(self.temp_values.approximate_mean)
+
+        if checkpoint_path is not None:
+            os.makedirs(checkpoint_path, exist_ok=True)
 
         for i in range(n_iter):
             with torch.no_grad():
@@ -502,10 +579,15 @@ class Momentum(KalmanFilter):
                 print(f"Converged after {i} epochs, exiting")
                 break
 
+            if checkpoint_path and i % 50 == 0:
+                hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
+
         
         if i == n_iter - 1:
             warnings.warn(f"Failed to converge after {i} epochs, exiting")
 
         values.cumulative_probabilities = self._calculate_marginals(values)
+
+        os.rmdir(checkpoint_path, ignore_errors=True)
 
         return values

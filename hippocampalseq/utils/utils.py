@@ -253,19 +253,19 @@ def atleast_2d(x):
 
 def mT(x):
     """Shorthand for np.matrix_transpose"""
-    if type(x) == torch.Tensor:
+    if isinstance(x, torch.Tensor):
         return x.mT
     return np.matrix_transpose(x)
 
 def invmul(A, B):
     """Computes :math:`AB^{-1}`"""
-    if type(A) == torch.Tensor:
+    if isintance(A, torch.Tensor):
         return mT(torch.linalg.solve(mT(B), mT(A)))
     return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
 
 def mulinv(B, A):
     """Computes :math:`B^{-1}A`"""
-    if type(A) == torch.Tensor:
+    if isintance(A, torch.Tensor):
         return torch.linalg.solve(B, A)
     return np.linalg.solve(B, A)
 
