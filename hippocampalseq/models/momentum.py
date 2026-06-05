@@ -5,6 +5,7 @@ import pynapple as nap
 import torch
 import torch.nn as nn
 import warnings
+from typing import List, Tuple
 from dataclasses import dataclass, field
 from scipy.optimize import least_squares
 from torch.utils.data import random_split
@@ -24,7 +25,7 @@ def resume_from_checkpoint(
         maximization_type: str = 'autograd', 
         normalize: bool = False, 
         **diff_args
-    ):
+    ) -> Tuple[Momentum, MomentumResults]:
     nums = []
     for path in os.listdir(checkpoint_path):
         if path.endswith(".pkl"):
@@ -110,7 +111,7 @@ class Momentum(KalmanFilter):
         for k,v in enumerate(spikemat):
             ep = torch.from_numpy(v).double()
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
-                torch.from_numpy(v).double(), 
+                ep, 
                 place_fields,
                 self.dt
             )
@@ -187,7 +188,7 @@ class Momentum(KalmanFilter):
         sigma_adjusted = torch.sqrt(cfunction / dfunction)
         return t_adjusted, sigma_adjusted
 
-    def _initialize(self, X):
+    def _initialize(self, X: torch.Tensor) -> MomentumResults:
         tf_base = [torch.zeros((x.shape[0], self.augmented_dim, 1)) for x in X]
         cov_base = [torch.zeros((x.shape[0], self.augmented_dim, self.augmented_dim)) for x in X]
         def _copy(x):
@@ -207,7 +208,7 @@ class Momentum(KalmanFilter):
         )
         return res
 
-    def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0):
+    def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
         I = torch.eye(self.latent_dim)
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
         init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion * initial_diffusion \
@@ -216,7 +217,7 @@ class Momentum(KalmanFilter):
         init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
         return init_cov
 
-    def _construct_transition_mat(self, decay: torch.Tensor, diffusion: torch.Tensor):
+    def _construct_transition_mat(self, decay: torch.Tensor, diffusion: torch.Tensor) -> torch.Tensor:
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
@@ -228,7 +229,7 @@ class Momentum(KalmanFilter):
         A = torch.cat((top, bottom), dim=0)
         return A
 
-    def _construct_transition_cov(self, decay: torch.Tensor, diffusion: torch.Tensor, jitter=0.0):
+    def _construct_transition_cov(self, decay: torch.Tensor, diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
@@ -238,7 +239,7 @@ class Momentum(KalmanFilter):
         Gamma = torch.cat((top, bottom), dim=0)
         return Gamma
 
-    def _init_priors(self) -> tuple:
+    def _init_priors(self) -> Tuple[torch.Tensor, torch.Tensor]:
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
@@ -256,7 +257,7 @@ class Momentum(KalmanFilter):
         init_cov = self._construct_init_var(self.initial_diffusion)
         return init_mean, init_cov
 
-    def _init_transition_matrices(self) -> tuple:
+    def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """Construct transition matrices for momentum SSM.
 
         Returns:
@@ -268,14 +269,14 @@ class Momentum(KalmanFilter):
 
         return A,Q
 
-    def _init_observation_matrices(self):
+    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
         C = torch.hstack((I, Z))
         H = self.approximate_covariance
         return C,H
 
-    def _filter_init(self, values: MomentumResults, batch: int):
+    def _filter_init(self, values: MomentumResults, batch: int) -> MomentumResults:
         """Initialize the filter for the first observation.
         Since we have a uniform prior for this model, we use the information filter
         to handle it.
@@ -309,7 +310,7 @@ class Momentum(KalmanFilter):
         # Now we can calculate it for $P(z_1|z_0)$
         return values
 
-    def _filter(self, values: MomentumResults, batch: int, t: int):
+    def _filter(self, values: MomentumResults, batch: int, t: int) -> MomentumResults:
         """Run the Kalman filter for a single time step.
         Use our initial transition and covariance matrices for t == 0
 
@@ -347,7 +348,7 @@ class Momentum(KalmanFilter):
 
         return values
 
-    def _smooth(self, values: MomentumResults, batch: int, t: int):
+    def _smooth(self, values: MomentumResults, batch: int, t: int) -> MomentumResults:
         """Smooth the Kalman filter results for one timestep.
 
         If t == 0, use the initial state mean and covariance to calculate the smoothed values.
@@ -478,13 +479,11 @@ class Momentum(KalmanFilter):
             for i in range(len(values.observations)):
                 A = self._construct_transition_mat(decay, diffusion)
                 C = self.observation_matrices
-                Gamma = self._construct_transition_cov(decay, diffusion, jitter=0.00001)
-                #Gamma = self._construct_transition_cov(decay, diffusion)
+                Gamma = self._construct_transition_cov(decay, diffusion, jitter=1e-6)
                 Sigma = self.observation_covariance[i]
 
                 init_mat = self.initial_state_mean
-                init_cov = self._construct_init_var(initial_diffusion, jitter=0.00001)
-                #init_cov = self._construct_init_var(initial_diffusion)
+                init_cov = self._construct_init_var(initial_diffusion, jitter=1e-6)
 
                 loss = 0.
                 T = values.observations[i].shape[0]
@@ -499,7 +498,6 @@ class Momentum(KalmanFilter):
                 loss += torch.trace(tll)
 
                 ell = stats.Exx[i] - stats.Exz[i] @ C.mT - C @ stats.Ezx[i] + C @ stats.Ezz[i] @ C.mT
-                #ell = torch.linalg.solve(Sigma + jitter, ell)
                 ell = torch.linalg.solve(Sigma, ell)
                 ell = torch.sum(ell, axis=0)
                 loss += torch.trace(ell)
@@ -523,7 +521,6 @@ class Momentum(KalmanFilter):
         self.decay             = decay.detach()
         self.diffusion         = diffusion.detach()
         self.initial_diffusion = initial_diffusion.detach()
-        #print(self.initial_diffusion, self.decay, self.diffusion)
 
         (
             self.transition_matrices,

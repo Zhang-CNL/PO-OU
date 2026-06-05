@@ -10,8 +10,6 @@ import numpy.typing as npt
 import pynapple as nap
 import compress_pickle
 import torch
-#from torch.masked import masked_tensor
-#from torch.nn.utils.rnn import pad_sequence
 from typing import List, Any
 
 class AttrDict(dict):
@@ -268,8 +266,3 @@ def mulinv(B: np.ndarray|torch.Tensor, A: np.ndarray|torch.Tensor):
     if isinstance(A, torch.Tensor):
         return torch.linalg.solve(B, A)
     return np.linalg.solve(B, A)
-
-#def concatenate_jagged(tfs: List[torch.Tensor]):
-#    padded = pad_sequence(tfs, batch_first=True, padding_value=torch.nan)
-#    mt     = masked_tensor(padded, mask=~torch.isnan(padded))
-#    return mt

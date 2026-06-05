@@ -131,8 +131,8 @@ def plot_theta(
                 origin='lower'
             )
             if len(negloglike) > 0:
-                axs[3].set_title("Negative log likelihood")
                 axs[3].plot(negloglike)
+                axs[3].set_title("Negative log likelihood")
             pdf.savefig()
             plt.close(fig)
 

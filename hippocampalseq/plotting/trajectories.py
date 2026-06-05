@@ -17,6 +17,8 @@ def plot_trajectories(trajectories: List[np.ndarray], ax=None, **kwargs):
         elif trajectory.shape[1] == 1:
             x = np.arange(len(trajectory))
             ax.plot(x, trajectory[:,0], 'k-', alpha=.5, linewidth=.5)
+        else:
+            raise ValueError(f"Trajectory shape {trajectory.shape} not supported")
 
     if trajectories[0].shape[1] == 2:
         ax.set_yticks([0, 200])

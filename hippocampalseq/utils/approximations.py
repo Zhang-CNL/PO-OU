@@ -2,6 +2,7 @@ import numpy as np
 import torch 
 import torch.nn.functional as F
 from torch.distributions import MultivariateNormal
+from typing import Tuple
 
 from hippocampalseq.utils import atleast_2d
 
@@ -16,7 +17,11 @@ def _to_cholesky(L_raw: torch.Tensor) -> torch.Tensor:
     L = L - torch.diag_embed(L.diagonal(dim1=-2, dim2=-1)) + torch.diag_embed(diag_pos)
     return L
 
-def analytical_gaussian_approximation(z, pz, bin_size: int):
+def analytical_gaussian_approximation(
+        z: torch.Tensor, 
+        pz: torch.Tensor, 
+        bin_size: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
     B, Nx, Ny = pz.shape
     if z.ndim == 2:
         z = z.unsqueeze(0).expand(B,-1,-1)        
@@ -39,7 +44,14 @@ def analytical_gaussian_approximation(z, pz, bin_size: int):
     return mu.unsqueeze(-1), sigma
 
 #def laplacian_approximation(z: torch.Tensor, pz: torch.Tensor, kl: str = "pq", lr: float = .01, n_epochs: int = 1000):
-def iterative_gaussian_approximation(z, pz, bin_size: int, kl: str = "pq", lr: float = .01, n_epochs: int = 1000):
+def iterative_gaussian_approximation(
+        z: torch.Tensor, 
+        pz: torch.Tensor, 
+        bin_size: int, 
+        kl: str = "pq", 
+        lr: float = .01, 
+        n_epochs: int = 1000
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     r"""Laplacian approximation for the parameters of a Gaussian distribution.
     Finds the maximum point of the distribution $P(z)$ and then optimizes for the 
     value of $\Sigma$ that minimizes the KL divergence between $P(z)$ and $Q(z)$
@@ -53,6 +65,7 @@ def iterative_gaussian_approximation(z, pz, bin_size: int, kl: str = "pq", lr: f
     Returns:
         mu (torch.Tensor): The mean of the Gaussian distribution.
         sigma (torch.Tensor): The covariance matrix of the Gaussian distribution.
+        entropy (torch.Tensor): The KL-divergence between $\mathcal{N}(z|\mu, \Sigma)$ and $P(z)$
     """
     assert kl in ["pq", "qp"]
     n_dims = z.shape[1] if z.ndim > 1 else 1

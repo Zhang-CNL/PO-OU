@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from torch.distributions import MultivariateNormal
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import hippocampalseq.utils as hseu
 from .statespace import *
@@ -56,7 +56,7 @@ class KalmanFilter(StateSpace):
         self.augmented_dim = order * latent_dim
         self.obs_dim       = obs_dim
 
-    def _parse_observations(self, obs):
+    def _parse_observations(self, obs) -> List[torch.Tensor]:
         """Safely convert observations to their expected format."""
         if not isinstance(obs, list):
             obs = [obs]
@@ -66,7 +66,7 @@ class KalmanFilter(StateSpace):
                 obs[i] = obs[i].mT
         return obs
 
-    def _filter_init(self, values: KalmanResults, batch: int):
+    def _filter_init(self, values: KalmanResults, batch: int) -> KalmanResults:
         """Initialize the filter for the first observation."""
         P0Ct = self.initial_state_covariance @ self.observation_matrices.T 
         K1 = hseu.invmul(P0Ct, self.observation_matrices @ P0Ct + self.observation_covariance) 
@@ -82,7 +82,7 @@ class KalmanFilter(StateSpace):
         return values
 
 
-    def _filter(self, values: KalmanResults, batch: int, t: int):
+    def _filter(self, values: KalmanResults, batch: int, t: int) -> KalmanResults:
         """Run the filter for a single time step."""
         Am1 = values.predicted_mean[batch][t-1]
         Pn1 = values.predicted_cov[batch][t-1]
@@ -102,7 +102,7 @@ class KalmanFilter(StateSpace):
         values.predicted_cov[batch][t]  = Pn
         return values
 
-    def filter(self, values: KalmanResults):
+    def filter(self, values: KalmanResults) -> KalmanResults:
         """Run the filter."""
         # Initialize the filter
         for batch in range(len(values.observations)):
@@ -112,13 +112,13 @@ class KalmanFilter(StateSpace):
 
         return values
 
-    def _smooth_init(self, values: KalmanResults, batch: int):
+    def _smooth_init(self, values: KalmanResults, batch: int) -> KalmanResults:
         """Initialize the RTS smoother."""
         values.smoothed_mean[batch][-1] = values.filtered_mean[batch][-1]
         values.smoothed_cov[batch][-1]  = values.filtered_cov[batch][-1]
         return values
 
-    def _smooth(self, values: KalmanResults, batch: int, t: int):
+    def _smooth(self, values: KalmanResults, batch: int, t: int) -> KalmanResults:
         """Run the RTS smoother for a single time step."""
         Amt   = values.predicted_mean[batch][t]
         Pt    = values.predicted_cov[batch][t]
@@ -132,7 +132,7 @@ class KalmanFilter(StateSpace):
         values.smoothed_cov[batch][t]  = vht
         return values
 
-    def smooth(self, values: KalmanResults):
+    def smooth(self, values: KalmanResults) -> KalmanResults:
         """Run the RTS smoother."""
         # Initialize the RTS smoother
         for batch in range(len(values.observations)):
@@ -141,32 +141,32 @@ class KalmanFilter(StateSpace):
                 values = self._smooth(values, batch, t)
         return values
 
-    def _init_priors(self):
+    def _init_priors(self) -> Tuple[torch.Tensor, torch.Tensor]:
         m = torch.randn(self.augmented_dim, 1)
         n = torch.eye(self.augmented_dim)
         return m,n
 
-    def _init_transition_matrices(self):
+    def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
         F = torch.rand(self.augmented_dim, self.augmented_dim)
         F = F / F.sum(axis=1, keepdim=True)
         Q = torch.randn(self.augmented_dim, self.augmented_dim)
         Q = Q @ Q.T 
         return F,Q
 
-    def _init_observation_matrices(self):
+    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
         H = torch.rand(self.augmented_dim, self.augmented_dim)
         H = H / H.sum(axis=1, keepdim=True)
         R = torch.randn(self.augmented_dim, self.obs_dim)
         R = R @ R.T
         return H, R
 
-    def _initialize_parameters(self):
+    def _initialize_parameters(self) -> Tuple[torch.Tensor,...]:
         initial_mean, initial_cov = self._init_priors()
         trans_mat, trans_cov      = self._init_transition_matrices()
         obs_mat, obs_cov          = self._init_observation_matrices()
         return trans_mat, trans_cov, obs_mat, obs_cov, initial_mean, initial_cov
 
-    def _initialize(self, X):
+    def _initialize(self, X: torch.Tensor) -> KalmanResults:
         tf_base  = [torch.zeros_like(x) for x in X]
         cov_base = [torch.zeros(x.shape[:-1] + (self.augmented_dim,)) for x in X]
         def _copy(x):
@@ -182,7 +182,7 @@ class KalmanFilter(StateSpace):
             smoothed_cov   = _copy(cov_base),
         )
 
-    def _calc_sufficient_stats(self, values: KalmanResults):
+    def _calc_sufficient_stats(self, values: KalmanResults) -> KalmanStatistics:
         """Calculate sufficient statistics for performing maximization given the filtered
          and smoothed values of the model.
 
@@ -192,14 +192,14 @@ class KalmanFilter(StateSpace):
         Returns:
             KalmanStatistics: The sufficient statistics of the model.
         """
-        Cov = [sc[1:] @ sg[:-1].mT for sc,sg in zip(values.smoothed_cov, values.smoothed_gain)]
-        Ez = values.smoothed_mean
-        Ezz = [sc + sm @ sm.mT for sc,sm in zip(values.smoothed_cov, values.smoothed_mean)]
+        Cov  = [sc[1:] @ sg[:-1].mT for sc,sg in zip(values.smoothed_cov, values.smoothed_gain)]
+        Ez   = values.smoothed_mean
+        Ezz  = [sc + sm @ sm.mT for sc,sm in zip(values.smoothed_cov, values.smoothed_mean)]
         Ezz1 = [sm[1:] @ sm[:-1].mT + c for sm,c in zip(values.smoothed_mean, Cov)]
         Ez1z = [ez.mT for ez in Ezz1]
-        Exx = [obs @ obs.mT for obs in values.observations]
-        Exz = [obs @ sm.mT for obs,sm in zip(values.observations, values.smoothed_mean)]
-        Ezx = [ex.mT for ex in Exz]
+        Exx  = [obs @ obs.mT for obs in values.observations]
+        Exz  = [obs @ sm.mT for obs,sm in zip(values.observations, values.smoothed_mean)]
+        Ezx  = [ex.mT for ex in Exz]
         return KalmanStatistics(
             Cov, Ez, Ezz, Ezz1, Ez1z, Exx, Exz, Ezx
         )
@@ -256,10 +256,10 @@ class KalmanFilter(StateSpace):
             ll += _ll / 2
         return ll
 
-    def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics):
+    def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         return torch.atleast_2d(torch.mean(torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean]), axis=0))
     
-    def _initial_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics):
+    def _initial_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         """
         mu1 = torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean])
         c1  = torch.cat([sc[0].unsqueeze(0) for sc in values.smoothed_cov])
@@ -273,13 +273,13 @@ class KalmanFilter(StateSpace):
         P2 = torch.cat([(ez[0] @ ez[0].mT).unsqueeze(0) for ez in stats.Ez])
         return torch.atleast_2d(torch.mean(P1 - P2, axis=0))
 
-    def _transition_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics):
+    def _transition_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         Numer = torch.cat([torch.sum(ezz1, axis=0, keepdim=True) for ezz1 in stats.Ezz1])
         Denom = torch.cat([torch.sum(ezz, axis=0, keepdim=True) for ezz in stats.Ezz])
         A = hseu.invmul(Numer, Denom)
         return torch.atleast_2d(torch.mean(A, axis=0))
 
-    def _transition_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics):
+    def _transition_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         P1 = [ezz[1:] for ezz in stats.Ezz]
         P2 = [ezz1 @ self.transition_matrices.T for ezz1 in stats.Ezz1]
         P3 = [p2.mT for p2 in P2]
@@ -287,13 +287,13 @@ class KalmanFilter(StateSpace):
         Gamma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True) / len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
         return torch.atleast_2d(torch.mean(Gamma, axis=0))
 
-    def _observation_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics):
+    def _observation_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         Numer = torch.cat([torch.sum(exz, axis=0, keepdim=True) for exz in stats.Exz])
         Denom = torch.cat([torch.sum(ezz, axis=0, keepdim=True) for ezz in stats.Ezz])
         C = hseu.invmul(Numer, Denom)
         return torch.atleast_2d(torch.mean(C, axis=0))
 
-    def _observation_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics):
+    def _observation_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         P1 = stats.Exx
         P2 = [self.observation_matrices @ ezx for ezx in stats.Ezx]
         P3 = [p2.mT for p2 in P2]
@@ -301,7 +301,7 @@ class KalmanFilter(StateSpace):
         Sigma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True)/len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
         return torch.atleast_2d(torch.mean(Sigma, axis=0))
 
-    def _em_mle(self, values: KalmanResults, stats: KalmanStatistics, normalize: bool):
+    def _em_mle(self, values: KalmanResults, stats: KalmanStatistics, normalize: bool) -> torch.Tensor:
         """Maximum likelihood estimation of all relevant parameters.
 
         Args:
@@ -419,7 +419,7 @@ class KalmanFilter(StateSpace):
         return torch.tensor(prev_loss)
 
 
-    def _em(self, values: KalmanResults, normalize: bool, maximization_type: str = 'autograd', **autograd_args):
+    def _em(self, values: KalmanResults, normalize: bool, maximization_type: str = 'autograd', **autograd_args) -> torch.Tensor:
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
@@ -439,7 +439,7 @@ class KalmanFilter(StateSpace):
         elif maximization_type == 'autograd':
             return self._em_autograd(values, stats, normalize, **autograd_args)
 
-    def _calculate_marginals(self, values: KalmanResults):
+    def _calculate_marginals(self, values: KalmanResults) -> torch.Tensor:
         r"""Calculates the marginal probabilities for each bin in the environment.
         What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
 
