@@ -17,8 +17,6 @@ __all__ = [
     'MomentumResults'
 ]
 
-__SCALING_FACTOR = 1000
-
 def resume_from_checkpoint(
         checkpoint_path: str, 
         n_iter: int = 100, 
@@ -65,6 +63,7 @@ class Momentum(KalmanFilter):
             environment_size: tuple,
             bin_size: int, 
             adjust_parameters: bool = False,
+            approximation_method: str = 'analytic',
             seed: int|None = 42
         ):
         """Initialize the momentum SSM.
@@ -79,6 +78,9 @@ class Momentum(KalmanFilter):
             seed: (int|None): Seed for the random number generator
         """
         super().__init__(2, 2, 2)
+
+        assert approximation_method in ['analytic', 'iterative']
+        self.__SCALING_FACTOR = torch.tensor(1000)
 
         self.dt               = torch.tensor(dt)
         self.environment_size = environment_size
@@ -104,28 +106,38 @@ class Momentum(KalmanFilter):
         self.emission_probabilities = []
         self.approximate_mean       = []
         self.approximate_covariance = []
-        self.entropy                = []
+        #self.entropy                = []
         for k,v in enumerate(spikemat):
+            ep = torch.from_numpy(v).double()
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 torch.from_numpy(v).double(), 
                 place_fields,
                 self.dt
             )
+            emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
 
-            T = emission_probability.shape[0]
-            approx_mean = torch.zeros(T, self.latent_dim, 1)
-            approx_cov  = torch.zeros(T, self.latent_dim, self.latent_dim)
-            entropy     = torch.zeros(T)
-            for t in range(T):
-                approx_mean[t], approx_cov[t],entropy[t] = hseu.laplacian_approximation(
+            if approximation_method == 'iterative':
+                T = emission_probability.shape[0]
+                approx_mean = torch.zeros(T, self.latent_dim, 1)
+                approx_cov  = torch.zeros(T, self.latent_dim, self.latent_dim)
+                #entropy     = torch.zeros(T)
+                for t in range(T):
+                    approx_mean[t], approx_cov[t],_ = hseu.iterative_gaussian_approximation(
+                        self.grid,
+                        emission_probability[t],
+                        self.bin_size
+                    )
+            elif approximation_method == 'analytic':
+                approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
                     self.grid,
-                    emission_probability[t]
+                    emission_probability,
+                    self.bin_size
                 )
             
             self.emission_probabilities.append(emission_probability)
             self.approximate_mean.append(approx_mean)
             self.approximate_covariance.append(approx_cov)
-            self.entropy.append(entropy)
+            #self.entropy.append(entropy)
 
 
         # Random initialization of parameters
@@ -176,8 +188,8 @@ class Momentum(KalmanFilter):
         return t_adjusted, sigma_adjusted
 
     def _initialize(self, X):
-        tf_base = [torch.zeros_like(x) for x in X]
-        cov_base = [torch.zeros(x.shape[:-1] + (self.augmented_dim,)) for x in X]
+        tf_base = [torch.zeros((x.shape[0], self.augmented_dim, 1)) for x in X]
+        cov_base = [torch.zeros((x.shape[0], self.augmented_dim, self.augmented_dim)) for x in X]
         def _copy(x):
             return [i.clone() for i in x]
         res = MomentumResults(
@@ -200,7 +212,7 @@ class Momentum(KalmanFilter):
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
         init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion * initial_diffusion \
                                                         * self.dt * I \
-                                                        * __SCALING_FACTOR**2
+                                                        * self.__SCALING_FACTOR**2
         init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
         return init_cov
 
@@ -208,8 +220,9 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
-        A1     = I * (1 + torch.exp(-decay * __SCALING_FACTOR * self.dt))
-        A2     = I * torch.exp(-decay * __SCALING_FACTOR * self.dt)
+        ex     = torch.exp(-decay * self.__SCALING_FACTOR * self.dt)
+        A1     = I * (1 + ex)
+        A2     = I * ex
         top    = torch.cat((A1, A2), dim=1)
         bottom = torch.cat((I, Z), dim=1)
         A = torch.cat((top, bottom), dim=0)
@@ -219,7 +232,7 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
-        Q = __SCALING_FACTOR * (diffusion * self.dt) ** 2 / (2*decay) * (1 - torch.exp(-2*decay * _SCALING_FACTOR * self.dt)) * I
+        Q = self.__SCALING_FACTOR * (diffusion * self.dt) ** 2 / (2*decay) * (1 - torch.exp(-2*decay * self.__SCALING_FACTOR * self.dt)) * I
         top    = torch.cat((Q, Z), dim=1)
         bottom = torch.cat((Z, I * jitter), dim=1)
         Gamma = torch.cat((top, bottom), dim=0)
@@ -282,6 +295,7 @@ class Momentum(KalmanFilter):
         xi0 = self.observation_matrices.T @ sigma0i @ values.observations[batch][0]
 
         P0  = torch.inverse(omega0 + .00001 * torch.eye(self.augmented_dim))
+        #P0 = torch.inverse(omega0)
         mu0 = P0 @ xi0
         P0  = 0.5 * (P0 + P0.T)
 
@@ -324,7 +338,7 @@ class Momentum(KalmanFilter):
 
         Am = A @ mu_t
         Pt = A @ v_t @ A.T + gamma
-        Pt = .5 * (Pt + Pt.T)
+        #Pt = .5 * (Pt + Pt.T)
 
         values.predicted_mean[batch][t] = Am
         values.predicted_cov[batch][t]  = Pt
@@ -351,7 +365,8 @@ class Momentum(KalmanFilter):
             Amt = values.predicted_mean[batch][t]
             Pt  = values.predicted_cov[batch][t]
 
-            J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
+            #J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
+            J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt)
             muht = values.filtered_mean[batch][t] + J @ (values.smoothed_mean[batch][t+1] - Amt) 
             vht = values.filtered_cov[batch][t] + J @ (values.smoothed_cov[batch][t+1] - Pt) @ J.mT
 
@@ -455,7 +470,7 @@ class Momentum(KalmanFilter):
         )
 
         jitter = torch.eye(self.obs_dim) * .000001
-        prev_loss = 0.
+        prev_loss = np.inf
 
         for epoch in range(n_epochs):
             total_loss = 0
@@ -464,10 +479,12 @@ class Momentum(KalmanFilter):
                 A = self._construct_transition_mat(decay, diffusion)
                 C = self.observation_matrices
                 Gamma = self._construct_transition_cov(decay, diffusion, jitter=0.00001)
+                #Gamma = self._construct_transition_cov(decay, diffusion)
                 Sigma = self.observation_covariance[i]
 
                 init_mat = self.initial_state_mean
                 init_cov = self._construct_init_var(initial_diffusion, jitter=0.00001)
+                #init_cov = self._construct_init_var(initial_diffusion)
 
                 loss = 0.
                 T = values.observations[i].shape[0]
@@ -482,7 +499,8 @@ class Momentum(KalmanFilter):
                 loss += torch.trace(tll)
 
                 ell = stats.Exx[i] - stats.Exz[i] @ C.mT - C @ stats.Ezx[i] + C @ stats.Ezz[i] @ C.mT
-                ell = torch.linalg.solve(Sigma + jitter, ell)
+                #ell = torch.linalg.solve(Sigma + jitter, ell)
+                ell = torch.linalg.solve(Sigma, ell)
                 ell = torch.sum(ell, axis=0)
                 loss += torch.trace(ell)
 
@@ -491,15 +509,16 @@ class Momentum(KalmanFilter):
                 loss += torch.logdet(Gamma) * (T - 2)
                 loss /= 2.0 
 
-                loss.backward(retain_graph=True)
-                optimizer.step()
-                optimizer.zero_grad()
-
-                total_loss += loss.item()
-
-            if epoch > 0 and abs((total_loss - prev_loss) / prev_loss) < gd_tol: 
+                total_loss += loss / len(values.observations)
+            
+            if epoch > 0 and abs((total_loss.item() - prev_loss) / prev_loss) < gd_tol: 
                 break
-            prev_loss = total_loss
+
+            total_loss.backward(retain_graph=True)
+            optimizer.step()
+            optimizer.zero_grad()
+
+            prev_loss = total_loss.item()
         
         self.decay             = decay.detach()
         self.diffusion         = diffusion.detach()
@@ -541,7 +560,7 @@ class Momentum(KalmanFilter):
         Returns:
             MomentumResults: The results of the EM algorithm. Estimated parameters can be accessed from this class itself.
         """
-        values = self._initialize(self.temp_values.approximate_mean)
+        values = self._initialize(self.approximate_mean)
 
 
         for i in range(last_iter + 1, n_iter):
@@ -564,8 +583,10 @@ class Momentum(KalmanFilter):
                 print(f"Converged after {i} epochs, exiting")
                 break
 
-            if checkpoint_path and i % 50 == 0:
-                hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
+            if i % 50 == 0:
+                print(f"Iteration {i}: {-ll.item()}")
+                if checkpoint_path:
+                    hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
         
         if i == n_iter - 1:
             warnings.warn(f"Failed to converge after {i} epochs, exiting")
@@ -608,7 +629,7 @@ class Momentum(KalmanFilter):
             self.initial_state_covariance,
         ) = self._initialize_parameters()
 
-        values = self._initialize(self.temp_values.approximate_mean)
+        values = self._initialize(self.approximate_mean)
 
         if checkpoint_path is not None:
             os.makedirs(checkpoint_path, exist_ok=True)
@@ -633,15 +654,15 @@ class Momentum(KalmanFilter):
                 print(f"Converged after {i} epochs, exiting")
                 break
 
-            if checkpoint_path and i % 50 == 0:
-                hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
+            if i % 50 == 0:
+                print(f"Iteration {i}: {-ll.item()}")
+                if checkpoint_path:
+                    hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
 
         
         if i == n_iter - 1:
             warnings.warn(f"Failed to converge after {i} epochs, exiting")
 
         values.cumulative_probabilities = self._calculate_marginals(values)
-
-        os.rmdir(checkpoint_path, ignore_errors=True)
 
         return values

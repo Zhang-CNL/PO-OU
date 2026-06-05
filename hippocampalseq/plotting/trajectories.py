@@ -12,14 +12,18 @@ def plot_trajectories(trajectories: List[np.ndarray], ax=None, **kwargs):
     if ax is None:
         ax = plt.gca()
     for trajectory in trajectories:
-        assert trajectory.shape[1] == 2, "Trajectory must be 2D"
-        ax.plot(trajectory[:,0], trajectory[:,1], 'k-', alpha=.5, linewidth=.5)
+        if trajectory.shape[1] == 2:
+            ax.plot(trajectory[:,0], trajectory[:,1], 'k-', alpha=.5, linewidth=.5)
+        elif trajectory.shape[1] == 1:
+            x = np.arange(len(trajectory))
+            ax.plot(x, trajectory[:,0], 'k-', alpha=.5, linewidth=.5)
 
-    ax.set_yticks([0, 200])
-    ax.set_xticks([0, 200])
+    if trajectories[0].shape[1] == 2:
+        ax.set_yticks([0, 200])
+        ax.set_xticks([0, 200])
 
-    ax.set_ylim([0, 200])
-    ax.set_xlim([0, 200])
+        ax.set_ylim([0, 200])
+        ax.set_xlim([0, 200])
 
 @save_wrapper
 def plot_spikemat_position_aligned(

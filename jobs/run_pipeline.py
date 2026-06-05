@@ -7,7 +7,6 @@ sys.path.append(os.path.realpath(".."))
 from typing import List
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.stats import multivariate_normal
-from datetime import datetime
 import json
 import numpy as np
 import pynapple as nap
@@ -26,7 +25,9 @@ def run_model(
         dt: float, 
         bin_size: int, 
         spikemats: np.ndarray, 
-        environment_size: tuple
+        environment_size: tuple,
+        checkpoint_path: str,
+        approximation_method: str
     ):
     if model_selection == "map":
         model = hsem.BayesianMAP(
@@ -40,13 +41,15 @@ def run_model(
             spikemats, 
             dt, 
             environment_size, 
-            bin_size
+            bin_size,
+            approximation_method=approximation_method
         )
     elif model_selection == "gridsearch":
         pass
-
+    print("Constructed model. Fitting...")
     values = model.fit(
         spikemats,
+        checkpoint_path=checkpoint_path
     )
     return model,values
 
@@ -83,7 +86,6 @@ def plot_place_fields(
                 cell_selection=[i],
                 ax=ax[1]
             )
-            #plt.savefig(os.path.join(results_path, f"place_field_{i}.pdf"), dpi=300)
             pdf.savefig()
             plt.close()
 
@@ -96,12 +98,8 @@ def plot_place_fields(
             hsepl.plot_linear_placefields(
                 place_field_data.place_fields
             )
-        #plt.savefig(os.path.join(results_path, f"place_field_{i}_split.pdf"), dpi=300)
         pdf.savefig()
         plt.close(fig)
-
-    
-
 
 def plot_theta(
         values: hsem.StateSpaceResults, 
@@ -111,11 +109,13 @@ def plot_theta(
     ):
     if isinstance(values, hsem.BayesianMAPResults):
         trajectories = values.decoded_trajectories
+        negloglike   = []
     elif isinstance(values, hsem.MomentumResults):
-        trajectories = values.smoothed_mean
+        trajectories = [sm[:,:2] for sm in values.smoothed_mean]
+        negloglike   = values.negloglike
     with PdfPages(os.path.join(results_path, "theta.pdf")) as pdf:
         for i in range(len(true_trajectories)):
-            fig,axs = plt.subplots(1,3, figsize=(15,5))
+            fig,axs = plt.subplots(1,3+(1 if len(negloglike) > 0 else 0), figsize=(20,5), dpi=300)
             hsepl.plot_trajectories(
                 [true_trajectories[i]],
                 ax=axs[0]
@@ -130,6 +130,9 @@ def plot_theta(
                 aspect='auto', 
                 origin='lower'
             )
+            if len(negloglike) > 0:
+                axs[3].set_title("Negative log likelihood")
+                axs[3].plot(negloglike)
             pdf.savefig()
             plt.close(fig)
 
@@ -138,12 +141,14 @@ def plot_replay(
         results_path: str
     ):
     if isinstance(values, hsem.MomentumResults):
-        trajectory = values.smoothed_mean
+        trajectory = [sm[:,:2] for sm in values.smoothed_mean]
+        negloglike = values.negloglike
     elif isinstance(values, hsem.BayesianMAPResults):
         trajectory = values.decoded_trajectories
+        negloglike = []
     with PdfPages(os.path.join(results_path, "replay.pdf")) as pdf:
         for i in range(len(trajectory)):
-            fig,axs = plt.subplots(1,2, figsize=(10,5))
+            fig,axs = plt.subplots(1,2+(1 if len(negloglike) > 0 else 0), figsize=(15,5), dpi=300)
             hsepl.plot_trajectories(
                 [trajectory[i]],
                 ax=axs[0]
@@ -154,6 +159,9 @@ def plot_replay(
                 aspect='auto', 
                 origin='lower'
             )
+            if len(negloglike) > 0:
+                axs[2].set_title("Negative log likelihood")
+                axs[2].plot(negloglike)
             pdf.savefig()
             plt.close(fig)
 
@@ -169,7 +177,7 @@ def plot_model_approximations(
     with PdfPages(os.path.join(results_path, "model_approximations.pdf")) as pdf:
         for i in range(len(model.emission_probabilities)):
             T = model.emission_probabilities[i].shape[0]
-            fig,axs = plt.subplots(T,2, figsize=(10,5*(T+1)))
+            fig,axs = plt.subplots(T,2, figsize=(10,5*(T+1)), dpi=300)
             # Plot kldiv
             for t in range(T):
                 axs[t,0].imshow(
@@ -190,8 +198,8 @@ def plot_model_approximations(
 
 
 @click.command()
-@click.option("--data-dir", default="../data/")
-@click.option("--results-dir", default="../results")
+@click.option("--data-path", default="../data/")
+@click.option("--results-path", default="../results")
 @click.option("--place-field-posterior", is_flag=True)
 @click.option("--theta-delta-t-ms", default=10)
 @click.option("--theta-time-step-ms", default=5)
@@ -204,9 +212,10 @@ def plot_model_approximations(
 @click.option("--skip-linear", is_flag=True)
 @click.option("--rats", multiple=True, type=click.Choice(hsep.RAT_NAMES), default=hsep.RAT_NAMES)
 @click.option("--checkpoint-path", default="../checkpoints/")
+@click.option("--approximation-method", type=click.Choice(['iterative', 'analytic']), default='analytic')
 def main(
-        data_dir, 
-        results_dir, 
+        data_path, 
+        results_path, 
         place_field_posterior,
         theta_delta_t_ms,
         theta_time_step_ms,
@@ -218,30 +227,28 @@ def main(
         rerun,
         skip_linear,
         rats,
-        checkpoint_path
+        checkpoint_path,
+        approximation_method
     ):
     print(f"Processing rats: {rats}", file=sys.stdout)
 
-    time = datetime.now().strftime("%Y-%m-%d-%H")
-    results_dir = os.path.join(results_dir, time)
-    checkpoint_path = os.path.join(checkpoint_path, time)
-    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(results_path, exist_ok=True)
     os.makedirs(checkpoint_path, exist_ok=True)
     to_dump = locals()
-    with open(os.path.join(results_dir, "params.json"), 'w') as f:
+    with open(os.path.join(results_path, "params.json"), 'w') as f:
         f.write(json.dumps(to_dump))
 
     for rat in rats:
-        rat_data = os.path.join(data_dir, rat)
+        rat_data = os.path.join(data_path, rat)
         for session in os.listdir(rat_data):
-            results = os.path.join(results_dir, rat, session, model)
+            results = os.path.join(results_path, rat, session)
             if os.path.exists(results) and not rerun:
                 print(f"Skipping {rat} {session} {model}", file=sys.stdout)
                 continue
-            os.makedirs(results, exist_ok=True)
             track_type = session[:-1]
             if skip_linear and track_type == "Linear":
                 continue
+            os.makedirs(results, exist_ok=True)
 
             try: 
                 env_size = None if track_type == "Linear" else (0,0,200,200)
@@ -253,7 +260,7 @@ def main(
                 ) = hsep.preprocess_data(
                     rat_name                      = rat,
                     session                       = int(session[-1]),
-                    data_path                     = data_dir,
+                    data_path                     = data_path,
                     track_type                    = track_type,
                     velocity_cutoff               = velocity_cutoff,
                     theta_time_window_ms          = theta_delta_t_ms,
@@ -293,7 +300,9 @@ def main(
                             dt               = theta_delta_t_ms / 1000,
                             bin_size         = bin_size_cm,
                             spikemats        = theta_data.theta_spikes,
-                            environment_size = env_size
+                            environment_size = env_size,
+                            checkpoint_path  = ckpt,
+                            approximation_method = approximation_method
                         )
                     hseu.save_pickle(theta_model, os.path.join(results, "theta_model.pkl"))
                     hseu.save_pickle(theta_values, os.path.join(results, "theta_values.pkl"))
@@ -328,7 +337,9 @@ def main(
                             dt               = replay_delta_t_ms / 1000,
                             bin_size         = bin_size_cm,
                             spikemats        = ripple_data.ripple_spikes,
-                            environment_size = env_size
+                            environment_size = env_size,
+                            checkpoint_path  = ckpt,
+                            approximation_method = approximation_method
                         )
                     hseu.save_pickle(ripple_model, os.path.join(results, "ripple_model.pkl"))
                     hseu.save_pickle(ripple_values, os.path.join(results, "ripple_values.pkl"))

@@ -440,7 +440,7 @@ class KalmanFilter(StateSpace):
             return self._em_autograd(values, stats, normalize, **autograd_args)
 
     def _calculate_marginals(self, values: KalmanResults):
-        """Calculates the marginal probabilities for each bin in the environment.
+        r"""Calculates the marginal probabilities for each bin in the environment.
         What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
 
         Args:
@@ -451,17 +451,29 @@ class KalmanFilter(StateSpace):
         """
         X = torch.arange(self.environment_size[0], self.environment_size[2], self.bin_size) + self.bin_size / 2
         Y = torch.arange(self.environment_size[1], self.environment_size[3], self.bin_size) + self.bin_size / 2
+        #X,Y = torch.meshgrid(X,Y)
+        #Z = torch.stack([X.ravel(), Y.ravel()], dim=-1).reshape(-1,2)
+        Z = hseu.bin_points(X, Y)
         cumulative_probabilities = torch.zeros((len(values.smoothed_mean), len(X), len(Y)))
 
-        X,Y = torch.meshgrid(X,Y)
-        for i in range(values.smoothed_mean):
-            for t in range(values.smoothed_mean[i].shape[0]):
-                mvn = MultivariateNormal(values.smoothed_mean[i][t], values.smoothed_covariance[i][t])
-                log_prob = mvn.log_prob(torch.stack([X.ravel(), Y.ravel()]).T)
-                cumulative_probabilities[i] += log_prob.reshape(len(X), len(Y)).T 
-        cumulative_probabilities = torch.exp(cumulative_probabilities)
-        cumulative_probabilities /= cumulative_probabilities.sum(axis=(1, 2), keepdims=True)
-        return cumulative_probabilities
+        for i in range(len(values.smoothed_mean)):
+            sm = values.smoothed_mean[i][:,:2]
+            sc = values.smoothed_cov[i][:,:2,:2]
+            _cp = torch.zeros((sm.shape[0], len(X), len(Y)))
+            for t in range(sm.shape[0]):
+                mvn = MultivariateNormal(
+                    sm[t].ravel(), 
+                    sc[t]
+                )
+                log_prob = mvn.log_prob(Z)
+                log_prob = log_prob.reshape(len(X), len(Y)).T
+                _cp[t] = log_prob
+            
+            _cp -= torch.logsumexp(_cp, dim=(1, 2), keepdim=True)
+            _cp = torch.exp(_cp)
+            cumulative_probabilities[i] = _cp.sum(axis=0)
+
+        return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
 
     def fit(self, 
             X: List[torch.Tensor],

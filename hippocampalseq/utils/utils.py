@@ -259,13 +259,13 @@ def mT(x: np.ndarray|torch.Tensor):
 
 def invmul(A: np.ndarray|torch.Tensor, B: np.ndarray|torch.Tensor):
     """Computes :math:`AB^{-1}`"""
-    if isintance(A, torch.Tensor):
+    if isinstance(A, torch.Tensor):
         return mT(torch.linalg.solve(mT(B), mT(A)))
     return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
 
 def mulinv(B: np.ndarray|torch.Tensor, A: np.ndarray|torch.Tensor):
     """Computes :math:`B^{-1}A`"""
-    if isintance(A, torch.Tensor):
+    if isinstance(A, torch.Tensor):
         return torch.linalg.solve(B, A)
     return np.linalg.solve(B, A)
 

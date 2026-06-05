@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Dict
 from dataclasses import dataclass
 
 import hippocampalseq.utils as hseu
@@ -70,7 +70,8 @@ class BayesianMAP(StateSpace):
     def fit(self, 
             X: List[npt.ArrayLike], 
             maximization_type: str = 'max',
-            *_: Tuple[Any,...]
+            *_: Tuple[Any,...],
+            **_: Dict[Any,Any]
         ) -> BayesianMAPResults:
         """Run MAP decoding on a list of spikemats.
         Args:

@@ -15,7 +15,13 @@ source $(conda info --base)/etc/profile.d/conda.sh
 
 RAT_NAMES=("Harpy" "Imp" "Janni" "Naga")
 
+DATETIME=$(date +"%Y-%m-%d")
+RESULTS_PATH="../results/${DATETIME}-${SLURM_ARRAY_JOB_ID}/"
+CHECKPOINT_PATH="../checkpoints/${DATETIME}-${SLURM_ARRAY_JOB_ID}/"
+
 #conda run -n hippocampalswr python -u run_pipeline.py $@
 conda activate hippocampalswr
-python -u run_pipeline.py $@ --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}"
+python -u run_pipeline.py $@ --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}" \
+    --results-path $RESULTS_PATH \
+    --checkpoint-path $CHECKPOINT_PATH 
 #python -u run_pipeline.py $@

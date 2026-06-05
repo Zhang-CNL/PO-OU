@@ -16,14 +16,22 @@ def __draw_clipped_normal_sample(mean, sd, low, high):
             print(mean, sd, sample)
             raise ValueError("Could not draw sample")
 
-def simulate_momentum(n_steps, initial_diffusion_m, diffusion_m, decay, dt, seed=None):
+def simulate_momentum(
+        n_steps, 
+        initial_diffusion_m, 
+        diffusion_m, 
+        decay, 
+        dt, 
+        environment_size, 
+        seed=None
+    ):
     # meters to centimeters
     np.random.seed(seed)
     sd0 = initial_diffusion_m * 100 
     sd = diffusion_m * 100
 
-    low = np.array([0,0])
-    high = np.array([hseu.PFEIFFER_ENV_WIDTH_CM, hseu.PFEIFFER_ENV_HEIGHT_CM])
+    low = np.array(environment_size[:2])
+    high = np.array(environment_size[2:])
 
     trajectory = np.zeros((n_steps, 2))
 
