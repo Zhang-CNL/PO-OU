@@ -5,8 +5,8 @@
 #SBATCH --array=0-3
 #SBATCH --ntasks=1
 #SBATCH --time=20-00:00:00                                 # run time, format: D-H:M:S (max wallclock time)
-#SBATCH --output=pipeline.%j.log
-#SBATCH --error=pipeline.%j.error.log
+#SBATCH --output=./logs/pipeline.%j.log
+#SBATCH --error=./logs/pipeline.%j.error.log
 #SBATCH --mail-user=armand.rathgeb@utsouthwestern.edu
 #SBATCH --mail-type=ALL
 

@@ -28,11 +28,12 @@ def analytical_gaussian_approximation(
 
     D = z.shape[-1]
     
-    idx = torch.argmax(pz.reshape(B,-1), axis=1)
-    row,col = torch.unravel_index(idx, pz.shape[1:])
-    mu = torch.column_stack((col,row))
-    mu = mu * bin_size + bin_size / 2
-    #mu = torch.sum(pz.reshape(B, Nx*Ny, 1) * z, dim=1) # (B, D)
+    #idx = torch.argmax(pz.reshape(B,-1), axis=1)
+    #row,col = torch.unravel_index(idx, pz.shape[1:])
+    #mu = torch.column_stack((col,row))
+    #mu = mu * bin_size + bin_size / 2
+    mu = torch.sum(pz.reshape(B, Nx*Ny, 1) * z, dim=1) # (B, D)
+    mu = torch.flip(mu, dims=(1,))
     
     z_centered = z - mu.unsqueeze(1) # (B, N, D)
     z_centered = z_centered.unsqueeze(-1)
@@ -55,6 +56,7 @@ def iterative_gaussian_approximation(
     r"""Laplacian approximation for the parameters of a Gaussian distribution.
     Finds the maximum point of the distribution $P(z)$ and then optimizes for the 
     value of $\Sigma$ that minimizes the KL divergence between $P(z)$ and $Q(z)$
+    This method doesn't work as well, so ignore it tbh.
 
     Args:
         z (torch.Tensor): The data points.

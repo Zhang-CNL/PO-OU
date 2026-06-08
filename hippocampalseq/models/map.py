@@ -10,7 +10,7 @@ from .statespace import *
 @dataclass
 class BayesianMAPResults:
     decoded_trajectories: List[npt.ArrayLike]
-    cumulative_probabilities: List[npt.ArrayLike]
+    cumulative_probabilities: npt.ArrayLike
 
 class BayesianMAP(StateSpace):
     def __init__(self, place_fields: npt.ArrayLike, dt: float, bin_size_cm: float):
@@ -71,7 +71,7 @@ class BayesianMAP(StateSpace):
             X: List[npt.ArrayLike], 
             maximization_type: str = 'max',
             *_: Tuple[Any,...],
-            **_: Dict[Any,Any]
+            **__: Dict[Any,Any]
         ) -> BayesianMAPResults:
         """Run MAP decoding on a list of spikemats.
         Args:
@@ -82,11 +82,10 @@ class BayesianMAP(StateSpace):
             BayesianMAPResults: Decoded trajectories and cumulative probabilities.
         """
         trajectories = []
-        cum_probs    = []
-        for spike in X:
-            trajectory,cum_prob = self.bayesian_decoding_one(spike, maximization_type)
+        cum_probs    = np.zeros(self.place_fields.shape)
+        for t,spike in enumerate(X):
+            trajectory,cum_probs[t] = self.bayesian_decoding_one(spike, maximization_type)
             trajectories.append(trajectory)
-            cum_probs.append(cum_prob)
         return BayesianMAPResults(
             trajectories,
             cum_probs

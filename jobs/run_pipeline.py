@@ -27,7 +27,8 @@ def run_model(
         spikemats: np.ndarray, 
         environment_size: tuple,
         checkpoint_path: str,
-        approximation_method: str
+        approximation_method: str,
+        normalize: bool
     ):
     if model_selection == "map":
         model = hsem.BayesianMAP(
@@ -49,6 +50,8 @@ def run_model(
     print("Constructed model. Fitting...")
     values = model.fit(
         spikemats,
+        n_iter=10000,
+        normalize=normalize,
         checkpoint_path=checkpoint_path
     )
     return model,values
@@ -188,7 +191,7 @@ def plot_model_approximations(
                 )
                 Mean = model.approximate_mean[i][t].numpy()
                 Cov = model.approximate_covariance[i][t].numpy()
-                mvn = multivariate_normal(mean=Mean, cov=Cov)
+                mvn = multivariate_normal(mean=Mean.ravel(), cov=Cov)
                 Z = mvn.pdf(np.column_stack([X.ravel(), Y.ravel()]))
                 Z = Z.reshape(X.shape) / np.sum(Z)
                 axs[t,1].contourf(X,Y,Z, cmap='hot', aspect='auto', origin='lower')
@@ -203,8 +206,8 @@ def plot_model_approximations(
 @click.option("--place-field-posterior", is_flag=True)
 @click.option("--theta-delta-t-ms", default=10)
 @click.option("--theta-time-step-ms", default=5)
-@click.option("--replay-delta-t-ms", default=5)
-@click.option("--replay-time-step-ms", default=5)
+@click.option("--replay-delta-t-ms", default=3)
+@click.option("--replay-time-step-ms", default=3)
 @click.option("--velocity-cutoff", default=10)
 @click.option("--model", default="map", type=click.Choice(['map', 'momentum', 'gridsearch']))
 @click.option("--bin-size-cm", default=2)
@@ -213,6 +216,7 @@ def plot_model_approximations(
 @click.option("--rats", multiple=True, type=click.Choice(hsep.RAT_NAMES), default=hsep.RAT_NAMES)
 @click.option("--checkpoint-path", default="../checkpoints/")
 @click.option("--approximation-method", type=click.Choice(['iterative', 'analytic']), default='analytic')
+@click.option("--normalize", is_flag=True)
 def main(
         data_path, 
         results_path, 
@@ -228,7 +232,8 @@ def main(
         skip_linear,
         rats,
         checkpoint_path,
-        approximation_method
+        approximation_method, 
+        normalize
     ):
     print(f"Processing rats: {rats}", file=sys.stdout)
 
@@ -236,7 +241,8 @@ def main(
     os.makedirs(checkpoint_path, exist_ok=True)
     to_dump = locals()
     with open(os.path.join(results_path, "params.json"), 'w') as f:
-        f.write(json.dumps(to_dump))
+        f.write(json.dumps(to_dump, indent=4, sort_keys=True))
+        print(json.dumps(to_dump))
 
     for rat in rats:
         rat_data = os.path.join(data_path, rat)
@@ -302,7 +308,8 @@ def main(
                             spikemats        = theta_data.theta_spikes,
                             environment_size = env_size,
                             checkpoint_path  = ckpt,
-                            approximation_method = approximation_method
+                            approximation_method = approximation_method, 
+                            normalize        = normalize
                         )
                     hseu.save_pickle(theta_model, os.path.join(results, "theta_model.pkl"))
                     hseu.save_pickle(theta_values, os.path.join(results, "theta_values.pkl"))
@@ -339,7 +346,8 @@ def main(
                             spikemats        = ripple_data.ripple_spikes,
                             environment_size = env_size,
                             checkpoint_path  = ckpt,
-                            approximation_method = approximation_method
+                            approximation_method = approximation_method,
+                            normalize        = normalize
                         )
                     hseu.save_pickle(ripple_model, os.path.join(results, "ripple_model.pkl"))
                     hseu.save_pickle(ripple_values, os.path.join(results, "ripple_values.pkl"))
