@@ -1,21 +1,9 @@
 import numpy as np
 import torch 
-import torch.nn.functional as F
 from torch.distributions import MultivariateNormal
 from typing import Tuple
 
 from hippocampalseq.utils import atleast_2d
-
-def _to_cholesky(L_raw: torch.Tensor) -> torch.Tensor:
-    """
-    Map an unconstrained (B, D, D) matrix to a valid lower-triangular
-    Cholesky factor with strictly positive diagonal via softplus.
-    """
-    L = torch.tril(L_raw)                                        # zero upper triangle
-    diag_pos = F.softplus(L.diagonal(dim1=-2, dim2=-1))          # positive diagonal
-    # Replace diagonal in-place-safe manner
-    L = L - torch.diag_embed(L.diagonal(dim1=-2, dim2=-1)) + torch.diag_embed(diag_pos)
-    return L
 
 def analytical_gaussian_approximation(
         z: torch.Tensor, 
@@ -24,27 +12,20 @@ def analytical_gaussian_approximation(
     ) -> Tuple[torch.Tensor, torch.Tensor]:
     B, Nx, Ny = pz.shape
     if z.ndim == 2:
-        z = z.unsqueeze(0).expand(B,-1,-1)        
+        z = z.unsqueeze(0).expand(B,-1,-1) 
 
     D = z.shape[-1]
     
-    #idx = torch.argmax(pz.reshape(B,-1), axis=1)
-    #row,col = torch.unravel_index(idx, pz.shape[1:])
-    #mu = torch.column_stack((col,row))
-    #mu = mu * bin_size + bin_size / 2
-    mu = torch.sum(pz.reshape(B, Nx*Ny, 1) * z, dim=1) # (B, D)
-    mu = torch.flip(mu, dims=(1,))
+    mu = torch.sum(pz.reshape(B, Nx*Ny, 1) * z, dim=1) / torch.sum(pz,dim=(1,2))[:,None]
     
     z_centered = z - mu.unsqueeze(1) # (B, N, D)
     z_centered = z_centered.unsqueeze(-1)
     
     outer_products = z_centered @ z_centered.transpose(-2,-1)
     sigma = torch.sum(pz.view(B, Nx*Ny, 1, 1) * outer_products, dim=1) # (B, D, D)
-    sigma /= Nx*Ny
     
     return mu.unsqueeze(-1), sigma
 
-#def laplacian_approximation(z: torch.Tensor, pz: torch.Tensor, kl: str = "pq", lr: float = .01, n_epochs: int = 1000):
 def iterative_gaussian_approximation(
         z: torch.Tensor, 
         pz: torch.Tensor, 
@@ -71,12 +52,9 @@ def iterative_gaussian_approximation(
     """
     assert kl in ["pq", "qp"]
     n_dims = z.shape[1] if z.ndim > 1 else 1
+    Nx,Ny = pz.shape
 
-    mu = torch.unravel_index(torch.argmax(pz), pz.shape)
-    mu = torch.tensor(mu, dtype=torch.double)[:,None]
-    mu = torch.flip(mu, dims=(0,))
-    mu = mu * bin_size + bin_size / 2
-
+    mu = torch.sum(pz.reshape(Nx*Ny,1) * z, dim=0) / torch.sum(pz)
     pz = pz.ravel()
     lpz = torch.log(pz + 1e-12)
     csigma = torch.eye(n_dims, requires_grad=True)

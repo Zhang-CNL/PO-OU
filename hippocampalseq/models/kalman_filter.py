@@ -439,7 +439,7 @@ class KalmanFilter(StateSpace):
         elif maximization_type == 'autograd':
             return self._em_autograd(values, stats, normalize, **autograd_args)
 
-    def _calculate_marginals(self, values: KalmanResults) -> torch.Tensor:
+    def _calculate_marginals(self, environment_size, bin_size, values: KalmanResults) -> torch.Tensor:
         r"""Calculates the marginal probabilities for each bin in the environment.
         What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
 
@@ -449,24 +449,22 @@ class KalmanFilter(StateSpace):
         Returns:
             torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
         """
-        X = torch.arange(self.environment_size[0], self.environment_size[2], self.bin_size) + self.bin_size / 2
-        Y = torch.arange(self.environment_size[1], self.environment_size[3], self.bin_size) + self.bin_size / 2
-        #X,Y = torch.meshgrid(X,Y)
-        #Z = torch.stack([X.ravel(), Y.ravel()], dim=-1).reshape(-1,2)
-        Z = hseu.bin_points(X, Y)
-        cumulative_probabilities = torch.zeros((len(values.smoothed_mean), len(X), len(Y)))
+        Lx = int((environment_size[2] - environment_size[0]) / bin_size)
+        Ly = int((environment_size[3] - environment_size[1]) / bin_size)
+        Z = hseu.create_grid(environment_size, bin_size)
+        cumulative_probabilities = torch.zeros((len(values.smoothed_mean), Lx, Ly))
 
         for i in range(len(values.smoothed_mean)):
             sm = values.smoothed_mean[i][:,:2]
             sc = values.smoothed_cov[i][:,:2,:2]
-            _cp = torch.zeros((sm.shape[0], len(X), len(Y)))
+            _cp = torch.zeros((sm.shape[0], Lx, Ly))
             for t in range(sm.shape[0]):
                 mvn = MultivariateNormal(
                     sm[t].ravel(), 
                     sc[t]
                 )
                 log_prob = mvn.log_prob(Z)
-                log_prob = log_prob.reshape(len(X), len(Y)).T
+                log_prob = log_prob.reshape(Lx, Ly)
                 _cp[t] = log_prob
             
             _cp -= torch.logsumexp(_cp, dim=(1, 2), keepdim=True)

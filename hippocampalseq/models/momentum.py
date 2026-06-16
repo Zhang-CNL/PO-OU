@@ -23,7 +23,6 @@ def resume_from_checkpoint(
         n_iter: int = 100, 
         emtol: float = 1e-3, 
         maximization_type: str = 'autograd', 
-        normalize: bool = False, 
         **diff_args
     ) -> Tuple[Momentum, MomentumResults]:
     nums = []
@@ -39,7 +38,6 @@ def resume_from_checkpoint(
         n_iter,
         emtol,
         maximization_type,
-        normalize,
         **diff_args
     )
     return model,values
@@ -94,18 +92,12 @@ class Momentum(KalmanFilter):
             raise ValueError(f"Data type {data_type} not recognized.")
             """
 
-        self.DIFFUSION_SCALE = torch.tensor(1.0)
-        self.DECAY_SCALE     = torch.tensor(1.0)
-
         self.dt               = torch.tensor(dt)
         self.environment_size = environment_size
         self.bin_size         = bin_size
         assert len(environment_size) == 2*self.latent_dim, "Environment shape and latent dimensions must match"
 
-
-        x = torch.arange(environment_size[0], environment_size[2], bin_size) + bin_size/2
-        y = torch.arange(environment_size[1], environment_size[3], bin_size) + bin_size/2
-        self.grid = hseu.bin_points(x,y)
+        self.grid = hseu.create_grid(self.environment_size, self.bin_size)
 
         if seed is not None:
             torch.random.manual_seed(seed)
@@ -121,7 +113,6 @@ class Momentum(KalmanFilter):
         self.emission_probabilities = []
         self.approximate_mean       = []
         self.approximate_covariance = []
-        #self.entropy                = []
         for k,v in enumerate(spikemat):
             ep = torch.from_numpy(v).double()
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
@@ -135,7 +126,6 @@ class Momentum(KalmanFilter):
                 T = emission_probability.shape[0]
                 approx_mean = torch.zeros(T, self.latent_dim, 1)
                 approx_cov  = torch.zeros(T, self.latent_dim, self.latent_dim)
-                #entropy     = torch.zeros(T)
                 for t in range(T):
                     approx_mean[t], approx_cov[t],_ = hseu.iterative_gaussian_approximation(
                         self.grid,
@@ -152,11 +142,10 @@ class Momentum(KalmanFilter):
             self.emission_probabilities.append(emission_probability)
             self.approximate_mean.append(approx_mean)
             self.approximate_covariance.append(approx_cov)
-            #self.entropy.append(entropy)
 
 
         # Random initialization of parameters
-        # Scale of 10 meters
+        # Scale of ln(10) meters
         self.decay             = torch.rand(1) 
         self.diffusion         = torch.rand(1) 
         self.initial_diffusion = torch.rand(1) 
@@ -167,12 +156,6 @@ class Momentum(KalmanFilter):
                     self.diffusion, 
                     self.dt
                 )
-
-        # K&D has 10m/s as the initial diffusion, so this is that scaled
-        #self.initial_diffusion = torch.tensor(10.0)
-
-        #self.diffusion = torch.tensor(.24)
-        #self.decay     = torch.tensor(2.0)
 
         # TODO: Simple Bayesian decoder to get z from my approx_mean
         #a,b = _init_momentum_params(self.approx_mean.numpy())
@@ -233,8 +216,7 @@ class Momentum(KalmanFilter):
     def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
         I = torch.eye(self.latent_dim)
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
-        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion * initial_diffusion \
-                                                        * self.dt * I
+        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion**2 * self.dt * I
         init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
         return init_cov
 
@@ -242,7 +224,7 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
-        ex     = torch.exp(-decay * self.DECAY_SCALE * self.dt)
+        ex     = torch.exp(-decay * self.dt)
         A1     = I * (1 + ex)
         A2     = I * ex
         top    = torch.cat((A1, A2), dim=1)
@@ -254,9 +236,8 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros(self.latent_dim, self.latent_dim)
 
-        Q = (self.DIFFUSION_SCALE * diffusion * self.dt) ** 2 \
-            / (2*decay * self.DECAY_SCALE) \
-            * (1 - torch.exp(-2*decay * self.DECAY_SCALE * self.dt)) * I
+        Q = (diffusion * self.dt) ** 2 / (2*decay) \
+            * (1 - torch.exp(-2*decay * self.dt)) * I
         top    = torch.cat((Q, Z), dim=1)
         bottom = torch.cat((Z, I * jitter), dim=1)
         Gamma = torch.cat((top, bottom), dim=0)
@@ -276,6 +257,7 @@ class Momentum(KalmanFilter):
         # $z_2 = I z_1 + \sigma_0^2dt\xi_1$
         init_mean = torch.zeros(self.augmented_dim, self.augmented_dim)
         init_mean[:self.latent_dim, :self.latent_dim] = I
+        #init_mean[:self.latent_dim, self.latent_dim:] = I
         init_mean[self.latent_dim:, :self.latent_dim] = I
         init_cov = self._construct_init_var(self.initial_diffusion.exp())
         return init_mean, init_cov
@@ -311,24 +293,34 @@ class Momentum(KalmanFilter):
         Results:
             (MomentumResults): Filtered results
         """
-        I = torch.eye(self.augmented_dim)
-        # Deal with the uniform prior using the information filter
-        # Since the uniform prior contains 0 precision, only the likelihood function contributes 
-        sigma0i = torch.inverse(self.observation_covariance[batch][0])
-        omega0 = self.observation_matrices.T @ sigma0i @ self.observation_matrices
-        xi0 = self.observation_matrices.T @ sigma0i @ values.observations[batch][0]
+        mu1 = values.observations[batch][0]
+        P1  = self.observation_covariance[batch][0]
 
-        P0  = torch.inverse(omega0 + .00001 * torch.eye(self.augmented_dim))
-        #P0 = torch.inverse(omega0)
-        mu0 = P0 @ xi0
-        P0  = 0.5 * (P0 + P0.T)
+        """
+        dx = self.environment_size[2] - self.environment_size[0]
+        dy = self.environment_size[3] - self.environment_size[1]
+        mu0 = torch.tensor([
+            [dx / 2],
+            [dy / 2]
+        ])
+        P0 = torch.tensor([
+            [dx**2 / 12, 0],
+            [0, dy**2 / 12]
+        ])
+        # C is an identity matrix here, so we can ignore it.
+        K1  = hseu.invmul(P0, P0 + self.observation_covariance[batch][0])
+        mu1 = mu0 + K1 @ (values.observations[batch][0] - mu0)
+        P1  = (torch.eye(self.latent_dim) - K1) @ P0
+        """
 
         # Filtered mean and covariance are augmented state spaces
         # $s_t = (z_t, z_{t-1})^T$
-        values.filtered_mean[batch][0]  = mu0
-        values.filtered_cov[batch][0]   = P0
-        values.predicted_mean[batch][0] = self.initial_state_mean @ mu0
-        values.predicted_cov[batch][0]  = self.initial_state_mean @ P0 @ self.initial_state_mean.T + self.initial_state_covariance
+        #values.filtered_mean[batch][0]  = mu0
+        #values.filtered_cov[batch][0]   = P0
+        values.filtered_mean[batch][0]  = mu1.repeat(self.latent_dim,1)
+        values.filtered_cov[batch][0]   = P1.repeat(self.latent_dim,self.latent_dim)
+        values.predicted_mean[batch][0] = self.initial_state_mean @ values.filtered_mean[batch][0]
+        values.predicted_cov[batch][0]  = self.initial_state_mean @ values.filtered_cov[batch][0] @ self.initial_state_mean.T + self.initial_state_covariance
 
         # Now we can calculate it for $P(z_1|z_0)$
         return values
@@ -349,25 +341,24 @@ class Momentum(KalmanFilter):
         A = self.transition_matrices if t > 1 else self.initial_state_mean
         C = self.observation_matrices
         gamma = self.transition_covariance if t > 1 else self.initial_state_covariance
-        sigma = self.observation_covariance[batch]
+        sigma = self.observation_covariance[batch][t]
 
         Am1 = values.predicted_mean[batch][t-1]
         Pn1 = values.predicted_cov[batch][t-1]
 
         PnCt = Pn1 @ C.T
-        K = hseu.invmul(PnCt, C @ PnCt + sigma[t])
+        K = hseu.invmul(PnCt, C @ PnCt + sigma)
 
         mu_t = Am1 + K @ (values.observations[batch][t] - C @ Am1)
         v_t = (torch.eye(self.augmented_dim) - K @ C) @ Pn1
 
-        Am = A @ mu_t
-        Pt = A @ v_t @ A.T + gamma
-        #Pt = .5 * (Pt + Pt.T)
+        Am = self.transition_matrices @ mu_t
+        Pt = self.transition_matrices @ v_t @ self.transition_matrices.T + self.transition_covariance
 
-        values.predicted_mean[batch][t] = Am
-        values.predicted_cov[batch][t]  = Pt
-        values.filtered_mean[batch][t]  = mu_t
-        values.filtered_cov[batch][t]   = v_t
+        values.predicted_mean[batch][t] = Am   # $\mu_{t+1|t}$
+        values.predicted_cov[batch][t]  = Pt   # $P_{t+1|t}$
+        values.filtered_mean[batch][t]  = mu_t # $\mu_{t|t}$
+        values.filtered_cov[batch][t]   = v_t  # $P_{t|t}$
 
         return values
 
@@ -389,8 +380,8 @@ class Momentum(KalmanFilter):
             Amt = values.predicted_mean[batch][t]
             Pt  = values.predicted_cov[batch][t]
 
-            #J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
-            J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt)
+            J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
+            #J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt)
             muht = values.filtered_mean[batch][t] + J @ (values.smoothed_mean[batch][t+1] - Amt) 
             vht = values.filtered_cov[batch][t] + J @ (values.smoothed_cov[batch][t+1] - Pt) @ J.mT
 
@@ -400,6 +391,43 @@ class Momentum(KalmanFilter):
             return values
         else:
             return super()._smooth(values, batch, t)
+
+    def _calc_sufficient_stats(self, values: MomentumResults) -> KalmanStatistics:
+        """
+        Calculate sufficient statistics for performing maximization given the filtered
+        and smoothed values of the model.
+        Avoids calculating various unused values from the Kalman filtering version.
+
+        Args:
+            values (MomentumResults): The filtered and smoothed values of the model.
+
+        Returns:
+            KalmanStatistics: The sufficient statistics of the model.
+        """
+        btrace = torch.vmap(torch.trace)
+        Cov  = [
+            (sc[1:,:self.latent_dim,:self.latent_dim] @ sg[:-1,:self.latent_dim,:self.latent_dim].mT)
+                for sc,sg in zip(values.smoothed_cov, values.smoothed_gain)
+        ]
+        Ez   = [ez[:,:self.latent_dim] for ez in values.smoothed_mean]
+        Ezz  = [
+            (sm[:,:self.latent_dim].mT @ sm[:,:self.latent_dim]).squeeze() 
+                for sm in values.smoothed_mean
+        ]
+        Ezz1 = [
+            btrace(c).squeeze() + (sm[1:,:self.latent_dim].mT @ sm[:-1,:self.latent_dim]).squeeze()
+                for c,sm in zip(Cov,values.smoothed_mean)
+        ]
+        return KalmanStatistics(
+            Cov=Cov,
+            Ez=Ez,
+            Ezz=Ezz,
+            Ezz1=Ezz1,
+            Ez1z=None,
+            Exx=None,
+            Exz=None,
+            Ezx=None
+        )
 
     def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
         """Calculate the log-likelihood for the model given the current state.
@@ -448,13 +476,44 @@ class Momentum(KalmanFilter):
 
         return ll
 
+    # These derivations were just wrong because we can't do block decomposition of the logdet matrix
+    """
+    def _initial_diffusion_mle(self, values: MomentumResults, stats: SufficientStatistics):
+        idiff = 0.0
+        for b in range(len(values.observations)):
+            # $Cov[z_t^T,z_{t-1}] = tr(\hat{V}_tJ_{t-1})$
+            # $\mathop{\mathbb{E}}[z_t^Tz_{t-1}] = Cov[z_t^T,z_{t-1}] + \mathop{\mathbb{E}}[z_t^T] \mathop{\mathbb{E}}[z_{t-1}]$
+            ez2z2 = stats.Ez[b][1].mT @ stats.Ez[b][1]
+            ez2z1 = 2*(torch.trace(stats.Cov[b][1]) + stats.Ez[b][1].mT @ stats.Ez[b][0])
+            ez1z1 = stats.Ez[b][0].mT @ stats.Ez[b][0]
+            idiff += torch.sqrt((ez2z2 - ez2z1 + ez1z1) / (2 * self.dt))
+        return idiff / len(values.observations)
+
+    def _diffusion_mle(self, values: MomentumResults, stats: SufficientStatistics):
+        btrace = torch.vmap(torch.trace)
+        decay = torch.exp(self.decay)
+        scaling = decay / (self.dt**2 * (1- torch.exp(-2 * decay * self.dt)))
+        scaling2 = 1 + torch.exp(-decay * self.dt)
+        diffusion = 0
+        for b in range(len(values.observations)):
+            sf = scaling / (len(values.observations[b]) - 2)
+            Ez = stats.Ez[b].mT @ stats.Ez[b]
+            Eztzt1 = 2 * scaling2 * (btrace(stats.Cov[b][2:]) + stats.Ez[b][2:].mT @ stats.Ez[b][1:-1])
+            Ez1 = scaling2**2 * Ez[1:-1]
+            diffusion += torch.sqrt(sf * (Ez[2:] - Eztzt1 + Ez1))
+        return diffusion / len(values.observations)
+
+    def _decay_mle(self, values: MomentumResults, stats: SufficientStatistics):
+        raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
+    """
+
     def _em_mle(self, values, stats, normalize):
         raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
 
     def _em_autograd(self, 
             values: MomentumResults,
             stats: SufficientStatistics,
-            normalize: bool,
+            _: bool,
             optimizer: str = "Adam",
             lr: float = .01, 
             n_epochs: int = 1000, 
@@ -466,7 +525,7 @@ class Momentum(KalmanFilter):
         Args:
             values (MomentumResults): Momentum filtering pass results.
             stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
-            normalize (bool): If True, normalize the transition and observation matrices.
+            _ (bool): Option to normalize the transition and observation matrices. Ignored.
             optimizer (str): The optimizer to use.
             lr (float): Learning rate for the optimizer.
             n_epochs (int): Number of epochs for SGD.
@@ -486,7 +545,6 @@ class Momentum(KalmanFilter):
         }
 
         I = torch.eye(self.latent_dim)
-        Z = torch.zeros((self.latent_dim, self.latent_dim))
 
         decay             = torch.zeros(1, requires_grad=True)
         diffusion         = torch.zeros(1, requires_grad=True)
@@ -502,57 +560,38 @@ class Momentum(KalmanFilter):
         )
 
         prev_loss = np.inf
+        btrace = torch.vmap(torch.trace)
+
+        Ezz  = stats.Ezz
+        Ezz1 = stats.Ezz1
 
         for epoch in range(n_epochs):
             total_loss = 0
 
+            _idiff = torch.exp(initial_diffusion)
+            _diff  = torch.exp(diffusion)
+            _decay = torch.exp(decay)
+
+            v1 = _idiff**2 * self.dt
+            alpha = 1 + torch.exp(-_decay * self.dt)
+            gamma = (_diff * self.dt)**2 / (2 * _decay) * (1 - torch.exp(-2 * _decay * self.dt))
+
             for i in range(len(values.observations)):
-                A = self._construct_transition_mat(
-                    torch.exp(decay), 
-                    torch.exp(diffusion)
-                )
-                C = self.observation_matrices
-                Gamma = self._construct_transition_cov(
-                    torch.exp(decay),
-                    torch.exp(diffusion),
-                    jitter=1e-6
-                )
-                Sigma = self.observation_covariance[i]
-
-                if normalize:
-                    A = A / torch.sum(A, axis=1, keepdim=True)
-                    C = C /  torch.sum(C, axis=1, keepdim=True)
-
-                init_mat = self.initial_state_mean
-                init_cov = self._construct_init_var(
-                    torch.exp(initial_diffusion),
-                    jitter=1e-6
-                )
-
-                loss = 0.
+                loss = 0. 
                 T = values.observations[i].shape[0]
 
-                ill = stats.Ezz[i][1] - stats.Ezz1[i][0] @ init_mat.mT - init_mat @ stats.Ez1z[i][0] + init_mat @ stats.Ezz[i][0] @ init_mat.mT
-                ill = torch.linalg.solve(init_cov, ill)
-                loss += torch.trace(ill)
+                ill = Ezz[i][1] - 2 * Ezz1[i][0] + Ezz[i][0]
+                ill = ill / v1
+                ill = torch.log(v1**2) + ill
+                loss += ill
 
-                tll = stats.Ezz[i][2:] - stats.Ezz1[i][1:] @ A.mT - A @ stats.Ez1z[i][1:]  + A @ stats.Ezz[i][1:-1] @ A.mT
-                tll = torch.sum(tll, axis=0)
-                tll = torch.linalg.solve(Gamma, tll)
-                loss += torch.trace(tll)
+                tll = Ezz[i][2:] - 2 * alpha * Ezz1[i][1:] + alpha**2 * Ezz[i][1:-1]
+                tll = torch.sum(tll,axis=0) / gamma
+                tll = (T-2) * torch.log(gamma**2) + tll
+                loss += tll
 
-                ell = stats.Exx[i] - stats.Exz[i] @ C.mT - C @ stats.Ezx[i] + C @ stats.Ezz[i] @ C.mT
-                ell = torch.linalg.solve(Sigma, ell)
-                ell = torch.sum(ell, axis=0)
-                loss += torch.trace(ell)
+                total_loss += loss / (2*len(values.observations))
 
-                loss += torch.sum(torch.logdet(Sigma))
-                loss += torch.logdet(init_cov)
-                loss += torch.logdet(Gamma) * (T - 2)
-                loss /= 2.0 
-
-                total_loss += loss / len(values.observations)
-            
             if epoch > 0 and abs((total_loss.item() - prev_loss) / prev_loss) < gd_tol: 
                 break
 
@@ -582,8 +621,7 @@ class Momentum(KalmanFilter):
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
-            normalize: bool = False, 
-            checkpoint_path: str|None = "./checkpoint/",
+            checkpoint_path: str|None = None,
             **diff_args
         ) -> MomentumResults:
         """Resume training from a checkpoint. 
@@ -594,8 +632,7 @@ class Momentum(KalmanFilter):
             n_iter (int, optional): The number of epochs to train for. Defaults to 100.
             emtol (float, optional): The tolerance for the EM algorithm. Defaults to 1e-3.
             maximization_type (str, optional): The type of maximization to use. Defaults to 'autograd'.
-            normalize (bool, optional): Whether to normalize the transition and observation matrices. Defaults to False.
-            checkpoint_path (str, optional): The path to save checkpoint files to. If `None`, no checkpoint files will be saved. Defaults to "./checkpoint/".
+            checkpoint_path (str, optional): The path to save checkpoint files to. If `None`, no checkpoint files will be saved. Defaults to None.
             **diff_args: Keyword arguments to pass to the `_em` method.
 
         Returns:
@@ -610,7 +647,7 @@ class Momentum(KalmanFilter):
                 values = self.smooth(values)
             ll = self._em(
                 values,
-                normalize,
+                False,
                 maximization_type,
                 **diff_args
             )
@@ -643,8 +680,7 @@ class Momentum(KalmanFilter):
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
-            normalize: bool = False, 
-            checkpoint_path: str|None = "./checkpoint/",
+            checkpoint_path: str|None = None,
             **diff_args
         ) -> MomentumResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
@@ -654,7 +690,6 @@ class Momentum(KalmanFilter):
             n_iter (int): Number of EM iterations.
             emtol (float): Tolerance for the change in log-likelihood between iterations.
             maximization_type (str): Type of maximization algorithm to use. In this model, only 'autograd' is implemented.
-            normalize (bool): Whether to normalize the transition and observation matrices. Defaults to False.
             checkpoint_path (str|None): Path to save checkpoint files. Checkpoint files are deleted after a successful run.
             **diff_args: Keyword arguments to pass to the parent class's maximization method.
 
@@ -681,8 +716,8 @@ class Momentum(KalmanFilter):
                 values = self.smooth(values)
             ll = self._em(
                 values,
-                normalize,
-                maximization_type,
+                normalize=False,
+                maximization_type=maximization_type,
                 **diff_args
             )
 
@@ -704,6 +739,6 @@ class Momentum(KalmanFilter):
         if i == n_iter - 1:
             warnings.warn(f"Failed to converge after {i} epochs, exiting")
 
-        values.cumulative_probabilities = self._calculate_marginals(values)
+        values.cumulative_probabilities = self._calculate_marginals(self.environment_size, self.bin_size, values)
 
         return values

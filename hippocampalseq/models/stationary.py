@@ -24,7 +24,7 @@ class Stationary(Statespace):
         *_: Tuple[Any,...],
         **__: Dict[Any,Any]
     ):
-        cumulative_probabilities = np.zeros_like(self.place_fields)
+        cumulative_probabilities = np.zeros_like((len(X),)+self.place_fields.shape[1:])
         model_evidence = []
         for t,spike in enumerate(X):
             spike = spike[np.where(spike.sum(axis=1))]

@@ -82,7 +82,7 @@ class BayesianMAP(StateSpace):
             BayesianMAPResults: Decoded trajectories and cumulative probabilities.
         """
         trajectories = []
-        cum_probs    = np.zeros(self.place_fields.shape)
+        cum_probs    = np.zeros((len(X),)+self.place_fields.shape[1:])
         for t,spike in enumerate(X):
             trajectory,cum_probs[t] = self.bayesian_decoding_one(spike, maximization_type)
             trajectories.append(trajectory)

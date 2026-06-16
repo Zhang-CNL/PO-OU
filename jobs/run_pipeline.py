@@ -56,53 +56,7 @@ def run_model(
     )
     return model,values
 
-def plot_place_fields(
-        place_field_data: hsep.PlaceFields, 
-        raw_data: nap.TsdFrame, 
-        track_type: str, 
-        results_path: str 
-    ):
-    with PdfPages(os.path.join(results_path, "place_fields.pdf")) as pdf:
-        for i in range(len(place_field_data.place_fields)):
-            fig,ax = plt.subplots(1,2,figsize=(20,10), dpi=300)
-            plt.title(f"Place cell {i}")
-            if track_type == 'Open':
-                hsepl.plot_open_placefields(
-                    place_field_data.place_fields,
-                    pfs=[i],
-                    show_titles=False,
-                    ax=ax[0],
-                )
-                esize = (0,0,200,200)
-            elif track_type == 'Linear':
-                hsepl.plot_linear_placefields(
-                    place_field_data.place_fields,
-                    pfs=[i],
-                    ax=ax[0]
-                )
-                esize=None
-            hsepl.plot_spikemat_position_aligned(
-                raw_data.running_spike_info,
-                raw_data.raw_position,
-                place_field_data.place_cell_ids, 
-                environment_size=esize,
-                cell_selection=[i],
-                ax=ax[1]
-            )
-            pdf.savefig()
-            plt.close()
 
-        if track_type == 'Open':
-            hsepl.plot_open_placefields(
-                place_field_data.place_fields,
-                show_titles=False,
-            )
-        elif track_type == 'Linear':
-            hsepl.plot_linear_placefields(
-                place_field_data.place_fields
-            )
-        pdf.savefig()
-        plt.close(fig)
 
 def plot_theta(
         values: hsem.StateSpaceResults, 
@@ -242,7 +196,7 @@ def main(
     to_dump = locals()
     with open(os.path.join(results_path, "params.json"), 'w') as f:
         f.write(json.dumps(to_dump, indent=4, sort_keys=True))
-        print(json.dumps(to_dump))
+        print(json.dumps(to_dump, indent=4, sort_keys=True), file=sys.stdout)
 
     for rat in rats:
         rat_data = os.path.join(data_path, rat)
@@ -256,121 +210,121 @@ def main(
                 continue
             os.makedirs(results, exist_ok=True)
 
-            try: 
-                env_size = None if track_type == "Linear" else (0,0,200,200)
-                (
-                    raw_data,
-                    place_field_data,
-                    theta_data,
-                    ripple_data
-                ) = hsep.preprocess_data(
-                    rat_name                      = rat,
-                    session                       = int(session[-1]),
-                    data_path                     = data_path,
-                    track_type                    = track_type,
-                    velocity_cutoff               = velocity_cutoff,
-                    theta_time_window_ms          = theta_delta_t_ms,
-                    theta_time_window_advance_ms  = theta_time_step_ms,
-                    ripple_time_window_ms         = replay_delta_t_ms,
-                    ripple_time_window_advance_ms = replay_time_step_ms,
-                    environment_size              = env_size,
-                    bin_size_cm                   = bin_size_cm
+            #try: 
+            env_size = None if track_type == "Linear" else (0,0,200,200)
+            (
+                raw_data,
+                place_field_data,
+                theta_data,
+                ripple_data
+            ) = hsep.preprocess_data(
+                rat_name                      = rat,
+                session                       = int(session[-1]),
+                data_path                     = data_path,
+                track_type                    = track_type,
+                velocity_cutoff               = velocity_cutoff,
+                theta_time_window_ms          = theta_delta_t_ms,
+                theta_time_window_advance_ms  = theta_time_step_ms,
+                ripple_time_window_ms         = replay_delta_t_ms,
+                ripple_time_window_advance_ms = replay_time_step_ms,
+                environment_size              = env_size,
+                bin_size_cm                   = bin_size_cm
+            )
+            print(f"Finished pre-processing {rat} {session}", file=sys.stdout)
+
+            if track_type == 'Linear':
+                env_size = (
+                    np.min(raw_data.raw_position['x']),
+                    np.min(raw_data.raw_position['y']),
+                    np.max(raw_data.raw_position['x']),
+                    np.max(raw_data.raw_position['y'])
                 )
-                print(f"Finished pre-processing {rat} {session}", file=sys.stdout)
 
-                if track_type == 'Linear':
-                    env_size = (
-                        np.min(raw_data.raw_position['x']),
-                        np.min(raw_data.raw_position['y']),
-                        np.max(raw_data.raw_position['x']),
-                        np.max(raw_data.raw_position['y'])
+            hsepl.plot_place_fields(
+                place_field_data,
+                raw_data,
+                track_type,
+                results
+            )
+            #try:
+            ckpt = os.path.join(checkpoint_path, rat, session, model, "theta")
+            if os.path.exists(ckpt):
+                print(f"Loading checkpoint {ckpt}", file=sys.stdout)
+                theta_model,theta_values = hsem.resume_from_checkpoint(
+                    ckpt
+                )
+            else:
+                theta_model,theta_values = run_model(
+                    model_selection  = model,
+                    place_field_data = place_field_data,
+                    dt               = theta_delta_t_ms / 1000,
+                    bin_size         = bin_size_cm,
+                    spikemats        = theta_data.theta_spikes,
+                    environment_size = env_size,
+                    checkpoint_path  = ckpt,
+                    approximation_method = approximation_method, 
+                    normalize        = normalize
+                )
+            hseu.save_pickle(theta_model, os.path.join(results, "theta_model.pkl"))
+            hseu.save_pickle(theta_values, os.path.join(results, "theta_values.pkl"))
+
+            print(f"Finished theta {rat} {session}", file=sys.stdout)
+
+            plot_theta(
+                theta_values,
+                theta_data.true_trajectory,
+                track_type,
+                results
+            )
+            plot_model_approximations(
+                theta_model,
+                results
+            )
+            #except Exception as e:
+            #    print(f"Failed to process {rat}:{session} theta. Skipping...", file=sys.stderr)
+            #    print(e, file=sys.stderr)
+
+            try: 
+                ckpt = os.path.join(checkpoint_path, rat, session, model, "ripple")
+                if os.path.exists(ckpt):
+                    print(f"Loading checkpoint {ckpt}", file=sys.stdout)
+                    ripple_model,ripple_values = hsem.resume_from_checkpoint(
+                        ckpt
                     )
+                else:
+                    ripple_model,ripple_values = run_model(
+                        model_selection  = model,
+                        place_field_data = place_field_data,
+                        dt               = replay_delta_t_ms / 1000,
+                        bin_size         = bin_size_cm,
+                        spikemats        = ripple_data.ripple_spikes,
+                        environment_size = env_size,
+                        checkpoint_path  = ckpt,
+                        approximation_method = approximation_method,
+                        normalize        = normalize
+                    )
+                hseu.save_pickle(ripple_model, os.path.join(results, "ripple_model.pkl"))
+                hseu.save_pickle(ripple_values, os.path.join(results, "ripple_values.pkl"))
 
-                plot_place_fields(
-                    place_field_data,
-                    raw_data,
-                    track_type,
+                print(f"Finished replay {rat} {session}", file=sys.stdout)
+
+                plot_replay(
+                    ripple_values,
                     results
                 )
-                try:
-                    ckpt = os.path.join(checkpoint_path, rat, session, model, "theta")
-                    if os.path.exists(ckpt):
-                        print(f"Loading checkpoint {ckpt}", file=sys.stdout)
-                        theta_model,theta_values = hsem.resume_from_checkpoint(
-                            ckpt
-                        )
-                    else:
-                        theta_model,theta_values = run_model(
-                            model_selection  = model,
-                            place_field_data = place_field_data,
-                            dt               = theta_delta_t_ms / 1000,
-                            bin_size         = bin_size_cm,
-                            spikemats        = theta_data.theta_spikes,
-                            environment_size = env_size,
-                            checkpoint_path  = ckpt,
-                            approximation_method = approximation_method, 
-                            normalize        = normalize
-                        )
-                    hseu.save_pickle(theta_model, os.path.join(results, "theta_model.pkl"))
-                    hseu.save_pickle(theta_values, os.path.join(results, "theta_values.pkl"))
-
-                    print(f"Finished theta {rat} {session}", file=sys.stdout)
-
-                    plot_theta(
-                        theta_values,
-                        theta_data.true_trajectory,
-                        track_type,
-                        results
-                    )
-                    plot_model_approximations(
-                        theta_model,
-                        results
-                    )
-                except Exception as e:
-                    print(f"Failed to process {rat}:{session} theta. Skipping...", file=sys.stderr)
-                    print(e, file=sys.stderr)
-
-                try: 
-                    ckpt = os.path.join(checkpoint_path, rat, session, model, "ripple")
-                    if os.path.exists(ckpt):
-                        print(f"Loading checkpoint {ckpt}", file=sys.stdout)
-                        ripple_model,ripple_values = hsem.resume_from_checkpoint(
-                            ckpt
-                        )
-                    else:
-                        ripple_model,ripple_values = run_model(
-                            model_selection  = model,
-                            place_field_data = place_field_data,
-                            dt               = replay_delta_t_ms / 1000,
-                            bin_size         = bin_size_cm,
-                            spikemats        = ripple_data.ripple_spikes,
-                            environment_size = env_size,
-                            checkpoint_path  = ckpt,
-                            approximation_method = approximation_method,
-                            normalize        = normalize
-                        )
-                    hseu.save_pickle(ripple_model, os.path.join(results, "ripple_model.pkl"))
-                    hseu.save_pickle(ripple_values, os.path.join(results, "ripple_values.pkl"))
-
-                    print(f"Finished replay {rat} {session}", file=sys.stdout)
-
-                    plot_replay(
-                        ripple_values,
-                        results
-                    )
-                    plot_model_approximations(
-                        ripple_model,
-                        results
-                    )
-                except Exception as e:
-                    print(f"Failed to process {rat}:{session} ripple. Skipping...", file=sys.stderr)
-                    print(e, file=sys.stderr)
-
-                print(f"Rat {rat} session {session} complete.", file=sys.stdout)
-
+                plot_model_approximations(
+                    ripple_model,
+                    results
+                )
             except Exception as e:
-                print(f"Failed to process {rat}:{session}. Skipping...", file=sys.stderr)
+                print(f"Failed to process {rat}:{session} ripple. Skipping...", file=sys.stderr)
                 print(e, file=sys.stderr)
+
+            print(f"Rat {rat} session {session} complete.", file=sys.stdout)
+
+            #except Exception as e:
+            #    print(f"Failed to process {rat}:{session}. Skipping...", file=sys.stderr)
+            #    print(e, file=sys.stderr)
 
 if __name__ == '__main__':
     main()

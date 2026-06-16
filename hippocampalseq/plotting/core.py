@@ -4,6 +4,17 @@ import functools
 
 __plotting_initialized = False
 
+def change_font_sizes(small_size, medium_size, big_size):
+    plt.rc('font', size=small_size, family='sans-serif')          # controls default text sizes
+    plt.rc('axes', labelsize=small_size)    # fontsize of the x and y labels
+    plt.rc('xtick', labelsize=small_size)    # fontsize of the tick labels
+    plt.rc('ytick', labelsize=small_size)    # fontsize of the tick labels
+    plt.rc('legend', fontsize=medium_size)    # legend fontsize
+    plt.rc('axes', titlesize=big_size)     # fontsize of the axes title
+    plt.rc('figure', titlesize=big_size)  # fontsize of the figure title
+    plt.rc('lines', linewidth=2, color='r')
+    #plt.rcParams['font.sans-serif'] = ['Helvetica']
+
 def __init_plotting():
     global __plotting_initialized
     if __plotting_initialized:
@@ -13,16 +24,12 @@ def __init_plotting():
     MEDIUM_SIZE = 6
     BIGGER_SIZE = 7
 
-    plt.rc('font', size=SMALL_SIZE, family='sans-serif')          # controls default text sizes
-    plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
-    plt.rc('axes', labelsize=SMALL_SIZE)    # fontsize of the x and y labels
-    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
-    plt.rc('legend', fontsize=MEDIUM_SIZE)    # legend fontsize
-    plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-    plt.rc('lines', linewidth=2, color='r')
-    #plt.rcParams['font.sans-serif'] = ['Helvetica']
+    change_font_sizes(SMALL_SIZE, MEDIUM_SIZE, BIGGER_SIZE)
 
+
+def reset_plotting():
+    global __plotting_initialized
+    __plotting_initialized = False
 
 def save_wrapper(fn):
     @functools.wraps(fn)

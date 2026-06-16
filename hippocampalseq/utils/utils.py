@@ -204,12 +204,13 @@ def extract_spikemat(
                 spikemat[i,:] = counts
     return spikemat
     
-def bin_points(x,y):
-    vstack,hstack = changeover_functions(type(x), 'vstack', 'hstack')
-    grid = vstack((x,y))
-    prod = product(*[grid[dim,:] for dim in range(2)])
-    z = vstack([hstack(p) for p in prod])
-    return z
+def create_grid(grid_shape, bins):
+    if isinstance(bins, int):
+        bins = (bins,bins)
+    X = torch.arange(grid_shape[0], grid_shape[2], bins[0]) + bins[0] / 2
+    Y = torch.arange(grid_shape[1], grid_shape[3], bins[1]) + bins[1] / 2
+    X,Y = torch.meshgrid(X,Y, indexing='xy')
+    return torch.stack([X.ravel(), Y.ravel()]).T
 
 def construct_test_mvn(n_points, dz, mu, sigma):
     """Construct test multivariate normal distribution centered around mu

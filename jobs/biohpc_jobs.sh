@@ -21,7 +21,8 @@ CHECKPOINT_PATH="../checkpoints/${DATETIME}-${SLURM_ARRAY_JOB_ID}/"
 
 #conda run -n hippocampalswr python -u run_pipeline.py $@
 conda activate hippocampalswr
-python -u run_pipeline.py $@ --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}" \
+python -u run_pipeline.py --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}" \
     --results-path $RESULTS_PATH \
-    --checkpoint-path $CHECKPOINT_PATH 
+    --checkpoint-path $CHECKPOINT_PATH \
+    $@
 #python -u run_pipeline.py $@

@@ -53,6 +53,8 @@ def plot_open_placefields(
     ax[0].spines['bottom'].set_visible(False)
     ax[0].spines['left'].set_visible(False)
     ax[0].tick_params(direction='out', length=0, width=.5, pad=1)
+    ax[0].set_xlabel("X Position")
+    ax[0].set_ylabel("Y Position")
 
     for i in range(1,len(pfs)):
         ax[i].spines['top'].set_visible(False)
@@ -62,7 +64,7 @@ def plot_open_placefields(
         ax[i].set_xticks([])
         ax[i].set_yticks([])
 
-    plt.tight_layout()
+    #plt.tight_layout()
        
     rect = plt.Rectangle(
         (0, 0), 1, 1, fill=False, color="k", lw=.5, alpha=.2,
@@ -106,5 +108,4 @@ def plot_linear_placefields(
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Firing Rate (Hz)")
     #plt.tight_layout()
-
 

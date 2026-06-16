@@ -6,21 +6,38 @@ from typing import List, Optional, Dict, Tuple
 from .core import save_wrapper
 
 @save_wrapper
-def plot_trajectories(trajectories: List[np.ndarray], ax=None, **kwargs):
-    if not isinstance(trajectories, list):
+def plot_trajectories(trajectories: List[np.ndarray]|Dict[str,np.ndarray], ax=None, **kwargs):
+    if not isinstance(trajectories, list) and not isinstance(trajectories, dict):
         trajectories = [trajectories]
     if ax is None:
         ax = plt.gca()
     for trajectory in trajectories:
+        if isinstance(trajectories, dict):
+            label = trajectory
+            trajectory = trajectories[label]
+        else:
+            label = None
         if trajectory.shape[1] == 2:
-            ax.plot(trajectory[:,0], trajectory[:,1], 'k-', alpha=.5, linewidth=.5)
+            ax.plot(
+                trajectory[:,0],
+                trajectory[:,1], 
+                '-', 
+                alpha=.5, 
+                linewidth=.5,
+                label=label
+            )
         elif trajectory.shape[1] == 1:
             x = np.arange(len(trajectory))
-            ax.plot(x, trajectory[:,0], 'k-', alpha=.5, linewidth=.5)
+            ax.plot(x, trajectory[:,0], '-', alpha=.5, linewidth=.5, label=label)
         else:
             raise ValueError(f"Trajectory shape {trajectory.shape} not supported")
 
-    if trajectories[0].shape[1] == 2:
+    if isinstance(trajectories, dict):
+        ax.legend()
+        shape = list(trajectories.items())[0][1].shape
+    else:
+        shape = trajectories[0].shape
+    if shape[1] == 2:
         ax.set_yticks([0, 200])
         ax.set_xticks([0, 200])
 
@@ -49,7 +66,15 @@ def plot_spikemat_position_aligned(
     else:
         fig = plt.gcf()
 
-    ax.plot(position_info['x'], position_info['y'], color='black',alpha=.4, linewidth=.5, label='Rat Trajectory')
+    ax.set_title("Spike Positions on Trajectory")
+    ax.plot(
+        position_info['x'],
+        position_info['y'], 
+        color='black',
+        alpha=.4, 
+        linewidth=.5, 
+        label='Rat Trajectory'
+    )
 
     colors = plt.cm.tab10(np.linspace(0, 1, len(cell_ids)))
     for i,cell in enumerate(cell_ids):
@@ -62,12 +87,21 @@ def plot_spikemat_position_aligned(
             np.max(position_info['x']),
             np.max(position_info['y'])
         )
-    ax.set_xlim([environment_size[0], environment_size[2]])
-    ax.set_ylim([environment_size[1], environment_size[3]])
+    ax.set_xlim([environment_size[0], environment_size[2] - 1])
+    ax.set_ylim([environment_size[1], environment_size[3] - 1])
+    ax.set_xticks([environment_size[0], environment_size[2] - 1])
+    ax.set_yticks([environment_size[1], environment_size[3] - 1])
+    ax.set_xticklabels([0,f"{int((environment_size[2]-environment_size[0])/100)}m"])
+    ax.set_yticklabels([0,f"{int((environment_size[3]-environment_size[1])/100)}m"])
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.tick_params(direction='out', length=0, width=.5, pad=1)
 
-    ax.set_xlabel("X Position (cm)")
-    ax.set_ylabel("Y Position (cm)")
-    ax.set_title("Spike Positions on Trajectory")
+    ax.set_xlabel("X Position")
+    ax.set_ylabel("Y Position")
+
     ax.legend()
     return fig
 
