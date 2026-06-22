@@ -40,6 +40,12 @@ def create_interval_mask(length, starts, ends):
     np.add.at(mask, ends, -1)
     return np.cumsum(mask)[:-1] > 0
 
+def save_tsg_mat(file_path, data, **kwargs):
+    out_dict = {}
+    for key in data.keys():
+        out_dict[str(key)] = data[key]
+    sio.savemat(file_path, out_dict, **kwargs)
+
 def save_pickle(data: Any, fname: str):
     s = compress_pickle.dumps(data, "gzip")
     with open(fname, 'wb') as f:

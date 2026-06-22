@@ -61,9 +61,7 @@ class Momentum(KalmanFilter):
             dt: float, 
             environment_size: tuple,
             bin_size: int, 
-            #data_type: str,
             adjust_parameters: bool = False,
-            approximation_method: str = 'analytic',
             seed: int|None = 42
         ):
         """Initialize the momentum SSM.
@@ -79,18 +77,6 @@ class Momentum(KalmanFilter):
             seed: (int|None): Seed for the random number generator
         """
         super().__init__(2, 2, 2)
-
-        assert approximation_method in ['analytic', 'iterative']
-        """
-        if data_type == 'replay':
-            self.DIFFUSION_SCALE = torch.tensor(1000.0)
-            self.DECAY_SCALE     = torch.tensor(100.0)
-        elif data_type == 'theta':
-            self.DIFFUSION_SCALE = torch.tensor(10.0)
-            self.DECAY_SCALE     = torch.tensor(10.0)
-        else:
-            raise ValueError(f"Data type {data_type} not recognized.")
-            """
 
         self.dt               = torch.tensor(dt)
         self.environment_size = environment_size
@@ -122,22 +108,11 @@ class Momentum(KalmanFilter):
             )
             emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
 
-            if approximation_method == 'iterative':
-                T = emission_probability.shape[0]
-                approx_mean = torch.zeros(T, self.latent_dim, 1)
-                approx_cov  = torch.zeros(T, self.latent_dim, self.latent_dim)
-                for t in range(T):
-                    approx_mean[t], approx_cov[t],_ = hseu.iterative_gaussian_approximation(
-                        self.grid,
-                        emission_probability[t],
-                        self.bin_size
-                    )
-            elif approximation_method == 'analytic':
-                approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
-                    self.grid,
-                    emission_probability,
-                    self.bin_size
-                )
+            approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
+                self.grid,
+                emission_probability,
+                self.bin_size
+            )
             
             self.emission_probabilities.append(emission_probability)
             self.approximate_mean.append(approx_mean)
@@ -156,6 +131,8 @@ class Momentum(KalmanFilter):
                     self.diffusion, 
                     self.dt
                 )
+
+        self.n_parameters = 3
 
         # TODO: Simple Bayesian decoder to get z from my approx_mean
         #a,b = _init_momentum_params(self.approx_mean.numpy())
@@ -347,10 +324,10 @@ class Momentum(KalmanFilter):
         Pn1 = values.predicted_cov[batch][t-1]
 
         PnCt = Pn1 @ C.T
-        K = hseu.invmul(PnCt, C @ PnCt + sigma)
+        K    = hseu.invmul(PnCt, C @ PnCt + sigma)
 
         mu_t = Am1 + K @ (values.observations[batch][t] - C @ Am1)
-        v_t = (torch.eye(self.augmented_dim) - K @ C) @ Pn1
+        v_t  = (torch.eye(self.augmented_dim) - K @ C) @ Pn1
 
         Am = self.transition_matrices @ mu_t
         Pt = self.transition_matrices @ v_t @ self.transition_matrices.T + self.transition_covariance
@@ -380,10 +357,10 @@ class Momentum(KalmanFilter):
             Amt = values.predicted_mean[batch][t]
             Pt  = values.predicted_cov[batch][t]
 
-            J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
-            #J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt)
+            #J = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt + .00001 * torch.eye(self.augmented_dim))
+            J    = hseu.invmul(values.filtered_cov[batch][t] @ self.initial_state_mean.T , Pt)
             muht = values.filtered_mean[batch][t] + J @ (values.smoothed_mean[batch][t+1] - Amt) 
-            vht = values.filtered_cov[batch][t] + J @ (values.smoothed_cov[batch][t+1] - Pt) @ J.mT
+            vht  = values.filtered_cov[batch][t] + J @ (values.smoothed_cov[batch][t+1] - Pt) @ J.mT
 
             values.smoothed_gain[batch][t] = J
             values.smoothed_mean[batch][t] = muht
@@ -590,7 +567,7 @@ class Momentum(KalmanFilter):
                 tll = (T-2) * torch.log(gamma**2) + tll
                 loss += tll
 
-                total_loss += loss / (2*len(values.observations))
+                total_loss += loss / 2
 
             if epoch > 0 and abs((total_loss.item() - prev_loss) / prev_loss) < gd_tol: 
                 break
@@ -721,12 +698,12 @@ class Momentum(KalmanFilter):
                 **diff_args
             )
 
-            values.negloglike.append(-ll)
-            if not torch.isfinite(values.negloglike[-1]):
+            values.loglike.append(-ll)
+            if not torch.isfinite(values.loglike[-1]):
                 print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
                 break
 
-            if i > 0 and abs((values.negloglike[-1] - values.negloglike[-2]) / values.negloglike[-2]) < emtol:
+            if i > 0 and abs((values.loglike[-1] - values.loglike[-2]) / values.loglike[-2]) < emtol:
                 print(f"Converged after {i} epochs, exiting")
                 break
 

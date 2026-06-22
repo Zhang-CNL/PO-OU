@@ -26,7 +26,7 @@ class KalmanResults:
     smoothed_gain  : List[torch.Tensor] = field(default_factory=list)
     smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
     smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
-    negloglike     : List[float] = field(default_factory=list)
+    loglike        : List[float] = field(default_factory=list)
     cumulative_probabilities : torch.Tensor = field(default_factory=lambda: torch.empty(0))
 
 @dataclass
@@ -55,6 +55,17 @@ class KalmanFilter(StateSpace):
         self.latent_dim    = latent_dim
         self.augmented_dim = order * latent_dim
         self.obs_dim       = obs_dim
+
+        self.n_parameters = 3*(self.augmented_dim**2) \
+            + self.augmented_dim \
+            + self.obs_dim * self.augmented_dim \
+            + self.obs_dim**2 
+        # Transition matrix -> nxn
+        # Transition noise -> nxn
+        # Initial matrix -> nx1
+        # Initial variance -> nxn
+        # Observation matrix -> nxm
+        # Observation noise -> mxm
 
     def _parse_observations(self, obs) -> List[torch.Tensor]:
         """Safely convert observations to their expected format."""
@@ -154,7 +165,7 @@ class KalmanFilter(StateSpace):
         return F,Q
 
     def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        H = torch.rand(self.augmented_dim, self.augmented_dim)
+        H = torch.rand(self.obs_dim, self.obs_dim)
         H = H / H.sum(axis=1, keepdim=True)
         R = torch.randn(self.augmented_dim, self.obs_dim)
         R = R @ R.T
@@ -522,12 +533,12 @@ class KalmanFilter(StateSpace):
                 **diff_args
             )
 
-            values.negloglike.append(-ll)
-            if not torch.isfinite(values.negloglike[-1]):
+            values.loglike.append(-ll)
+            if not torch.isfinite(values.loglike[-1]):
                 print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
                 break
 
-            if i > 0 and abs((values.negloglike[-1] - values.negloglike[-2]) / values.negloglike[-2]) < emtol:
+            if i > 0 and abs((values.loglike[-1] - values.loglike[-2]) / values.loglike[-2]) < emtol:
                 print(f"Converged after {i} epochs, exiting")
                 break
 

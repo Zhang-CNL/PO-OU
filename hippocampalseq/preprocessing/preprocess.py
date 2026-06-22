@@ -44,7 +44,6 @@ def preprocess_data(
         place_field_gaussian_sd_cm: float = 2.0,
         prior_mean_rat_sps: float = 1.0,
         prior_beta_s: float = .01,
-        posterior: bool = True,
         min_spike_rate: float = 1.0,
         velocity_cutoff = 5.0,
         theta_time_window_ms: float = 250.0,

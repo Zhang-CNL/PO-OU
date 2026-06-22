@@ -1,18 +1,14 @@
 #!/bin/bash
 
-sbatch ./biohpc_jobs.sh --model map --rerun --skip-linear 
-sbatch ./biohpc_jobs.sh --model map --rerun --skip-linear --place-field-posterior
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear --place-field-posterior
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear --normalize
+# Process all replay, only one time-step analyzed
+sbatch ./biohpc_jobs.sh --data-type replay --delta-t-ms 3 --time-step-ms 3 --place-field-posterior --velocity-cutoff 5
 
-# Recreate some bits from the K&D paper
-sbatch ./biohpc_jobs.sh --model map --rerun --skip-linear --place-field-posterior --theta-delta-t-ms 9 --theta-time-step-ms 9 --velocity-cutoff 5
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear --place-field-posterior --theta-delta-t-ms 9 --theta-time-step-ms 9 --velocity-cutoff 5
-sbatch ./biohpc_jobs.sh --model map --rerun --skip-linear --place-field-posterior --theta-delta-t-ms 60 --theta-time-step-ms 60 --velocity-cutoff 5
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear --place-field-posterior --theta-delta-t-ms 60 --theta-time-step-ms 60 --velocity-cutoff 5
+# Process theta with params similar to the Pfeiffer paper
+sbatch ./biohpc_jobs.sh --data-type theta --delta-t-ms 10 --time-step-ms 5 --place-field-posterior --velocity-cutoff 10
 
-sbatch ./biohpc_jobs.sh --model map --rerun --skip-linear --theta-delta-t-ms 250 --theta-time-step-ms 250 --velocity-cutoff 5
-sbatch ./biohpc_jobs.sh --model map --rerun --skip-linear --theta-delta-t-ms 250 --theta-time-step-ms 250 --velocity-cutoff 5 --place-field-posterior
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear --theta-delta-t-ms 250 --theta-time-step-ms 250 --velocity-cutoff 5
-sbatch ./biohpc_jobs.sh --model momentum --rerun --skip-linear --theta-delta-t-ms 250 --theta-time-step-ms 250 --velocity-cutoff 5 --normalize
+# Process theta with different time steps corresponding to K&D and Pfeiffer
+declare -a time_steps=(9 60 250)
+
+for ${time_step} in "${time_steps[@]}"; do
+    sbatch ./biohpc_jobs.sh --data-type theta --delta-t-ms ${time_step} --time-step-ms ${time_step} --place-field-posterior --velocity-cutoff 5
+done

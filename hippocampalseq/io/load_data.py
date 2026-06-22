@@ -6,7 +6,9 @@ from scipy.signal import butter, filtfilt
 from typing import Tuple, Dict
 
 from .metadata import *
-import hippocampalseq.utils as hseu
+from .lfp import * 
+from .spikes import *
+
 
 def calc_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Calculate velocity from position and time data.
@@ -153,63 +155,29 @@ def load_clean_data(
         (Dict[int, nap.TsdFrame]): Dictionary of position information for each cell's spikes.
         (nap.TsGroup): Filtered spiking data aligned to positions and run times according to `ripple_type`.
         (nap.IntervalSet): Start and end periods of sharp-wave ripples.
+        (Dict): Lfp data.
         (np.ndarray): Indices of excitatory neurons.
         (np.ndarray): Indices of inhibitory neurons.
     """
-    assert rat_name in RAT_NAMES, f"{rat_name} not in {RAT_NAMES}"
-    assert ripple_type in ['awake', 'rem', 'sleep', 'sleep_immobile']
-    assert track_type in ['Linear', 'Open']
 
-    session = f"{track_type}{session}"
-    path = os.path.join(data_path, rat_name, session)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"{path} not found")
-
-    pos_mat = hseu.read_mat(os.path.join(path, 'Position_Data.mat'))
-    raw_pos = pos_mat['Position_Data']
-    
-    time = raw_pos[:,0] # (Npos, 1)
-    x    = raw_pos[:,1]
-    y    = raw_pos[:,2]
-    hd   = raw_pos[:,3]
-
-    epoch_mat = hseu.read_mat(os.path.join(path, 'Epochs.mat'))
-    if ripple_type == 'awake':
-        rt = np.squeeze(epoch_mat['Run_Times']).astype(float)
-    elif ripple_type == 'rem':
-        rt = np.squeeze(epoch_mat['REM_Times']).astype(float)
-    elif ripple_type == 'sleep':
-        rt = np.squeeze(epoch_mat['Sleep_Times']).astype(float)
-    elif ripple_type == 'sleep_immobile':
-        rt = np.squeeze(epoch_mat['Sleep_Box_Immobile_Times']).astype(float)
-    
-    rt = np.atleast_2d(np.squeeze(rt))
-    starts = rt[:,0]
-    ends   = rt[:,1]
-
-    spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
-    spikes = spike_mat['Spike_Data']
-
-    # (Nspikes,1)
-    spike_ids   = spikes[:,1].astype(int) - 1
-    spike_times = spikes[:,0]
-
-
-    excitatory_neurons = spike_mat['Excitatory_Neurons'].astype(int) - 1
-    inhibitory_neurons = spike_mat['Inhibitory_Neurons'].astype(int) - 1
-
-    ripple_mat = hseu.read_mat(os.path.join(path, 'Ripple_Events.mat'))
-    ripples    = ripple_mat['Ripple_Events']
-
-    ripple_starts = ripples[:,0]
-    ripple_ends   = ripples[:,1]
-    ripple_periods = nap.IntervalSet(start=ripple_starts, end=ripple_ends)
-
+    (
+        time,
+        x, y, hd,
+        epoch_starts,
+        epoch_ends,
+        spike_data
+    ) = load_spiking_data(
+        data_path,
+        rat_name,
+        session,
+        track_type,
+        ripple_type
+    )
 
     v, dt = calc_velocity(x, y, time)
     dt[dt > 60] = 0
 
-    epoch = nap.IntervalSet(start=starts, end=ends)
+    epoch = nap.IntervalSet(start=epoch_starts, end=epoch_ends)
 
     raw_position = nap.TsdFrame(
         t=time,
@@ -222,17 +190,11 @@ def load_clean_data(
         columns=['x','y','velocity','delta t']
     )
     running_position = raw_position.restrict(epoch)
-
-    unique_cells = np.unique(spike_ids)
-    cell_spikes = {}
-    for cell in unique_cells:
-        spikes = spike_times[spike_ids == cell]
-        cell_spikes[cell] = nap.Ts(t=np.sort(spikes))
-
-    spike_data = nap.TsGroup(cell_spikes)
-    running_spikes = spike_data.restrict(epoch)
+    running_spikes   = spike_data.restrict(epoch)
 
     running_spikes,running_spike_info = align_spikes_to_position(running_spikes, running_position, minimum_dt)
+
+    lfp = load_lfp_data(raw_position, spike_data, path)
 
     return (
         raw_position,
@@ -241,6 +203,7 @@ def load_clean_data(
         running_spike_info,
         running_spikes,
         ripple_periods,
+        lfp,
         excitatory_neurons,
         inhibitory_neurons
     )

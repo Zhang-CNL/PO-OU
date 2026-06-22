@@ -1,23 +1,13 @@
-from pathlib import Path
-import pynapple as nap
 import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import random
+import pynapple as nap
 
-
-def assign_theta_phase_to_spikes(spike_info, lfp_with_cycles):
-
-    # Get LFP-side arrays
+def assign_spikes_theta_phase(spike_info: nap.TsGroup, lfp_with_cycles):
     lfp_times   = lfp_with_cycles['phase'].index.values.astype(float)
     phase_deg   = np.asarray(lfp_with_cycles['phase_deg'].values, dtype=float)
     cycle_dur_s = np.asarray(lfp_with_cycles['cycle_duration'].values, dtype=float)
     monotonic   = np.asarray(lfp_with_cycles['monotonic_increasing'].values, dtype=float)
 
 
-    # print(f"  lfp_times: {len(lfp_times)} samples")
-    # print(f"  spike_info: {len(spike_info)} cells")
-    
     def nearest_indices(query_times):
         q     = np.asarray(query_times, dtype=float)
         q     = np.clip(q, lfp_times[0], lfp_times[-1])
@@ -69,4 +59,3 @@ def assign_theta_phase_to_spikes(spike_info, lfp_with_cycles):
             f"{(np.percentile(td,75)-np.percentile(td,25))*1000:.2f} ms")
 
     return out
-
