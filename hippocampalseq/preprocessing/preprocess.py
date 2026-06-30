@@ -1,8 +1,6 @@
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 
-from .load_data import *
-from .metadata import *
 from .placefields import *
 from .theta import *
 from .ripples import *

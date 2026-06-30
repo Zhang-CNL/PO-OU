@@ -1,6 +1,5 @@
 from .preprocess import *
-from .load_data import *
-from .metadata import *
+from .lfp import *
 from .placefields import *
 from .theta import *
 from .ripples import *

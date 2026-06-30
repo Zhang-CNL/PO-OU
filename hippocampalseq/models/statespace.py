@@ -25,7 +25,7 @@ class StateSpace:
 
     def bic(self, max_loglikelihood: float, n_observations: float) -> float:
         assert hasattr(self, 'n_parameters'), "Forgot to construct a parameter `n_parameters` in the class."
-        return -2*max_loglikelihood +  self.n_parameters * np.log(n_observations)
+        return -2*max_loglikelihood + self.n_parameters * np.log(n_observations)
     
     def aic(self, max_loglikelihood: float) -> float:
         assert hasattr(self, 'n_parameters'), "Forgot to construct a parameter `n_parameters` in the class."

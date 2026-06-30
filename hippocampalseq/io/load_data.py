@@ -89,11 +89,11 @@ def align_spikes_to_position(
             d=np.c_[
                 posframe['x'].values[selectioni],
                 posframe['y'].values[selectioni],
-                posframe['velocity'].values[selectioni],
+                posframe['Velocity'].values[selectioni],
                 #posframe['delta t'].values[valid], 
                 td[valid]
             ],
-            columns=['x', 'y', 'velocity', 'delta t'],
+            columns=['x', 'y', 'Velocity', 'Delta t'],
         )
         st = spike_times[valid]
         spike_times_filt[uid] = nap.Ts(t=st)
@@ -155,17 +155,22 @@ def load_clean_data(
         (Dict[int, nap.TsdFrame]): Dictionary of position information for each cell's spikes.
         (nap.TsGroup): Filtered spiking data aligned to positions and run times according to `ripple_type`.
         (nap.IntervalSet): Start and end periods of sharp-wave ripples.
-        (Dict): Lfp data.
+        (dict): Lfp data such as phase and amplitude in a dict.
         (np.ndarray): Indices of excitatory neurons.
         (np.ndarray): Indices of inhibitory neurons.
     """
+
+    # TODO: Where in here do I use the function to filter noisy epochs
 
     (
         time,
         x, y, hd,
         epoch_starts,
         epoch_ends,
-        spike_data
+        spike_data,
+        ripple_periods,
+        excitatory_neurons,
+        inhibitory_neurons
     ) = load_spiking_data(
         data_path,
         rat_name,
@@ -184,16 +189,18 @@ def load_clean_data(
         d=np.c_[
             x, 
             y,
+            hd,
             v,
             dt
         ],
-        columns=['x','y','velocity','delta t']
+        columns=['x','y','Head direction','Velocity','Delta t']
     )
     running_position = raw_position.restrict(epoch)
     running_spikes   = spike_data.restrict(epoch)
 
     running_spikes,running_spike_info = align_spikes_to_position(running_spikes, running_position, minimum_dt)
 
+    path = os.path.join(data_path, rat_name, f"{track_type}{session}")
     lfp = load_lfp_data(raw_position, spike_data, path)
 
     return (

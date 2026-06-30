@@ -55,8 +55,20 @@ def parse_ncs_timestamps(csc_file: str, samples_per_record: int=512):
     )
     return all_times
 
-def load_lfp_data(position_data, spike_data, datapath, csc_name):
-    csc_file = os.path.join(datapath, csc_name)
+def load_lfp_data(
+        position_data: nap.TsdFrame, 
+        spike_data: nap.TsGroup, 
+        datapath: str
+    ):
+    """Load LFP data from a .ncs file
+    Args:
+        position_data (nap.TsdFrame): Raw position data from the rat.
+        spike_data (nap.TsGroup): Raw spike data.
+        datapath (str): Base path to the directory where the .ncs file is stored.
+    
+    Returns:
+        dict: A dict containing LFP data such as amplitude and phase, as well as metadata.
+    """
 
     #  Load samples via Neo
     includes = []
@@ -178,7 +190,7 @@ def load_lfp_data(position_data, spike_data, datapath, csc_name):
         amp      = np.abs(analytic)
         amp_sm   = gaussian_filter1d(amp, sigma)
         phase    = np.angle(analytic)
-        power    = amp ** 2
+        power    = amp**2
 
         t_parts.append(t_seg)
         raw_parts.append(x_seg)
@@ -199,22 +211,30 @@ def load_lfp_data(position_data, spike_data, datapath, csc_name):
         end=np.array(effective_ends),
     )
 
-    lfp_data = {
-        'filtered_lfp':  nap.Tsd(t=t_run, d=Filtered_LFP,       time_units='s'),
-        'amplitude':     nap.Tsd(t=t_run, d=Amplitude_smoothed, time_units='s'),
-        'power':         nap.Tsd(t=t_run, d=Power,              time_units='s'),
-        'phase':         nap.Tsd(t=t_run, d=Phase,              time_units='s'),
-        'raw_lfp':       nap.Tsd(t=t_run, d=Samples_run,        time_units='s'),
-        'sampling_rate': Sample_Frequency,
-        'run_interval':  effective_support,
+    lfp_data = nap.TsdFrame(
+        t=t_run,
+        d=np.c_[
+            Filtered_LFP,
+            Amplitude_smoothed,
+            Power,
+            Phase,
+            Samples_run
+        ],
+        columns=[
+            'Filtered LFP', 'Amplitude', 'Power', 
+            'Phase Rad', 'Raw LFP'
+        ],
+        time_units='s'
+    )
+    out = {
+        'LFP': lfp_data, 
+        'sampling_rate': Sample_Frequency, 
+        'run_interval' : effective_support,
         'metadata': {
-            'animal':            animal,
-            'experiment':        experiment,
-            'csc_file':          csc_name,
-            'n_sessions':        len(sessions_ok),
-            'session_intervals': list(zip(effective_starts, effective_ends)),
-            'lfp_data_range':    (lfp_start, lfp_end),
-            'clock_drift_ppm':   drift_ppm,
-        },
+            'n_session': len(sessions_ok),
+            'lfp_data_range': (lfp_start, lfp_end),
+            'clock_drift_ppm': drift_ppm
+        }
     }
-    return lfp_data
+
+    return out

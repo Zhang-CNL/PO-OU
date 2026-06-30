@@ -92,5 +92,8 @@ def load_spiking_data(
         x, y, hd,
         starts,
         ends,
-        spike_data
+        spike_data,
+        ripple_periods,
+        excitatory_neurons,
+        inhibitory_neurons
     )

@@ -116,10 +116,10 @@ def calculate_placefields(
     prior_alpha_s = prior_beta_s * prior_mean_rat_sps + 1
     pf_gaussian_sd = hseu.cm_to_bins(place_field_gaussian_sd_cm, bin_size_cm)
 
-    mask = run_position_data['velocity'].values >= velocity_cutoff
+    mask = run_position_data['Velocity'].values >= velocity_cutoff
     x  = run_position_data['x'].values[mask]
     y  = run_position_data['y'].values[mask]
-    dt = run_position_data['delta t'].values[mask]
+    dt = run_position_data['Delta t'].values[mask]
     ncells = len(run_spike_info)
 
     if environment_size is None:
@@ -145,7 +145,7 @@ def calculate_placefields(
     spike_hists  = np.zeros((ncells,nby,nbx))
     for cell_id in range(ncells):
         spike_pos = run_spike_info[cell_id]
-        cell_v = spike_pos['velocity'].values
+        cell_v = spike_pos['Velocity'].values
         mask   = cell_v >= velocity_cutoff
         cell_x = spike_pos['x'].values[mask]
         cell_y = spike_pos['y'].values[mask]

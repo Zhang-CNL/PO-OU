@@ -8,7 +8,6 @@ All state-space models are contained here.
 - momentum.py - Subclassed model adding momentum to the variables.
 
 ### hippocampalseq.preprocessing
-Preprocessing code ripped from https://github.com/DrugowitschLab/hippocampalseqDynamics/ and then modified.
 Loading data can be done using the `load_and_preprocess()` function:
 ```py
 import hippocampalseq.preprocessing as hsep
@@ -27,3 +26,7 @@ on Brad Pfeiffer's data.
 conda env create -f environment.yml
 conda activate hippocampalseq
 ```
+
+## Todo:
+- Plotting in analyze_theta.py
+- Decoding error implementation

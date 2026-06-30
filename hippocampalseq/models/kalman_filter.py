@@ -165,9 +165,9 @@ class KalmanFilter(StateSpace):
         return F,Q
 
     def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        H = torch.rand(self.obs_dim, self.obs_dim)
+        H = torch.rand(self.augmented_dim, self.obs_dim)
         H = H / H.sum(axis=1, keepdim=True)
-        R = torch.randn(self.augmented_dim, self.obs_dim)
+        R = torch.randn(self.obs_dim, self.obs_dim)
         R = R @ R.T
         return H, R
 
