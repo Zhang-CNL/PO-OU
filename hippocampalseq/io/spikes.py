@@ -3,6 +3,7 @@ import numpy as np
 import pynapple as nap
 
 import hippocampalseq.utils as hseu
+from typing import Tuple
 from .metadata import *
 
 def load_spiking_data(

@@ -1,22 +1,53 @@
 import os
+import jax 
+jax.config.update("jax_enable_x64", True)
+
+import optax
 import numpy as np
 import numpy.typing as npt
 import pynapple as nap
-import torch
-import torch.nn as nn
+import jax.numpy as jnp
 import warnings
 from typing import List, Tuple
 from dataclasses import dataclass, field
 from scipy.optimize import least_squares
-from torch.utils.data import random_split
 
 import hippocampalseq.utils as hseu
 
 from .kalman_filter import *
+from .statespace import *
+
 __all__ = [
     'Momentum',
     'MomentumResults'
 ]
+@jax.jit
+def loss_closure(params, dt, Ezz, Ezz1):
+    decay,diffusion,initial_diffusion = params
+    _idiff = jnp.exp(initial_diffusion)
+    _diff  = jnp.exp(diffusion)
+    _decay = jnp.exp(decay)
+
+    v1 = _idiff**2 * dt
+    alpha = 1 + jnp.exp(-_decay * dt)
+    gamma = (_diff * dt)**2 / (2 * _decay) * (1 - jnp.exp(-2 * _decay * dt))
+    total_loss = 0
+    for i in range(len(Ezz)):
+        loss = 0. 
+        T = Ezz[i].shape[0]
+
+        ill = Ezz[i][1] - 2 * Ezz1[i][0] + Ezz[i][0]
+        ill = ill / v1
+        ill = jnp.log(v1**2) + ill
+        loss += ill
+
+        tll = Ezz[i][2:] - 2 * alpha * Ezz1[i][1:] + alpha**2 * Ezz[i][1:-1]
+        tll = jnp.sum(tll,axis=0) / gamma
+        tll = (T-2) * jnp.log(gamma**2) + tll
+        loss += tll
+
+        total_loss += loss / 2
+    return total_loss.squeeze()
 
 def resume_from_checkpoint(
         checkpoint_path: str, 
@@ -24,7 +55,7 @@ def resume_from_checkpoint(
         emtol: float = 1e-3, 
         maximization_type: str = 'autograd', 
         **diff_args
-    ) -> Tuple[Momentum, MomentumResults]:
+    ): #-> Tuple[Momentum, MomentumResults]:
     nums = []
     for path in os.listdir(checkpoint_path):
         if path.endswith(".pkl"):
@@ -45,9 +76,9 @@ def resume_from_checkpoint(
 
 @dataclass
 class MomentumResults(KalmanResults):
-    emission_probabilities : List[torch.Tensor] = field(default_factory=list)
-    approximate_mean       : List[torch.Tensor] = field(default_factory=list)
-    approximate_covariance : List[torch.Tensor] = field(default_factory=list)
+    emission_probabilities : List[jax.Array] = field(default_factory=list)
+    approximate_mean       : List[jax.Array] = field(default_factory=list)
+    approximate_covariance : List[jax.Array] = field(default_factory=list)
 
 class Momentum(KalmanFilter):
     """State-space model that includes momentum as a parameters.
@@ -67,8 +98,8 @@ class Momentum(KalmanFilter):
         """Initialize the momentum SSM.
         
         Args:
-            place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
-            spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
+            place_fields (np.ndarray|jax.Array): (Ncells, Nbx, Nby) Place field grids.
+            spikemat (np.ndarray|jax.Array): (T, Ncells) Spikemat,
             dt (float): Time step for the transition matrix.
             environment_size (tuple): Size of the environment. (xmin, ymin, xmax, ymax)
             bin_size (int): Size of individual bins in cm.
@@ -76,20 +107,15 @@ class Momentum(KalmanFilter):
             adjust_parameters (bool): Whether to adjust the parameters. Not sure why we would do this, but it comes from Krause & Drugowitsch.
             seed: (int|None): Seed for the random number generator
         """
-        super().__init__(2, 2, 2)
+        super().__init__(2, 2, 2, seed=seed)
 
-        self.dt               = torch.tensor(dt)
+        self.dt               = dt
         self.environment_size = environment_size
         self.bin_size         = bin_size
         assert len(environment_size) == 2*self.latent_dim, "Environment shape and latent dimensions must match"
 
         self.grid = hseu.create_grid(self.environment_size, self.bin_size)
-
-        if seed is not None:
-            torch.random.manual_seed(seed)
-
-        place_fields = torch.from_numpy(place_fields)
-
+        place_fields = jnp.array(place_fields, dtype=jnp.float64)
 
         values = MomentumResults(
             emission_probabilities = [],
@@ -100,13 +126,13 @@ class Momentum(KalmanFilter):
         self.approximate_mean       = []
         self.approximate_covariance = []
         for k,v in enumerate(spikemat):
-            ep = torch.from_numpy(v).double()
+            ep = jnp.array(v, dtype=jnp.float64)
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 ep, 
                 place_fields,
                 self.dt
             )
-            emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
+            emission_probability /= jnp.sum(emission_probability, axis=(1,2), keepdims=True)
 
             approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
                 self.grid,
@@ -121,16 +147,15 @@ class Momentum(KalmanFilter):
 
         # Random initialization of parameters
         # Scale of ln(10) meters
-        self.decay             = torch.rand(1) 
-        self.diffusion         = torch.rand(1) 
-        self.initial_diffusion = torch.rand(1) 
+        self.decay             = self.random(1)
+        self.diffusion         = self.random(1)
+        self.initial_diffusion = self.random(1) 
         if adjust_parameters:
-            with torch.no_grad():
-                self.decay, self.diffusion = self._adjust_parameters(
-                    self.decay, 
-                    self.diffusion, 
-                    self.dt
-                )
+            self.decay, self.diffusion = self._adjust_parameters(
+                self.decay, 
+                self.diffusion, 
+                self.dt
+            )
 
         self.n_parameters = 3
 
@@ -142,39 +167,44 @@ class Momentum(KalmanFilter):
         # fit a plane to parameters based on P(z_t|z_{t-1},z_{t-2})
         # Use approx_mean as z
 
+    def __hash__(self):
+        return hash((self.dt, self.bin_size, self.environment_size))
+
+    def __eq__(self, other):
+        return (type(other) == type(self)) and (self.__hash__() == other.__hash__())
 
     def _adjust_parameters(self, theta, sigma, dt):
         # TODO: Make this in log form
         n = 10**10
-        t_adjusted = torch.log(dt * theta + 1) / dt 
+        t_adjusted = jnp.log(dt * theta + 1) / dt 
         delta = n * dt 
         cfunction = (
             sigma ** 2 / theta * (
-                (2 * theta * delta) - torch.exp(-2 * theta * delta)
-                + 4 * torch.exp(-theta * delta)
+                (2 * theta * delta) - jnp.exp(-2 * theta * delta)
+                + 4 * jnp.exp(-theta * delta)
                 -3
             ) / (2 * theta**2)
         )
         prefactor = dt ** 2 / (2 * t_adjusted)
         numer = (
-            (delta / dt) * -torch.exp(2 * t_adjusted * dt)
-            - 2 * torch.exp(-t_adjusted * (delta - dt))
-            - 2 * torch.exp(-t_adjusted * delta)
-            + torch.exp(-2 * t_adjusted * delta)
-            + 2 * torch.exp(t_adjusted * dt)
+            (delta / dt) * -jnp.exp(2 * t_adjusted * dt)
+            - 2 * jnp.exp(-t_adjusted * (delta - dt))
+            - 2 * jnp.exp(-t_adjusted * delta)
+            + jnp.exp(-2 * t_adjusted * delta)
+            + 2 * jnp.exp(t_adjusted * dt)
             + (delta / dt)
             + 1
         )
-        denom = (torch.exp(t_adjusted * dt) - 1) ** 2 
+        denom = (jnp.exp(t_adjusted * dt) - 1) ** 2 
         dfunction = prefactor * -(numer / denom)
-        sigma_adjusted = torch.sqrt(cfunction / dfunction)
+        sigma_adjusted = jnp.sqrt(cfunction / dfunction)
         return t_adjusted, sigma_adjusted
 
-    def _initialize(self, X: torch.Tensor) -> MomentumResults:
-        tf_base = [torch.ones((x.shape[0], self.augmented_dim, 1)) for x in X]
-        cov_base = [torch.ones((x.shape[0], self.augmented_dim, self.augmented_dim)) for x in X]
+    def _initialize(self, X: jax.Array) -> MomentumResults:
+        tf_base = [np.ones((x.shape[0], self.augmented_dim, 1)) for x in X]
+        cov_base = [np.ones((x.shape[0], self.augmented_dim, self.augmented_dim)) for x in X]
         def _copy(x):
-            return [i.clone() for i in x]
+            return [i.copy() for i in x]
         res = MomentumResults(
             observations   = X,
             predicted_mean = _copy(tf_base),
@@ -190,73 +220,73 @@ class Momentum(KalmanFilter):
         )
         return res
 
-    def _construct_init_mean(self) -> torch.Tensor:
-        I = torch.eye(self.latent_dim)
-        Z = torch.zeros(self.augmented_dim, self.latent_dim)
-        left = torch.cat((I, I), dim=0)
-        return torch.cat((left, Z), dim=1)
+    def _construct_init_mean(self) -> jax.Array:
+        I = jnp.eye(self.latent_dim, dtype=jnp.float64)
+        Z = jnp.zeros((self.augmented_dim, self.latent_dim), dtype=jnp.float64)
+        left = jnp.concat((I, I), axis=0)
+        return jnp.concat((left, Z), axis=1)
 
-    def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
-        I = torch.eye(self.latent_dim)
-        init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
-        init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion**2 * self.dt * I
-        init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
-        return init_cov
+    def _construct_init_var(self, initial_diffusion: jax.Array, jitter=0.0) -> jax.Array:
+        I = jnp.eye(self.latent_dim, dtype=jnp.float64)
+        Z = jnp.zeros((self.latent_dim,self.latent_dim), dtype=jnp.float64)
+        idiff = initial_diffusion**2 * self.dt * I
+        top = jnp.concat((idiff, Z), axis=1)
+        bottom = jnp.concat((Z, I * jitter), axis=1)
+        return jnp.concat((top, bottom), axis=0)
 
-    def _construct_transition_mat(self, decay: torch.Tensor) -> torch.Tensor:
-        I = torch.eye(self.latent_dim)
-        Z = torch.zeros(self.latent_dim, self.latent_dim)
+    def _construct_transition_mat(self, decay: jax.Array) -> jax.Array:
+        I = jnp.eye(self.latent_dim, dtype=jnp.float64)
+        Z = jnp.zeros((self.latent_dim, self.latent_dim), dtype=jnp.float64)
 
-        ex     = torch.exp(-decay * self.dt)
+        ex     = jnp.exp(-decay * self.dt)
         A1     = I * (1 + ex)
         A2     = I * ex
-        top    = torch.cat((A1, A2), dim=1)
-        bottom = torch.cat((I, Z), dim=1)
-        A = torch.cat((top, bottom), dim=0)
+        top    = jnp.concat((A1, A2), axis=1)
+        bottom = jnp.concat((I, Z), axis=1)
+        A = jnp.concat((top, bottom), axis=0)
         return A
 
-    def _construct_transition_cov(self, decay: torch.Tensor, diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
-        I = torch.eye(self.latent_dim)
-        Z = torch.zeros(self.latent_dim, self.latent_dim)
+    def _construct_transition_cov(self, decay: jax.Array, diffusion: jax.Array, jitter=0.0) -> jax.Array:
+        I = jnp.eye(self.latent_dim, dtype=jnp.float64)
+        Z = jnp.zeros((self.latent_dim, self.latent_dim), dtype=jnp.float64)
 
         Q = (diffusion * self.dt) ** 2 / (2*decay) \
-            * (1 - torch.exp(-2*decay * self.dt)) * I
-        top    = torch.cat((Q, Z), dim=1)
-        bottom = torch.cat((Z, I * jitter), dim=1)
-        Gamma = torch.cat((top, bottom), dim=0)
+            * (1 - jnp.exp(-2*decay * self.dt)) * I
+        top    = jnp.concat((Q, Z), axis=1)
+        bottom = jnp.concat((Z, I * jitter), axis=1)
+        Gamma = jnp.concat((top, bottom), axis=0)
         return Gamma
 
-    def _init_priors(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_priors(self) -> Tuple[jax.Array, jax.Array]:
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
         Meanwhile, $P(z_2|z_1) = \mathcal{N}(z_2|z_1, \sigma_0^2 dt)$: a simple gaussian.
 
         Returns:
-            (torch.Tensor): Prior mean for augmented state $[z_t; z_{t-1}]^T$
-            (torch.Tensor): Prior covariance for augmented state
+            (jax.Array): Prior mean for augmented state $[z_t; z_{t-1}]^T$
+            (jax.Array): Prior covariance for augmented state
         """
         # $z_2 = I z_1 + \sigma_0^2dt\xi_1$
         init_mean = self._construct_init_mean()
-        init_cov = self._construct_init_var(self.initial_diffusion.exp())
+        init_cov = self._construct_init_var(jnp.exp(self.initial_diffusion))
         return init_mean, init_cov
 
-    def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_transition_matrices(self) -> Tuple[jax.Array, jax.Array]:
         """Construct transition matrices for momentum SSM.
 
         Returns:
-            (torch.Tensor): transition matrix for augmented state $[z_t; z_{t-1}]^T$
-            (torch.Tensor): process noise covariance for augmented state
+            (jax.Array): transition matrix for augmented state $[z_t; z_{t-1}]^T$
+            (jax.Array): process noise covariance for augmented state
         """
-        A = self._construct_transition_mat(self.decay.exp())
-        Q = self._construct_transition_cov(self.decay.exp(), self.diffusion.exp()) 
-
+        A = self._construct_transition_mat(jnp.exp(self.decay))
+        Q = self._construct_transition_cov(jnp.exp(self.decay), jnp.exp(self.diffusion)) 
         return A,Q
 
-    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        I = torch.eye(self.latent_dim)
-        Z = torch.zeros(self.latent_dim, self.latent_dim)
-        H = torch.hstack((I, Z))
+    def _init_observation_matrices(self) -> Tuple[jax.Array, jax.Array]:
+        I = jnp.eye(self.latent_dim, dtype=jnp.float64)
+        Z = jnp.zeros((self.latent_dim, self.latent_dim), dtype=jnp.float64)
+        H = jnp.hstack((I, Z))
         R = self.approximate_covariance
         return H,R
 
@@ -295,13 +325,15 @@ class Momentum(KalmanFilter):
 
         # Filtered mean and covariance are augmented state spaces
         # $s_t = (z_t, z_{t-1})^T$
-        #"""
+        """
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = P1
         """
-        values.filtered_mean[batch][0]  = mu1.repeat(self.latent_dim,1)
-        values.filtered_cov[batch][0]   = P1.repeat(self.latent_dim,self.latent_dim)
-        """
+        #values.filtered_mean[batch][0]  = mu1.repeat(self.latent_dim,1)
+        #values.filtered_cov[batch][0]   = P1.repeat(self.latent_dim,self.latent_dim)
+        values.filtered_mean[batch][0]  = jnp.vstack((mu1,)*self.latent_dim)
+        values.filtered_cov[batch][0]   = jnp.tile(P1, (self.latent_dim, self.latent_dim))
+        #"""
         values.predicted_mean[batch][0] = self.initial_state_mean @ values.filtered_mean[batch][0]
         values.predicted_cov[batch][0]  = self.initial_state_mean @ values.filtered_cov[batch][0] @ self.initial_state_mean.T + self.initial_state_covariance
 
@@ -333,7 +365,7 @@ class Momentum(KalmanFilter):
         K    = hseu.invmul(PnCt, C @ PnCt + sigma)
 
         mu_t = Am1 + K @ (values.observations[batch][t] - C @ Am1)
-        v_t  = (torch.eye(self.augmented_dim) - K @ C) @ Pn1
+        v_t  = (jnp.eye(self.augmented_dim) - K @ C) @ Pn1
 
         Am = self.transition_matrices @ mu_t
         Pt = self.transition_matrices @ v_t @ self.transition_matrices.T + self.transition_covariance
@@ -387,7 +419,6 @@ class Momentum(KalmanFilter):
         Returns:
             KalmanStatistics: The sufficient statistics of the model.
         """
-        btrace = torch.vmap(torch.trace)
         Cov  = [
             (sc[1:,:self.latent_dim,:self.latent_dim] @ sg[:-1,:self.latent_dim,:self.latent_dim].mT)
                 for sc,sg in zip(values.smoothed_cov, values.smoothed_gain)
@@ -398,7 +429,7 @@ class Momentum(KalmanFilter):
                 for sm in values.smoothed_mean
         ]
         Ezz1 = [
-            btrace(c).squeeze() + (sm[1:,:self.latent_dim].mT @ sm[:-1,:self.latent_dim]).squeeze()
+            jnp.trace(c, axis1=-2, axis2=-1).squeeze() + (sm[1:,:self.latent_dim].mT @ sm[:-1,:self.latent_dim]).squeeze()
                 for c,sm in zip(Cov,values.smoothed_mean)
         ]
         return KalmanStatistics(
@@ -412,7 +443,7 @@ class Momentum(KalmanFilter):
             Ezx=None
         )
 
-    def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> jax.Array:
         """Calculate the log-likelihood for the model given the current state.
         
         Args:
@@ -420,7 +451,7 @@ class Momentum(KalmanFilter):
             stats (KalmanStatistics): Sufficient statistics calculated from these values.
 
         Returns:
-            torch.Tensor: The log-likelihood for the model.
+            jax.Array: The log-likelihood for the model.
         """
         #ell = stats.Exx[b] - stats.Exz[b] @ C.mT - C @ stats.Ezx[b] + C @ stats.Ezz[b] @ C.mT
         #ell = torch.linalg.solve(Sigma[b] + .00001 * torch.eye(self.obs_dim), ell)
@@ -428,38 +459,40 @@ class Momentum(KalmanFilter):
         #_ll += torch.trace(ell) 
 
         ll = 0
-        idiff = torch.exp(self.initial_diffusion)
-        diff  = torch.exp(self.diffusion)
-        decay = torch.exp(self.decay)
+        idiff = jnp.exp(self.initial_diffusion)
+        diff  = jnp.exp(self.diffusion)
+        decay = jnp.exp(self.decay)
 
         Sigma = self.observation_covariance
         v1 = idiff**2 * self.dt 
-        alpha = 1 + torch.exp(-decay * self.dt)
-        gamma = (diff * self.dt)**2 / (2*decay) * (1 - torch.exp(-2*decay * self.dt))
+        alpha = 1 + jnp.exp(-decay * self.dt)
+        gamma = (diff * self.dt)**2 / (2*decay) * (1 - jnp.exp(-2*decay * self.dt))
 
         for b in range(len(values.observations)): 
             T = values.observations[b].shape[0]
             _ll = 0
-            _ll += torch.log(v1**2)
-            _ll += torch.log(gamma**2) * (T-2)
-            #_ll += torch.sum(torch.logdet(Sigma[b]))
+            _ll += jnp.log(v1**2)
+            _ll += jnp.log(gamma**2) * (T-2)
+            #_ll += jnp.sum(jnp.logdet(Sigma[b]))
 
             ill = stats.Ezz[b][1] - 2*stats.Ezz1[b][0] + stats.Ezz[b][0]
             ill = ill / v1 
             _ll += ill
 
             tll = stats.Ezz[b][2:] - 2*alpha*Ezz1[b][1:] + alpha**2 * stats.Ezz[b][1:-1]
-            tll = torch.sum(tll, axis=0) / gamma 
+            tll = jnp.sum(tll, axis=0) / gamma 
             _ll += tll 
 
             #ell = stats.Exx[b] - stats.Ezx[b] - stats.Ezx[b].mT + stats.Ezz[b]
 
-            ll += _ll / 2 + T * self.augmented_dim * torch.log(2 * PI)
+            ll += _ll / 2 + T * self.augmented_dim * jnp.log(2 * np.pi)
 
         return ll
 
     def _em_mle(self, values, stats, normalize):
         raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
+
+
 
     def _em_autograd(self, 
             values: MomentumResults,
@@ -470,7 +503,7 @@ class Momentum(KalmanFilter):
             n_epochs: int = 1000, 
             gd_tol: float = 1e-3, 
             seed: int|None = 42
-        ) -> torch.Tensor:
+        ) -> jax.Array:
         """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
 
         Args:
@@ -484,78 +517,27 @@ class Momentum(KalmanFilter):
             seed (int|None): Seed for the random number generator.
 
         Returns:
-            torch.Tensor: The final negative log likelihood.
+            jax.Array: The final negative log likelihood.
         """
-        if seed is not None:
-            torch.random.manual_seed(seed)
 
-        optimizers = {
-            'Adam': torch.optim.Adam,
-            'SGD': torch.optim.SGD,
-            'AdamW': torch.optim.AdamW,
-            'LBFGS': torch.optim.LBFGS
-        }
+        decay             = self.decay.copy()
+        diffusion         = self.diffusion.copy()
+        initial_diffusion = self.initial_diffusion.copy()
+        params = jnp.hstack([decay, diffusion, initial_diffusion])
 
-        I = torch.eye(self.latent_dim)
-
-        decay             = torch.zeros(1, requires_grad=True)
-        diffusion         = torch.zeros(1, requires_grad=True)
-        initial_diffusion = torch.zeros(1, requires_grad=True)
-        with torch.no_grad():
-            decay.copy_(self.decay)
-            diffusion.copy_(self.diffusion)
-            initial_diffusion.copy_(self.initial_diffusion)
-
-        optimizer = optimizers[optimizer](
-            [diffusion, decay, initial_diffusion],
-            lr=lr
+        params,prev_loss = self._fit_ag(
+            loss_closure,
+            params,
+            optimizer,
+            lr,
+            n_epochs,
+            gd_tol,
+            self.dt,
+            stats.Ezz,
+            stats.Ezz1
         )
-
-        prev_loss = np.inf
-        btrace = torch.vmap(torch.trace)
-
-        Ezz  = stats.Ezz
-        Ezz1 = stats.Ezz1
-
-        for epoch in range(n_epochs):
-            def loss_closure():
-                optimizer.zero_grad()
-                _idiff = torch.exp(initial_diffusion)
-                _diff  = torch.exp(diffusion)
-                _decay = torch.exp(decay)
-
-                v1 = _idiff**2 * self.dt
-                alpha = 1 + torch.exp(-_decay * self.dt)
-                gamma = (_diff * self.dt)**2 / (2 * _decay) * (1 - torch.exp(-2 * _decay * self.dt))
-                total_loss = 0
-                for i in range(len(values.observations)):
-                    loss = 0. 
-                    T = values.observations[i].shape[0]
-
-                    ill = Ezz[i][1] - 2 * Ezz1[i][0] + Ezz[i][0]
-                    ill = ill / v1
-                    ill = torch.log(v1**2) + ill
-                    loss += ill
-
-                    tll = Ezz[i][2:] - 2 * alpha * Ezz1[i][1:] + alpha**2 * Ezz[i][1:-1]
-                    tll = torch.sum(tll,axis=0) / gamma
-                    tll = (T-2) * torch.log(gamma**2) + tll
-                    loss += tll
-
-                    total_loss += loss / 2
-                total_loss.backward(retain_graph=True)
-                return total_loss
-
-            total_loss = optimizer.step(loss_closure)
-
-            if epoch > 0 and abs((total_loss.item() - prev_loss) / prev_loss) < gd_tol: 
-                break
-
-            prev_loss = total_loss.item()
         
-        self.decay             = decay.detach()
-        self.diffusion         = diffusion.detach()
-        self.initial_diffusion = initial_diffusion.detach()
+        self.decay,self.diffusion,self.initial_diffusion = params
 
         (
             self.transition_matrices,
@@ -566,7 +548,7 @@ class Momentum(KalmanFilter):
             self.initial_state_covariance,
         ) = self._initialize_parameters()
 
-        return torch.tensor(prev_loss)
+        return prev_loss
 
     def _resume_from_checkpoint(self, 
             last_iter: int,
@@ -663,11 +645,10 @@ class Momentum(KalmanFilter):
             os.makedirs(checkpoint_path, exist_ok=True)
 
         for i in range(n_iter):
-            with torch.no_grad():
-                values = self.filter(values)
-                values = self.smooth(values)
-            print("Filtered and smoothed")
-            raise Exception()
+            values = self.filter(values)
+            values = self.smooth(values)
+            #print("Filtered and smoothed")
+            #raise Exception()
             ll = self._em(
                 values,
                 normalize=False,
@@ -676,7 +657,7 @@ class Momentum(KalmanFilter):
             )
 
             values.loglike.append(-ll)
-            if not torch.isfinite(values.loglike[-1]):
+            if not jnp.isfinite(values.loglike[-1]):
                 print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
                 break
 
@@ -685,7 +666,7 @@ class Momentum(KalmanFilter):
                 break
 
             if i % 50 == 0:
-                print(f"Iteration {i}: {-ll.item()}")
+                print(f"Iteration {i}: {-ll}")
                 if checkpoint_path:
                     hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
 

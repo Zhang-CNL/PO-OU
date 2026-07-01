@@ -1,4 +1,5 @@
 import numpy as np
+import pynapple as nap
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 

@@ -1,5 +1,6 @@
-# hippocampalseq
+# hippocampalseq- JAX
 State-space modeling of hippocampal theta and replay sequences.
+Partial attempt at rewriting the model in JAX. Gave up because it's ~10x slower.
 
 ## Submodules
 ### hippocampalseq.models

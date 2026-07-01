@@ -1,6 +1,12 @@
-import torch 
+import os
 import numpy as np
-from torch.distributions import MultivariateNormal
+import jax 
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
+import optax
+from jax.scipy.stats import multivariate_normal
+from jax.scipy.special import logsumexp
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -14,35 +20,35 @@ __all__ = [
     'PI'
 ]
 
-PI = torch.tensor(np.pi)
+PI = np.pi
 
 @dataclass
 class KalmanResults:
-    observations   : List[torch.Tensor] = field(default_factory=list)
-    predicted_mean : List[torch.Tensor] = field(default_factory=list)
-    predicted_cov  : List[torch.Tensor] = field(default_factory=list)
-    filtered_mean  : List[torch.Tensor] = field(default_factory=list)
-    filtered_cov   : List[torch.Tensor] = field(default_factory=list)
-    smoothed_gain  : List[torch.Tensor] = field(default_factory=list)
-    smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
-    smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
-    loglike        : List[float] = field(default_factory=list)
-    cumulative_probabilities : torch.Tensor = field(default_factory=lambda: torch.empty(0))
+    observations   : List[np.ndarray] = field(default_factory=list)
+    predicted_mean : List[np.ndarray] = field(default_factory=list)
+    predicted_cov  : List[np.ndarray] = field(default_factory=list)
+    filtered_mean  : List[np.ndarray] = field(default_factory=list)
+    filtered_cov   : List[np.ndarray] = field(default_factory=list)
+    smoothed_gain  : List[np.ndarray] = field(default_factory=list)
+    smoothed_mean  : List[np.ndarray] = field(default_factory=list)
+    smoothed_cov   : List[np.ndarray] = field(default_factory=list)
+    loglike        : List[float]      = field(default_factory=list)
+    cumulative_probabilities : np.ndarray = field(default_factory=lambda: np.empty(0))
 
 @dataclass
 class KalmanStatistics:
-    Cov  : List[torch.Tensor] # $\hat{V}_tJ_{t-1}$
-    Ez   : List[torch.Tensor] # $\mathbb{E}[z^T]$
-    Ezz  : List[torch.Tensor] # $\mathbb{E}[zz^T]$
-    Ezz1 : List[torch.Tensor] # $\mathbb{E}[z_{t}z_{t-1}^T]$
-    Ez1z : List[torch.Tensor] # $\mathbb{E}[z_{t-1}z_t^T]$
-    Exx  : List[torch.Tensor] # $\mathbb{E}[xx^T]  $
-    Exz  : List[torch.Tensor] # $\mathbb{E}[xz^T]  $
-    Ezx  : List[torch.Tensor] # $\mathbb{E}[zx^T]$
+    Cov  : List[np.ndarray] # $\hat{V}_tJ_{t-1}$
+    Ez   : List[np.ndarray] # $\mathbb{E}[z^T]$
+    Ezz  : List[np.ndarray] # $\mathbb{E}[zz^T]$
+    Ezz1 : List[np.ndarray] # $\mathbb{E}[z_{t}z_{t-1}^T]$
+    Ez1z : List[np.ndarray] # $\mathbb{E}[z_{t-1}z_t^T]$
+    Exx  : List[np.ndarray] # $\mathbb{E}[xx^T]  $
+    Exz  : List[np.ndarray] # $\mathbb{E}[xz^T]  $
+    Ezx  : List[np.ndarray] # $\mathbb{E}[zx^T]$
 
 class KalmanFilter(StateSpace):
     """Base state space modeling class that implements a kalman filter"""
-    def __init__(self, latent_dim, obs_dim, order=1):
+    def __init__(self, latent_dim, obs_dim, order=1, seed: Optional[int] = None):
         """Initialize the kalman filter
 
         Args:
@@ -50,7 +56,11 @@ class KalmanFilter(StateSpace):
             obs_dim (int): Dimension of the observations.
             order (int, optional): Order of the state space model. The order of the markov chain being used. Defaults to 1.
         """
-        torch.set_default_dtype(torch.double)
+        if seed is None:
+            seed = int.from_bytes(os.urandom(4))
+        if isinstance(seed, int):
+            seed = jax.random.key(seed)
+        self.key = seed
 
         self.latent_dim    = latent_dim
         self.augmented_dim = order * latent_dim
@@ -67,12 +77,12 @@ class KalmanFilter(StateSpace):
         # Observation matrix -> nxm
         # Observation noise -> mxm
 
-    def _parse_observations(self, obs) -> List[torch.Tensor]:
+    def _parse_observations(self, obs) -> List[jax.Array]:
         """Safely convert observations to their expected format."""
         if not isinstance(obs, list):
             obs = [obs]
         for i in range(len(obs)):
-            obs[i] = torch.atleast_3d(obs[i])
+            obs[i] = np.atleast_3d(obs[i])
             if obs[i].shape[1] < obs[i].shape[2]:
                 obs[i] = obs[i].mT
         return obs
@@ -82,7 +92,7 @@ class KalmanFilter(StateSpace):
         P0Ct = self.initial_state_covariance @ self.observation_matrices.T 
         K1 = hseu.invmul(P0Ct, self.observation_matrices @ P0Ct + self.observation_covariance) 
         mu1 = self.initial_state_mean + K1 @ (values.observations[batch][0] - self.observation_matrices @ self.initial_state_mean)
-        v1 = (torch.eye(self.augmented_dim) - K1 @ self.observation_matrices) @ self.initial_state_covariance
+        v1 = (jnp.eye(self.augmented_dim) - K1 @ self.observation_matrices) @ self.initial_state_covariance
         #mu1 = self.initial_state_mean
         #v1  = self.initial_state_covariance
 
@@ -102,7 +112,7 @@ class KalmanFilter(StateSpace):
         K = hseu.invmul(Pct, self.observation_matrices @ Pct + self.observation_covariance)
 
         mut = Am1 + K @ (values.observations[batch][t] - self.observation_matrices @ Am1)
-        vt  = (torch.eye(self.augmented_dim) - K @ self.observation_matrices) @ Pn1
+        vt  = (jnp.eye(self.augmented_dim) - K @ self.observation_matrices) @ Pn1
 
         Am = self.transition_matrices @ mut
         Pn = self.transition_matrices @ vt @ self.transition_matrices.T + self.transition_covariance
@@ -119,7 +129,7 @@ class KalmanFilter(StateSpace):
         for batch in range(len(values.observations)):
             values = self._filter_init(values, batch)
             for t in range(1, values.observations[batch].shape[0]):
-                values = self._filter(values, batch, t)
+                values = self._filter(values, jnp.array(batch), jnp.array(t))
 
         return values
 
@@ -131,8 +141,8 @@ class KalmanFilter(StateSpace):
 
     def _smooth(self, values: KalmanResults, batch: int, t: int) -> KalmanResults:
         """Run the RTS smoother for a single time step."""
-        Amt   = values.predicted_mean[batch][t]
-        Pt    = values.predicted_cov[batch][t]
+        Amt = values.predicted_mean[batch][t]
+        Pt  = values.predicted_cov[batch][t]
 
         J = hseu.invmul(values.filtered_cov[batch][t] @ self.transition_matrices.T, Pt)
         muht = values.filtered_mean[batch][t] + J @ (values.smoothed_mean[batch][t+1] - Amt) 
@@ -141,6 +151,7 @@ class KalmanFilter(StateSpace):
         values.smoothed_gain[batch][t] = J
         values.smoothed_mean[batch][t] = muht
         values.smoothed_cov[batch][t]  = vht
+
         return values
 
     def smooth(self, values: KalmanResults) -> KalmanResults:
@@ -149,39 +160,39 @@ class KalmanFilter(StateSpace):
         for batch in range(len(values.observations)):
             values = self._smooth_init(values, batch)
             for t in reversed(range(values.observations[batch].shape[0] - 1)):
-                values = self._smooth(values, batch, t)
+                values = self._smooth(values, jnp.array(batch), jnp.array(t))
         return values
 
-    def _init_priors(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        m = torch.randn(self.augmented_dim, 1)
-        n = torch.eye(self.augmented_dim)
+    def _init_priors(self) -> Tuple[jax.Array, jax.Array]:
+        m = self.random((self.augmented_dim, 1), 'normal')
+        n = jnp.eye(self.augmented_dim)
         return m,n
 
-    def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        F = torch.rand(self.augmented_dim, self.augmented_dim)
-        F = F / F.sum(axis=1, keepdim=True)
-        Q = torch.randn(self.augmented_dim, self.augmented_dim)
+    def _init_transition_matrices(self) -> Tuple[jax.Array, jax.Array]:
+        F = self.random((self.augmented_dim, self.augmented_dim))
+        F = F / F.sum(axis=1, keepdims=True)
+        Q = self.random((self.augmented_dim, self.augmented_dim), 'uniform')
         Q = Q @ Q.T 
         return F,Q
 
-    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        H = torch.rand(self.augmented_dim, self.obs_dim)
-        H = H / H.sum(axis=1, keepdim=True)
-        R = torch.randn(self.obs_dim, self.obs_dim)
+    def _init_observation_matrices(self) -> Tuple[jax.Array, jax.Array]:
+        H = self.random((self.augmented_dim, self.obs_dim))
+        H = H / H.sum(axis=1, keepdims=True)
+        R = self.random((self.obs_dim, self.obs_dim))
         R = R @ R.T
         return H, R
 
-    def _initialize_parameters(self) -> Tuple[torch.Tensor,...]:
+    def _initialize_parameters(self) -> Tuple[jax.Array,...]:
         initial_mean, initial_cov = self._init_priors()
         trans_mat, trans_cov      = self._init_transition_matrices()
         obs_mat, obs_cov          = self._init_observation_matrices()
         return trans_mat, trans_cov, obs_mat, obs_cov, initial_mean, initial_cov
 
-    def _initialize(self, X: torch.Tensor) -> KalmanResults:
-        tf_base  = [torch.zeros_like(x) for x in X]
-        cov_base = [torch.zeros(x.shape[:-1] + (self.augmented_dim,)) for x in X]
+    def _initialize(self, X: jax.Array) -> KalmanResults:
+        tf_base  = [np.zeros_like(x) for x in X]
+        cov_base = [np.zeros(x.shape[:-1] + (self.augmented_dim,)) for x in X]
         def _copy(x):
-            return [i.clone() for i in x]
+            return [i.copy() for i in x]
         return KalmanResults(
             observations   = X,
             predicted_mean = _copy(tf_base),
@@ -215,7 +226,7 @@ class KalmanFilter(StateSpace):
             Cov, Ez, Ezz, Ezz1, Ez1z, Exx, Exz, Ezx
         )
 
-    def _loglikelihood(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _loglikelihood(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
         """Calculate the log likelihood of the model given the sufficient statistics and current 
         parameters.
 
@@ -224,53 +235,58 @@ class KalmanFilter(StateSpace):
             stats (KalmanStatistics): The sufficient statistics of the model.
 
         Returns:
-            torch.Tensor: The log likelihood of the model.
+            jax.Array: The log likelihood of the model.
         """
         ll = 0
         for b in range(len(values.observations)):
             T = values.observations[b].shape[0]
-            icd = torch.logdet(self.initial_state_covariance)
-            if torch.isfinite(icd):
+            icd = hseu.logdet(self.initial_state_covariance)
+            if jnp.isfinite(icd):
                 ll += icd
 
             _ll = 0
-            _ll += torch.logdet(self.transition_covariance) * (T - 1)
-            _ll += torch.logdet(self.observation_covariance) * T
+            _ll += hseu.logdet(self.transition_covariance) * (T - 1)
+            _ll += hseu.logdet(self.observation_covariance) * T
 
             ip1 = stats.Ezz[b][0]
             ip2 = self.initial_state_mean @ values.smoothed_mean[b][0].mT
             ip3 = values.smoothed_mean[b][0] @ self.initial_state_mean.mT
             ip4 = self.initial_state_mean @ self.initial_state_mean.mT
-            ill = hseu.mulinv(self.initial_state_covariance + .001 * torch.eye(self.augmented_dim), ip1 - ip2 - ip3 + ip4)
-            ill = torch.trace(ill) / 2
+            ill = hseu.mulinv(self.initial_state_covariance + .001 * jnp.eye(self.augmented_dim), ip1 - ip2 - ip3 + ip4)
+            ill = jnp.trace(ill, axis1=-2, axis2=-1) / 2
             _ll += ill
 
             tp1 = stats.Ezz[b][1:]
             tp2 = stats.Ezz1[b] @ self.transition_matrices.mT
             tp3 = tp2.mT 
             tp4 = self.transition_matrices @ stats.Ezz[b][:-1] @ self.transition_matrices.mT
-            tll = torch.sum(tp1 - tp2 - tp3 + tp4, axis=0) 
+            tll = jnp.sum(tp1 - tp2 - tp3 + tp4, axis=0) 
             tll = hseu.mulinv(self.transition_covariance, tll)
-            tll = torch.trace(tll) / 2
+            tll = jnp.trace(tll, axis1=-2, axis2=-1) / 2
             _ll += tll
 
             ep1 = stats.Exx[b]
             ep2 = self.observation_matrices @ stats.Ezx[b]
             ep3 = ep2.mT
             ep4 = self.observation_matrices @ stats.Ezz[b] @ self.observation_matrices.mT
-            ell = torch.sum(ep1 - ep2 - ep3 + ep4, axis=0)
+            ell = jnp.sum(ep1 - ep2 - ep3 + ep4, axis=0)
             ell = hseu.mulinv(self.observation_covariance, ell)
-            ell = torch.trace(ell) / 2
+            ell = jnp.trace(ell, axis1=-2, axis2=-1) / 2
             _ll += ell
 
-            _ll += T * self.latent_dim * torch.log(2*PI)
+            _ll += T * self.latent_dim * jnp.log(2*np.pi)
             ll += _ll / 2
         return ll
 
-    def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
-        return torch.atleast_2d(torch.mean(torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean]), axis=0))
+    def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
+        return jnp.atleast_2d(
+            jnp.mean(
+                jnp.concat([jnp.expand_dims(sm[0], 0) for sm in values.smoothed_mean]),
+                axis=0
+            )
+        )
     
-    def _initial_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _initial_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
         """
         mu1 = torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean])
         c1  = torch.cat([sc[0].unsqueeze(0) for sc in values.smoothed_cov])
@@ -280,39 +296,39 @@ class KalmanFilter(StateSpace):
         P4 = self.initial_state_mean @ self.initial_state_mean.mT 
         return torch.atleast_2d(torch.mean(P1 - P2 - P3 + P4, axis=0))
         """ 
-        P1 = torch.cat([ezz[0].unsqueeze(0) for ezz in stats.Ezz])
-        P2 = torch.cat([(ez[0] @ ez[0].mT).unsqueeze(0) for ez in stats.Ez])
-        return torch.atleast_2d(torch.mean(P1 - P2, axis=0))
+        P1 = jnp.concat([jnp.expand_dims(ezz[0], 0) for ezz in stats.Ezz])
+        P2 = jnp.concat([jnp.expand_dims((ez[0] @ ez[0].mT), 0) for ez in stats.Ez])
+        return jnp.atleast_2d(jnp.mean(P1 - P2, axis=0))
 
-    def _transition_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
-        Numer = torch.cat([torch.sum(ezz1, axis=0, keepdim=True) for ezz1 in stats.Ezz1])
-        Denom = torch.cat([torch.sum(ezz, axis=0, keepdim=True) for ezz in stats.Ezz])
+    def _transition_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
+        Numer = jnp.concat([jnp.sum(ezz1, axis=0, keepdims=True) for ezz1 in stats.Ezz1])
+        Denom = jnp.concat([jnp.sum(ezz, axis=0, keepdims=True) for ezz in stats.Ezz])
         A = hseu.invmul(Numer, Denom)
-        return torch.atleast_2d(torch.mean(A, axis=0))
+        return jnp.atleast_2d(jnp.mean(A, axis=0))
 
-    def _transition_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _transition_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
         P1 = [ezz[1:] for ezz in stats.Ezz]
         P2 = [ezz1 @ self.transition_matrices.T for ezz1 in stats.Ezz1]
         P3 = [p2.mT for p2 in P2]
         P4 = [self.transition_matrices @ ezz[:-1] @ self.transition_matrices.T for ezz in stats.Ezz]
-        Gamma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True) / len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
-        return torch.atleast_2d(torch.mean(Gamma, axis=0))
+        Gamma = jnp.concat([jnp.sum(p1-p2-p3+p4, axis=0, keepdims=True) / len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
+        return jnp.atleast_2d(jnp.mean(Gamma, axis=0))
 
-    def _observation_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
-        Numer = torch.cat([torch.sum(exz, axis=0, keepdim=True) for exz in stats.Exz])
-        Denom = torch.cat([torch.sum(ezz, axis=0, keepdim=True) for ezz in stats.Ezz])
+    def _observation_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
+        Numer = jnp.concat([jnp.sum(exz, axis=0, keepdims=True) for exz in stats.Exz])
+        Denom = jnp.concat([jnp.sum(ezz, axis=0, keepdims=True) for ezz in stats.Ezz])
         C = hseu.invmul(Numer, Denom)
-        return torch.atleast_2d(torch.mean(C, axis=0))
+        return jnp.atleast_2d(jnp.mean(C, axis=0))
 
-    def _observation_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _observation_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> jax.Array:
         P1 = stats.Exx
         P2 = [self.observation_matrices @ ezx for ezx in stats.Ezx]
         P3 = [p2.mT for p2 in P2]
         P4 = [self.observation_matrices @ ezz @ self.observation_matrices.T for ezz in stats.Ezz]
-        Sigma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True)/len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
-        return torch.atleast_2d(torch.mean(Sigma, axis=0))
+        Sigma = jnp.concat([jnp.sum(p1-p2-p3+p4, axis=0, keepdims=True)/len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
+        return jnp.atleast_2d(jnp.mean(Sigma, axis=0))
 
-    def _em_mle(self, values: KalmanResults, stats: KalmanStatistics, normalize: bool) -> torch.Tensor:
+    def _em_mle(self, values: KalmanResults, stats: KalmanStatistics, normalize: bool) -> jax.Array:
         """Maximum likelihood estimation of all relevant parameters.
 
         Args:
@@ -321,20 +337,48 @@ class KalmanFilter(StateSpace):
             normalize (bool): If True, normalize the transition and observation matrices.
 
         Returns:
-            torch.Tensor: The final negative log likelihood.
+            jax.Array: The final negative log likelihood.
         """
-        with torch.no_grad():
-            self.transition_matrices      = self._transition_matrix_mle(values, stats)
-            if normalize:
-                self.transition_matrices /= torch.sum(self.transition_matrices, axis=1, keepdim=True)
-            self.transition_covariance    = self._transition_covariance_mle(values, stats)
-            self.observation_matrices     = self._observation_matrix_mle(values, stats)
-            if normalize:
-                self.observation_matrices /= torch.sum(self.observation_matrices, axis=1, keepdim=True)
-            self.observation_covariance   = self._observation_covariance_mle(values, stats)
-            self.initial_state_mean       = self._initial_mean_mle(values, stats)
-            self.initial_state_covariance = self._initial_covariance_mle(values, stats)
+        self.transition_matrices      = self._transition_matrix_mle(values, stats)
+        if normalize:
+            self.transition_matrices /= jnp.sum(self.transition_matrices, axis=1, keepdims=True)
+        self.transition_covariance    = self._transition_covariance_mle(values, stats)
+        self.observation_matrices     = self._observation_matrix_mle(values, stats)
+        if normalize:
+            self.observation_matrices /= jnp.sum(self.observation_matrices, axis=1, keepdims=True)
+        self.observation_covariance   = self._observation_covariance_mle(values, stats)
+        self.initial_state_mean       = self._initial_mean_mle(values, stats)
+        self.initial_state_covariance = self._initial_covariance_mle(values, stats)
         return self._loglikelihood(values, stats)
+
+    def _fit_ag(self, 
+        loss_closure,
+        loss_params,
+        optimizer: str = "Adam",
+        lr: float = .01,
+        n_epochs: int = 1000, 
+        gd_tol: float = 1e-3,
+        **loss_args
+    ):
+        optimizers = {
+            'Adam'  : optax.adam,
+            'SGD'   : optax.sgd,
+            'AdamW' : optax.adamw,
+            'LBFGS' : optax.lbfgs
+        }
+        optimizer = optimizers[optimizer](learning_rate=lr)
+        opt_state = optimizer.init(loss_params)
+        prev_loss = np.inf 
+
+        for epoch in range(n_epochs):
+            loss,grads = jax.value_and_grad(loss_closure)(loss_params, **loss_args)
+            updates,opt_state = optimizer.update(grads, opt_state, loss_params)
+            params = optax.apply_updates(loss_params, updates)
+            if epoch > 0 and abs((loss - prev_loss) / prev_loss) < gd_tol:
+                break
+            prev_loss = loss
+
+        return params,jnp.array(prev_loss)
 
     def _em_autograd(self, 
             values: KalmanResults, 
@@ -343,7 +387,7 @@ class KalmanFilter(StateSpace):
             n_epochs: int = 1000, 
             lr: float = .01, 
             gd_tol: float = 1e-3, 
-        ) -> torch.Tensor:
+        ) -> jax.Array:
         """Perform maximum likelihood estimation using autograd.
 
         Args:
@@ -355,7 +399,7 @@ class KalmanFilter(StateSpace):
             gd_tol (float): Tolerance for SGD.
 
         Returns:
-            torch.Tensor: The final negative log likelihood.
+            jax.Array: The final negative log likelihood.
         """
 
         A = torch.zeros(self.augmented_dim, self.augmented_dim, requires_grad=True)
@@ -404,8 +448,8 @@ class KalmanFilter(StateSpace):
                 eloss = torch.linalg.solve(Sigma, eloss)
                 iloss += torch.trace(eloss)
 
-                iloss += torch.logdet(Gamma) * (values.observations[b].shape[0] - 1)
-                iloss += torch.logdet(Sigma) * (values.observations[b].shape[0])
+                iloss += hseu.logdet(Gamma) * (values.observations[b].shape[0] - 1)
+                iloss += hseu.logdet(Sigma) * (values.observations[b].shape[0])
                 iloss /= 2
 
                 loss += iloss / n_batches
@@ -420,17 +464,17 @@ class KalmanFilter(StateSpace):
 
         self.transition_matrices    = A.detach()
         if normalize:
-            self.transition_matrices   /= self.transition_matrices.sum(axis=1, keepdim=True)
+            self.transition_matrices   /= self.transition_matrices.sum(axis=1, keepdims=True)
         self.observation_matrices   = C.detach()
         if normalize:
-            self.observation_matrices  /= self.observation_matrices.sum(axis=1, keepdim=True)
+            self.observation_matrices  /= self.observation_matrices.sum(axis=1, keepdims=True)
         self.transition_covariance  = (ChGamma @ ChGamma.T).detach()
         self.observation_covariance = (ChSigma @ ChSigma.T).detach()
 
-        return torch.tensor(prev_loss)
+        return jnp.array(prev_loss)
 
 
-    def _em(self, values: KalmanResults, normalize: bool, maximization_type: str = 'autograd', **autograd_args) -> torch.Tensor:
+    def _em(self, values: KalmanResults, normalize: bool, maximization_type: str = 'autograd', **autograd_args) -> jax.Array:
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
@@ -440,17 +484,16 @@ class KalmanFilter(StateSpace):
             **autograd_args: Keyword arguments for the autograd maximization algorithm.
 
         Returns:
-            torch.Tensor: The negative log likelihood of the data given the model parameters.
+            jax.Array: The negative log likelihood of the data given the model parameters.
         """
         assert maximization_type in ['mle', 'autograd']
-        with torch.no_grad():
-            stats = self._calc_sufficient_stats(values)
+        stats = self._calc_sufficient_stats(values)
         if maximization_type == 'mle':
             return self._em_mle(values, stats, normalize)
         elif maximization_type == 'autograd':
             return self._em_autograd(values, stats, normalize, **autograd_args)
 
-    def _calculate_marginals(self, environment_size, bin_size, values: KalmanResults) -> torch.Tensor:
+    def _calculate_marginals(self, environment_size, bin_size, values: KalmanResults) -> jax.Array:
         r"""Calculates the marginal probabilities for each bin in the environment.
         What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
 
@@ -458,57 +501,49 @@ class KalmanFilter(StateSpace):
             values (KalmanResults): Kalman filter results.
 
         Returns:
-            torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
+            jax.Array: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
         """
         Lx = int((environment_size[2] - environment_size[0]) / bin_size)
         Ly = int((environment_size[3] - environment_size[1]) / bin_size)
         Z = hseu.create_grid(environment_size, bin_size)
-        cumulative_probabilities = torch.zeros((len(values.smoothed_mean), Lx, Ly))
+        cumulative_probabilities = np.zeros((len(values.smoothed_mean), Lx, Ly))
 
         for i in range(len(values.smoothed_mean)):
             sm = values.smoothed_mean[i][:,:2]
             sc = values.smoothed_cov[i][:,:2,:2]
-            _cp = torch.zeros((sm.shape[0], Lx, Ly))
+            _cp = np.zeros((sm.shape[0], Lx, Ly))
             for t in range(sm.shape[0]):
-                mvn = MultivariateNormal(
-                    sm[t].ravel(), 
-                    sc[t]
-                )
-                log_prob = mvn.log_prob(Z)
+                log_prob = multivariate_normal.logpdf(Z, sm[t].ravel(), sc[t])
                 log_prob = log_prob.reshape(Lx, Ly)
                 _cp[t] = log_prob
             
-            _cp -= torch.logsumexp(_cp, dim=(1, 2), keepdim=True)
-            _cp = torch.exp(_cp)
-            cumulative_probabilities[i] = _cp.sum(axis=0)
+            _cp -= logsumexp(_cp, axis=(1, 2), keepdims=True)
+            _cp = jnp.exp(_cp)
+            cumulative_probabilities[i] = jnp.sum(_cp, axis=0)
 
-        return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
+        return jnp.array(cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdims=True))
 
     def fit(self, 
-            X: List[torch.Tensor],
+            X: List[jax.Array],
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             maximization_type: str = 'autograd', 
             normalize: bool = False, 
-            seed: Optional[int] = None,
             **diff_args
         ) -> KalmanResults:
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
-            X (torch.Tensor): The observations to fit the model to. Each individual observation time-series can have variable length.
+            X (jax.Array): The observations to fit the model to. Each individual observation time-series can have variable length.
             n_iter (int, optional): The number of EM iterations to run. Defaults to 100.
             emtol (float, optional): The tolerance for the change in log-likelihood between iterations. Defaults to 1e-3.
             maximization_type (str, optional): The type of maximization to use. Can be either 'mle' or 'autograd'. Defaults to 'autograd'.
             normalize (bool, optional): Whether to normalize the transition and observation matrices. Defaults to True.
-            seed (int, optional): The seed to use for the random number generator. Defaults to None.
             **diff_args: Keyword arguments to pass to the `_em` method.
 
         Returns:
             KalmanResults: The results of the EM algorithm. Estimated sequences can be accessed from this class itself.
         """
-        if seed: 
-            torch.manual_seed(seed)
         X = self._parse_observations(X)
 
         (
@@ -523,9 +558,8 @@ class KalmanFilter(StateSpace):
         values = self._initialize(X)
 
         for i in range(n_iter):
-            with torch.no_grad():
-                values = self.filter(values)
-                values = self.smooth(values)
+            values = self.filter(values)
+            values = self.smooth(values)
             ll = self._em(
                 values,
                 normalize,
@@ -534,7 +568,7 @@ class KalmanFilter(StateSpace):
             )
 
             values.loglike.append(-ll)
-            if not torch.isfinite(values.loglike[-1]):
+            if not jnp.isfinite(values.loglike[-1]):
                 print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
                 break
 
@@ -542,16 +576,19 @@ class KalmanFilter(StateSpace):
                 print(f"Converged after {i} epochs, exiting")
                 break
 
-        values.cumulative_probabilities = self._calculate_marginals(values)
+        if hasattr(self, 'bin_size') and hasattr(self, 'environment_size'):
+            values.cumulative_probabilities = self._calculate_marginals(
+                self.environment_size,
+                self.bin_size, 
+                values
+            )
 
         return values
-
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    torch.set_default_dtype(torch.double)
-    torch.manual_seed(42)
+    key = jax.random.key(42)
 
     def norm(mat):
         return mat / mat.sum(axis=1, keepdims=True)
@@ -560,24 +597,32 @@ if __name__ == '__main__':
 
     nd = 1
 
-    t_trans_mat = norm(torch.rand(nd,nd))
-    t_trans_noise = cov(torch.randn(nd,nd))
-    t_emission_mat = norm(torch.rand(nd,nd))
-    t_emission_noise = cov(torch.randn(nd,nd))
-    t_mu0 = torch.randn(nd,1)
-    t_sig0 = cov(torch.randn(nd,nd))
+    t_trans_mat = norm(jax.random.uniform(key, shape=(nd,nd), dtype=jnp.float32))
+    key,skey = jax.random.split(key)
+    t_trans_noise = cov(jax.random.normal(skey, shape=(nd,nd), dtype=jnp.float32))
+    key,skey = jax.random.split(key)
+    t_emission_mat = norm(jax.random.uniform(skey, shape=(nd,nd), dtype=jnp.float32))
+    key,skey = jax.random.split(key)
+    t_emission_noise = cov(jax.random.normal(skey, shape=(nd,nd), dtype=jnp.float32))
+    key,skey = jax.random.split(key)
+    t_mu0 = jax.random.normal(key, shape=(nd,1), dtype=jnp.float32)
+    key,skey = jax.random.split(key)
+    t_sig0 = cov(jax.random.normal(skey, shape=(nd,nd), dtype=jnp.float32))
 
     z = [] 
     x = []
     for i in range(3):
         n_points = (i + 1) * 400
-        _z = torch.zeros((n_points, nd, 1))
-        _x = torch.zeros((n_points, nd, 1))
+        _z = np.zeros((n_points, nd, 1))
+        _x = np.zeros((n_points, nd, 1))
 
-        V = torch.linalg.cholesky(t_emission_noise) @ torch.randn(n_points, nd, 1)
-        W = torch.linalg.cholesky(t_trans_noise) @ torch.randn(n_points - 1, nd, 1)
+        key,skey = jax.random.split(key)
+        V = jnp.linalg.cholesky(t_emission_noise) @ jax.random.normal(skey, shape=(n_points, nd, 1))
+        key,skey = jax.random.split(key)
+        W = jnp.linalg.cholesky(t_trans_noise) @ jax.random.normal(skey, shape=(n_points - 1, nd, 1))
 
-        _z[0] = t_mu0 + torch.linalg.cholesky(t_sig0) @ torch.randn(nd,1)
+        key,skey = jax.random.split(key)
+        _z[0] = t_mu0 + jnp.linalg.cholesky(t_sig0) @ jax.random.normal(skey, shape=(nd,1))
         _x[0] = t_emission_mat @ _z[0] + V[0]
 
         for i in range(1, n_points):
@@ -597,11 +642,11 @@ if __name__ == '__main__':
             plt.plot(_z.squeeze(), c='b', label='true position', linestyle='--')
             t = np.arange(len(_x))
             plt.errorbar(t, fm.squeeze(), 
-                            yerr=torch.sqrt(fc.squeeze()),
+                            yerr=jnp.sqrt(fc.squeeze()),
                             c='r', label='kalman filter',
                             linestyle='--', capsize=4)
             plt.errorbar(t, sm.squeeze(),
-                            yerr=torch.sqrt(sc.squeeze()), 
+                            yerr=jnp.sqrt(sc.squeeze()), 
                             c='y', label='kalman smooth', 
                             linestyle='--', capsize=4)
         else:

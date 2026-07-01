@@ -1,5 +1,9 @@
 import numpy as np
 import numpy.typing as npt
+import jax
+import jax.numpy as jnp
+from jax import random
+jax.config.update("jax_enable_x64", True)
 from typing import Protocol, runtime_checkable, Tuple, Any
 
 __all__ = [
@@ -17,6 +21,17 @@ class StateSpaceResults(Protocol):
     pass
 
 class StateSpace:
+    def random(self, shape: tuple|int, random_type: str = 'uniform', dtype=jnp.float64, *args, **kwargs):
+        nkey,skey = random.split(self.key)
+        if random_type == 'uniform':
+            rv = random.uniform(skey, shape=shape, dtype=dtype, **kwargs)
+        elif random_type == 'normal':
+            rv = random.normal(skey, shape=shape, dtype=dtype, **kwargs)
+        else:
+            raise Exception(f"{random_type} is not a supported RNG type")
+        self.key = nkey
+        return rv
+
     def filter(self, values: StateSpaceResults) -> StateSpaceResults:
         raise NotImplementedError
 

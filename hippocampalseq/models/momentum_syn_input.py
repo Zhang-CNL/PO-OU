@@ -1,6 +1,6 @@
-import torch
+import jax
 import numpy.typing as npt
-from typing import List
+from typing import List, Tuple
 
 from .momentum import *
 import hippocampalseq.utils as hseu
@@ -20,7 +20,7 @@ class MomentumSynInput(Momentum):
         self.augmented_dim += 1
         self.n_parameters = 5
 
-    def _construct_init_mean(self) -> torch.Tensor:
+    def _construct_init_mean(self) -> jax.Array:
         I = torch.eye(self.latent_dim)
         init_mean = torch.zeros(self.augmented_dim, self.augmented_dim)
         init_mean[:self.latent_dim, :self.latent_dim] = I
@@ -28,14 +28,14 @@ class MomentumSynInput(Momentum):
         #init_mean[-1,-1] = 1.0
         return init_mean
 
-    def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
+    def _construct_init_var(self, initial_diffusion: jax.Array, jitter=0.0) -> jax.Array:
         I = torch.eye(self.latent_dim)
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
         init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion**2 * self.dt * I
         init_cov[self.latent_dim:self.augmented_dim-1, self.latent_dim:self.augmented_dim-1] = jitter * I
         return init_cov
 
-    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_observation_matrices(self) -> Tuple[jax.Array, jax.Array]:
         I = torch.eye(self.obs_dim)
         Z = torch.zeros(self.obs_dim, self.augmented_dim-self.obs_dim)
         H = torch.cat((I, Z), dim=1)
@@ -45,10 +45,10 @@ class MomentumSynInput(Momentum):
 
     def _construct_transition_mat(
             self, 
-            decay: torch.Tensor, 
-            syn_input: torch.Tensor,
-            pos_variance: torch.Tensor,
-        ) -> torch.Tensor:
+            decay: jax.Array, 
+            syn_input: jax.Array,
+            pos_variance: jax.Array,
+        ) -> jax.Array:
         B = len(self.true_position)
         I = torch.eye(self.latent_dim)
 
@@ -78,9 +78,9 @@ class MomentumSynInput(Momentum):
 
     def _construct_transition_cov(
         self,
-        decay: torch.Tensor,
-        diffusion: torch.Tensor,    
-        pos_variance: torch.Tensor
+        decay: jax.Array,
+        diffusion: jax.Array,    
+        pos_variance: jax.Array
     ):
         I = torch.eye(self.latent_dim)
         Q = torch.zeros(self.augmented_dim, self.augmented_dim)

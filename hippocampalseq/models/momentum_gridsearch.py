@@ -1,4 +1,3 @@
-import torch
 import hippocampalseq.utils as hseu
 
 class MomentumGridsearch():

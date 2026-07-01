@@ -9,7 +9,10 @@ import numpy as np
 import numpy.typing as npt
 import pynapple as nap
 import compress_pickle
-import torch
+import jax
+jax.config.update("jax_enable_x64", True)
+
+import jax.numpy as jnp
 from typing import List, Any
 
 class AttrDict(dict):
@@ -25,7 +28,7 @@ class AttrDict(dict):
         return AttrDict(self)
 
 def changeover_functions(type, *args):
-    module = torch if type == torch.Tensor else np
+    module = jnp if isinstance(type, jax.Array) else np
     attrs = []
     for arg in args:
         attrs.append(getattr(module, arg))
@@ -114,6 +117,7 @@ def placefield_matrix(place_fields: np.ndarray, place_cell_ids: np.ndarray) -> n
 # Log-version becomes: $k\cdot ln(\lambda) -\lambda - ln(k!)$
 # $x_{t,i}\cdot ln(f_i(z_t)\gamma\delta t) - f_i(z_t)\gamma\delta t - ln(x_{t,i}!)$
 
+@jax.jit
 def calc_poisson_emission_probabilities_log_2d(
         spikemat: npt.ArrayLike,
         place_fields: npt.ArrayLike,
@@ -130,29 +134,28 @@ def calc_poisson_emission_probabilities_log_2d(
     Returns:
         (npt.ArrayLike): (T, Nbx, Nby) matrix of emission probabilities
     """
-    sum,log,einsum,amax = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'amax')
     lambdas = place_fields * dt
     
-    sum_lambda = sum(lambdas, axis=0)
+    sum_lambda = jnp.sum(lambdas, axis=0)
     
-    log_lambdas = log(lambdas + 1e-10)
-    term1 = einsum('tn,nhw->thw', spikemat, log_lambdas)
+    log_lambdas = jnp.log(lambdas + 1e-10)
+    term1 = jnp.einsum('tn,nhw->thw', spikemat, log_lambdas)
     log_likelihood_maps = term1 - sum_lambda
     
     # Numerical stability trick per time bin
     # Subtract max along spatial dimensions (H, W) for each T
-    max_log = amax(log_likelihood_maps, axis=(1, 2), keepdims=True)
+    max_log = jnp.amax(log_likelihood_maps, axis=(1, 2), keepdims=True)
     
     return log_likelihood_maps - max_log
 
+@jax.jit
 def calc_poisson_emission_probabilities_2d(
         spikemat: npt.ArrayLike,
         place_fields: npt.ArrayLike,
         dt: float|npt.ArrayLike
     ) -> npt.ArrayLike:
-    exp = changeover_functions(type(spikemat), 'exp')
     lemission = calc_poisson_emission_probabilities_log_2d(spikemat, place_fields, dt)
-    emission_probabilities = exp(lemission)
+    emission_probabilities = jnp.exp(lemission)
     return emission_probabilities
 
 def extract_spikemat(
@@ -213,10 +216,10 @@ def extract_spikemat(
 def create_grid(grid_shape, bins):
     if isinstance(bins, int):
         bins = (bins,bins)
-    X = torch.arange(grid_shape[0], grid_shape[2], bins[0]) + bins[0] / 2
-    Y = torch.arange(grid_shape[1], grid_shape[3], bins[1]) + bins[1] / 2
-    X,Y = torch.meshgrid(X,Y, indexing='xy')
-    return torch.stack([X.ravel(), Y.ravel()]).T
+    X = jnp.arange(grid_shape[0], grid_shape[2], bins[0]) + bins[0] / 2
+    Y = jnp.arange(grid_shape[1], grid_shape[3], bins[1]) + bins[1] / 2
+    X,Y = jnp.meshgrid(X,Y, indexing='xy')
+    return jnp.stack([X.ravel(), Y.ravel()]).T
 
 def construct_test_mvn(n_points, dz, mu, sigma):
     """Construct test multivariate normal distribution centered around mu
@@ -256,20 +259,3 @@ def atleast_2d(x):
         x = x[:,None]
     return x
 
-def mT(x: np.ndarray|torch.Tensor):
-    """Shorthand for np.matrix_transpose or torch.Tensor.mT"""
-    if isinstance(x, torch.Tensor):
-        return x.mT
-    return np.matrix_transpose(x)
-
-def invmul(A: np.ndarray|torch.Tensor, B: np.ndarray|torch.Tensor):
-    """Computes :math:`AB^{-1}`"""
-    if isinstance(A, torch.Tensor):
-        return mT(torch.linalg.solve(mT(B), mT(A)))
-    return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
-
-def mulinv(B: np.ndarray|torch.Tensor, A: np.ndarray|torch.Tensor):
-    """Computes :math:`B^{-1}A`"""
-    if isinstance(A, torch.Tensor):
-        return torch.linalg.solve(B, A)
-    return np.linalg.solve(B, A)
