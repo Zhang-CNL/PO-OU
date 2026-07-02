@@ -167,12 +167,6 @@ class Momentum(KalmanFilter):
         # fit a plane to parameters based on P(z_t|z_{t-1},z_{t-2})
         # Use approx_mean as z
 
-    def __hash__(self):
-        return hash((self.dt, self.bin_size, self.environment_size))
-
-    def __eq__(self, other):
-        return (type(other) == type(self)) and (self.__hash__() == other.__hash__())
-
     def _adjust_parameters(self, theta, sigma, dt):
         # TODO: Make this in log form
         n = 10**10
