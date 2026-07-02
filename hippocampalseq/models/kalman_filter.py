@@ -470,9 +470,10 @@ class KalmanFilter(StateSpace):
             sc = values.smoothed_cov[i][:,:2,:2]
             _cp = torch.zeros((sm.shape[0], Lx, Ly))
             for t in range(sm.shape[0]):
+                L = torch.linalg.cholesky(sc[t])
                 mvn = MultivariateNormal(
                     sm[t].ravel(), 
-                    sc[t]
+                    scale_tril=L
                 )
                 log_prob = mvn.log_prob(Z)
                 log_prob = log_prob.reshape(Lx, Ly)
