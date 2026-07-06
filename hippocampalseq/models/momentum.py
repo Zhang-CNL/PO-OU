@@ -363,7 +363,6 @@ class Momentum(KalmanFilter):
         )
 
         prev_loss = np.inf
-        #btrace = torch.vmap(torch.trace)
 
         Ezz  = stats.Ezz
         Ezz1 = stats.Ezz1
@@ -373,7 +372,7 @@ class Momentum(KalmanFilter):
                 optimizer.zero_grad()
 
                 M = -torch.exp(decay) * self.dt + 1 
-                sigma = torch.exp(diffusion) * self.dt
+                sigma = torch.exp(diffusion)**2 * self.dt
 
                 total_loss = 0
                 for i in range(len(values.observations)):

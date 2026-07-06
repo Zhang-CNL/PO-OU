@@ -4,7 +4,7 @@ import numpy as np
 import hippocampalseq.utils as hseu
 from .momentum import *
 
-class MomentumSecondOrder(Momentum):
+class MomentumO2(Momentum):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
