@@ -1,6 +1,8 @@
 # hippocampalseq
 State-space modeling of hippocampal theta and replay sequences.
 
+Inline LaTeX equations can be viewed by installing [this extension](https://marketplace.visualstudio.com/items?itemName=howcasperwhat.comment-formula)
+
 ## Submodules
 ### hippocampalseq.models
 All state-space models are contained here.

@@ -27,6 +27,9 @@ class KalmanResults:
     smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
     smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
     loglike        : List[float] = field(default_factory=list)
+    loglike_full   : torch.Tensor = field(default_factory=lambda: torch.empty(0))
+    aic            : float = 0
+    bic            : float = 0
     cumulative_probabilities : torch.Tensor = field(default_factory=lambda: torch.empty(0))
 
 @dataclass
@@ -69,6 +72,8 @@ class KalmanFilter(StateSpace):
 
     def _parse_observations(self, obs) -> List[torch.Tensor]:
         """Safely convert observations to their expected format."""
+        if obs is None:
+            return obs
         if not isinstance(obs, list):
             obs = [obs]
         for i in range(len(obs)):
@@ -229,11 +234,9 @@ class KalmanFilter(StateSpace):
         ll = 0
         for b in range(len(values.observations)):
             T = values.observations[b].shape[0]
-            icd = torch.logdet(self.initial_state_covariance)
-            if torch.isfinite(icd):
-                ll += icd
 
             _ll = 0
+            _ll += torch.logdet(self.initial_state_covariance)
             _ll += torch.logdet(self.transition_covariance) * (T - 1)
             _ll += torch.logdet(self.observation_covariance) * T
 
@@ -241,7 +244,7 @@ class KalmanFilter(StateSpace):
             ip2 = self.initial_state_mean @ values.smoothed_mean[b][0].mT
             ip3 = values.smoothed_mean[b][0] @ self.initial_state_mean.mT
             ip4 = self.initial_state_mean @ self.initial_state_mean.mT
-            ill = hseu.mulinv(self.initial_state_covariance + .001 * torch.eye(self.augmented_dim), ip1 - ip2 - ip3 + ip4)
+            ill = hseu.mulinv(self.initial_state_covariance, ip1 - ip2 - ip3 + ip4)
             ill = torch.trace(ill) / 2
             _ll += ill
 
@@ -312,149 +315,39 @@ class KalmanFilter(StateSpace):
         Sigma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True)/len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
         return torch.atleast_2d(torch.mean(Sigma, axis=0))
 
-    def _em_mle(self, values: KalmanResults, stats: KalmanStatistics, normalize: bool) -> torch.Tensor:
-        """Maximum likelihood estimation of all relevant parameters.
-
-        Args:
-            values (hsem.KalmanResults): Kalman filter results.
-            stats (hsem.KalmanStatistics): Sufficient statistics from the Kalman filter/smoother.
-            normalize (bool): If True, normalize the transition and observation matrices.
-
-        Returns:
-            torch.Tensor: The final negative log likelihood.
-        """
+    def _solve_parameters(self, values: KalmanResults, stats: KalmanStatistics, **_) -> torch.Tensor:
         with torch.no_grad():
             self.transition_matrices      = self._transition_matrix_mle(values, stats)
-            if normalize:
-                self.transition_matrices /= torch.sum(self.transition_matrices, axis=1, keepdim=True)
             self.transition_covariance    = self._transition_covariance_mle(values, stats)
             self.observation_matrices     = self._observation_matrix_mle(values, stats)
-            if normalize:
-                self.observation_matrices /= torch.sum(self.observation_matrices, axis=1, keepdim=True)
             self.observation_covariance   = self._observation_covariance_mle(values, stats)
             self.initial_state_mean       = self._initial_mean_mle(values, stats)
             self.initial_state_covariance = self._initial_covariance_mle(values, stats)
-        return self._loglikelihood(values, stats)
 
-    def _em_autograd(self, 
-            values: KalmanResults, 
-            stats: KalmanStatistics, 
-            normalize: bool, 
-            n_epochs: int = 1000, 
-            lr: float = .01, 
-            gd_tol: float = 1e-3, 
-        ) -> torch.Tensor:
-        """Perform maximum likelihood estimation using autograd.
-
-        Args:
-            values (KalmanResults): Results of the Kalman filter/smoother.
-            stats (KalmanStatistics): Sufficient statistics from the Kalman filter/smoother.
-            normalize (bool): Whether or not to normalize the transition and observation matrices.
-            n_epochs (int): Number of epochs for SGD.
-            lr (float): Learning rate for the optimizer.
-            gd_tol (float): Tolerance for SGD.
-
-        Returns:
-            torch.Tensor: The final negative log likelihood.
-        """
-
-        A = torch.zeros(self.augmented_dim, self.augmented_dim, requires_grad=True)
-        C = torch.zeros(self.augmented_dim, self.obs_dim, requires_grad=True)
-        ChGamma = torch.zeros(self.augmented_dim, self.augmented_dim, requires_grad=True)
-        ChSigma = torch.zeros(self.augmented_dim, self.obs_dim, requires_grad=True)
-        with torch.no_grad():
-            A.copy_(self.transition_matrices)
-            C.copy_(self.observation_matrices)
-            ChGamma.copy_(torch.linalg.cholesky(self.transition_covariance))
-            ChSigma.copy_(torch.linalg.cholesky(self.observation_covariance))
-
-        optimizer = torch.optim.Adam(
-            params=[A, C, ChGamma, ChSigma],
-            lr=lr
-        )
-        prev_loss = 0
-
-        # Just use MLEs for mean and covariance.
-        # This way we have accurate estimates but still less to compute.
-        self.initial_state_mean = self._initial_mean_mle(values, stats)
-        self.initial_state_covariance = self._initial_covariance_mle(values, stats)
-
-        n_batches = len(values.observations)
-        
-        for epoch in range(n_epochs):
-            loss = 0 
-            At = A 
-            Ct = C 
-            if normalize:
-                At = At / At.sum(axis=1, keepdim=True)
-                Ct = Ct / Ct.sum(axis=1, keepdim=True)
-            Gamma = ChGamma @ ChGamma.mT
-            Sigma = ChSigma @ ChSigma.mT
-            
-            for b in range(n_batches):
-                iloss = 0
-
-                tloss = stats.Ezz[b][1:] - stats.Ezz1[b] @ At.mT - At @ stats.Ez1z[b] + At @ stats.Ezz[b][:-1] @ At.mT
-                tloss = torch.sum(tloss, axis=0) 
-                tloss = torch.linalg.solve(Gamma, tloss)
-                iloss += torch.trace(tloss)
-
-                eloss = stats.Exx[b] - stats.Exz[b] @ Ct.mT - Ct @ stats.Ezx[b] + Ct @ stats.Ezz[b] @ Ct.mT
-                eloss = torch.sum(eloss, axis=0)
-                eloss = torch.linalg.solve(Sigma, eloss)
-                iloss += torch.trace(eloss)
-
-                iloss += torch.logdet(Gamma) * (values.observations[b].shape[0] - 1)
-                iloss += torch.logdet(Sigma) * (values.observations[b].shape[0])
-                iloss /= 2
-
-                loss += iloss / n_batches
-
-            if epoch > 0 and abs(loss.item() - prev_loss) < gd_tol:
-                break
-            prev_loss = loss.item() 
-
-            loss.backward(retain_graph=True)
-            optimizer.step()
-            optimizer.zero_grad()
-
-        self.transition_matrices    = A.detach()
-        if normalize:
-            self.transition_matrices   /= self.transition_matrices.sum(axis=1, keepdim=True)
-        self.observation_matrices   = C.detach()
-        if normalize:
-            self.observation_matrices  /= self.observation_matrices.sum(axis=1, keepdim=True)
-        self.transition_covariance  = (ChGamma @ ChGamma.T).detach()
-        self.observation_covariance = (ChSigma @ ChSigma.T).detach()
-
-        return torch.tensor(prev_loss)
+            return self._loglikelihood(values, stats)
 
 
-    def _em(self, values: KalmanResults, normalize: bool, maximization_type: str = 'autograd', **autograd_args) -> torch.Tensor:
+    def _maximize(self, values: KalmanResults, **kwargs) -> torch.Tensor:
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
         Args:
             values (KalmanResults): Kalman filter results.
-            normalize (bool): If True, normalize the transition and observation matrices.
-            maximization_type (str): Type of maximization algorithm to use. Can be either 'mle' or 'autograd'.
-            **autograd_args: Keyword arguments for the autograd maximization algorithm.
+            **kwargs: Keyword arguments for solving for parameters.
 
         Returns:
             torch.Tensor: The negative log likelihood of the data given the model parameters.
         """
-        assert maximization_type in ['mle', 'autograd']
         with torch.no_grad():
             stats = self._calc_sufficient_stats(values)
-        if maximization_type == 'mle':
-            return self._em_mle(values, stats, normalize)
-        elif maximization_type == 'autograd':
-            return self._em_autograd(values, stats, normalize, **autograd_args)
+        return self._solve_parameters(values, stats, **kwargs)
 
     def _calculate_marginals(self, environment_size, bin_size, values: KalmanResults) -> torch.Tensor:
         r"""Calculates the marginal probabilities for each bin in the environment.
         What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
 
         Args:
+            environment_size (tuple): Size of the environment. (xmin, ymin, xmax, ymax)
+            bin_size (int): Size of individual bins in cm.
             values (KalmanResults): Kalman filter results.
 
         Returns:
@@ -489,10 +382,8 @@ class KalmanFilter(StateSpace):
             X: List[torch.Tensor],
             n_iter: int = 100, 
             emtol: float = 1e-3, 
-            maximization_type: str = 'autograd', 
-            normalize: bool = False, 
-            seed: Optional[int] = None,
-            **diff_args
+            checkpoint_path: Optional[str] = None,
+            **maximization_args
         ) -> KalmanResults:
         """Expectation-Maximization (EM) algorithm for the state-space model.
 
@@ -500,16 +391,12 @@ class KalmanFilter(StateSpace):
             X (torch.Tensor): The observations to fit the model to. Each individual observation time-series can have variable length.
             n_iter (int, optional): The number of EM iterations to run. Defaults to 100.
             emtol (float, optional): The tolerance for the change in log-likelihood between iterations. Defaults to 1e-3.
-            maximization_type (str, optional): The type of maximization to use. Can be either 'mle' or 'autograd'. Defaults to 'autograd'.
-            normalize (bool, optional): Whether to normalize the transition and observation matrices. Defaults to True.
-            seed (int, optional): The seed to use for the random number generator. Defaults to None.
-            **diff_args: Keyword arguments to pass to the `_em` method.
+            checkpoint_path (Optional[str], optional): The path to save checkpoint files. Checkpoint files are deleted after a successful run. Defaults to None.
+            **maximization_args: Keyword arguments to pass to the `_em` method.
 
         Returns:
             KalmanResults: The results of the EM algorithm. Estimated sequences can be accessed from this class itself.
         """
-        if seed: 
-            torch.manual_seed(seed)
         X = self._parse_observations(X)
 
         (
@@ -523,15 +410,16 @@ class KalmanFilter(StateSpace):
 
         values = self._initialize(X)
 
+        if checkpoint_path is not None:
+            os.makedirs(checkpoint_path, exist_ok=True)
+
         for i in range(n_iter):
             with torch.no_grad():
                 values = self.filter(values)
                 values = self.smooth(values)
-            ll = self._em(
+            ll = self._maximize(
                 values,
-                normalize,
-                maximization_type,
-                **diff_args
+                **maximization_args
             )
 
             values.loglike.append(-ll)
@@ -543,7 +431,29 @@ class KalmanFilter(StateSpace):
                 print(f"Converged after {i} epochs, exiting")
                 break
 
-        values.cumulative_probabilities = self._calculate_marginals(values)
+            if i % 50 == 0:
+                print(f"Iteration {i}: {-ll.item()}")
+                if checkpoint_path:
+                    hseu.save_pickle(values, f"./{checkpoint_path}/model_values_epoch_{i}.pkl")
+                    hseu.save_pickle(self, f"./{checkpoint_path}/_model_epoch_{i}.pkl")
+
+        
+        if i == n_iter - 1:
+            warnings.warn(f"Failed to converge after {i} epochs, exiting")
+
+        stats = self._calc_sufficient_stats(values)
+        values.loglike_full = self._loglikelihood(values, stats)
+        values.aic = self.aic(values.loglike_full)
+        values.bic = self.bic(
+            values.loglike_full, 
+            sum(len(obs) for obs in values.observations)
+        )
+        if hasattr(self, 'bin_size') and hasattr(self, 'environment_size'):
+            values.cumulative_probabilities = self._calculate_marginals(
+                self.environment_size,
+                self.bin_size,
+                values
+            )
 
         return values
 

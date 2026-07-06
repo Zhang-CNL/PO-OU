@@ -150,42 +150,17 @@ class MomentumO2(Momentum):
         self.transition_matrices = transitions
         return values
 
-    def _em_autograd(self, 
+    def _loglikelihood(self, values: MomentumResults, _: KalmanStatistics) -> torch.Tensor:
+        return 0
+
+    def _solve_parameters(self,
             values: MomentumResults,
             stats: SufficientStatistics,
-            _: bool,
             optimizer: str = "Adam",
             lr: float = .01, 
             n_epochs: int = 1000, 
-            gd_tol: float = 1e-3, 
-            seed: int|None = 42
+            gd_tol: float = 1e-3,
         ) -> torch.Tensor:
-        """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
-
-        Args:
-            values (MomentumResults): Momentum filtering pass results.
-            stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
-            _ (bool): Option to normalize the transition and observation matrices. Ignored.
-            optimizer (str): The optimizer to use.
-            lr (float): Learning rate for the optimizer.
-            n_epochs (int): Number of epochs for SGD.
-            gd_tol (float): Tolerance for SGD.
-            seed (int|None): Seed for the random number generator.
-
-        Returns:
-            torch.Tensor: The final negative log likelihood.
-        """
-        if seed is not None:
-            torch.random.manual_seed(seed)
-
-        optimizers = {
-            'Adam': torch.optim.Adam,
-            'SGD': torch.optim.SGD,
-            'AdamW': torch.optim.AdamW,
-            'LBFGS': torch.optim.LBFGS
-        }
-
-        I = torch.eye(self.latent_dim)
 
         decay             = torch.zeros(1, requires_grad=True)
         diffusion         = torch.zeros(1, requires_grad=True)
@@ -195,56 +170,58 @@ class MomentumO2(Momentum):
             diffusion.copy_(self.diffusion)
             initial_diffusion.copy_(self.initial_diffusion)
 
-        optimizer = optimizers[optimizer](
-            [diffusion, decay, initial_diffusion],
-            lr=lr
+        params = [decay, diffusion, initial_diffusion]
+
+        def loss_closure(params, closure_kwargs):
+            decay, diffusion, initial_diffusion = params
+            diffusion         = torch.exp(diffusion)
+            decay             = torch.exp(decay)
+            initial_diffusion = torch.exp(initial_diffusion)
+
+            n_batches = closure_kwargs['n_batches']
+            stats     = closure_kwargs['stats']
+
+            Ezz  = stats.Ezz
+            Ezz1 = stats.Ezz1
+
+            v1    = initial_diffusion**2 * self.dt
+            alpha = 1 + torch.exp(-decay * self.dt)
+            gamma = (diffusion * self.dt)**2 / (2 * decay) * (1 - torch.exp(-2 * decay * self.dt))
+            total_loss = 0
+            for i in range(n_batches):
+                loss = 0. 
+                T = len(Ezz[i])
+
+                ill = Ezz[i][1] - 2 * Ezz1[i][0] + Ezz[i][0]
+                ill = ill / v1
+                ill = torch.log(v1**2) + ill
+                loss += ill
+
+                tll = Ezz[i][2:] - 2 * alpha * Ezz1[i][1:] + alpha**2 * Ezz[i][1:-1]
+                tll = torch.sum(tll,axis=0) / gamma
+                tll = (T-2) * torch.log(gamma**2) + tll
+                loss += tll
+
+                total_loss += loss / 2
+            return total_loss
+
+        loss,params = self._optimize(
+            loss_closure,
+            params,
+            {
+                'n_batches': len(values.observations), 
+                'stats': stats
+            },
+            {
+                'optimizer': optimizer,
+                'lr': lr,
+                'n_epochs': n_epochs,
+                'gd_tol': gd_tol 
+            }
         )
-
-        prev_loss = np.inf
-        btrace = torch.vmap(torch.trace)
-
-        Ezz  = stats.Ezz
-        Ezz1 = stats.Ezz1
-
-        for epoch in range(n_epochs):
-            def loss_closure():
-                optimizer.zero_grad()
-                _idiff = torch.exp(initial_diffusion)
-                _diff  = torch.exp(diffusion)
-                _decay = torch.exp(decay)
-
-                v1 = _idiff**2 * self.dt
-                alpha = 1 + torch.exp(-_decay * self.dt)
-                gamma = (_diff * self.dt)**2 / (2 * _decay) * (1 - torch.exp(-2 * _decay * self.dt))
-                total_loss = 0
-                for i in range(len(values.observations)):
-                    loss = 0. 
-                    T = values.observations[i].shape[0]
-
-                    ill = Ezz[i][1] - 2 * Ezz1[i][0] + Ezz[i][0]
-                    ill = ill / v1
-                    ill = torch.log(v1**2) + ill
-                    loss += ill
-
-                    tll = Ezz[i][2:] - 2 * alpha * Ezz1[i][1:] + alpha**2 * Ezz[i][1:-1]
-                    tll = torch.sum(tll,axis=0) / gamma
-                    tll = (T-2) * torch.log(gamma**2) + tll
-                    loss += tll
-
-                    total_loss += loss / 2
-                total_loss.backward(retain_graph=True)
-                return total_loss
-
-            total_loss = optimizer.step(loss_closure)
-
-            if epoch > 0 and abs((total_loss.item() - prev_loss) / prev_loss) < gd_tol: 
-                break
-
-            prev_loss = total_loss.item()
-        
-        self.decay             = decay.detach()
-        self.diffusion         = diffusion.detach()
-        self.initial_diffusion = initial_diffusion.detach()
+        self.decay             = params[0].detach()
+        self.diffusion         = params[1].detach()
+        self.initial_diffusion = params[2].detach()
 
         (
             self.transition_matrices,
@@ -255,4 +232,4 @@ class MomentumO2(Momentum):
             self.initial_state_covariance,
         ) = self._initialize_parameters()
 
-        return torch.tensor(prev_loss)
+        return loss

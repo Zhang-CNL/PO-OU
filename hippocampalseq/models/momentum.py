@@ -7,6 +7,7 @@ import warnings
 from typing import List, Tuple
 from dataclasses import dataclass, field
 from scipy.optimize import least_squares
+from torch.nn import ParameterList
 
 import hippocampalseq.utils as hseu
 
@@ -36,8 +37,14 @@ class Momentum(KalmanFilter):
             bin_size: int, 
             seed: int|None = 42
         ):
-        """Initialize the momentum SSM.
-        
+        r"""Initialize the momentum SSM.
+        One-dimensional form of the model where we use the following approximation:
+
+        $$\frac{d}{dt}\begin{pmatrix} v_t \\ z_t \end{pmatrix} = 
+            \begin{pmatrix} -\lambda & 0 \\ 1 & 0\end{pmatrix}\begin{pmatrix} v_t \\ z_t \end{pmatrix}
+            + \begin{pmatrix} \sigma_v & 0 \\ 0 & 0\end{pmatrix}\xi_t$$
+            
+            $v_t$ and $z_t$ are the velocity and position respectively, and each has an x and a y component.
         Args:
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
@@ -51,8 +58,6 @@ class Momentum(KalmanFilter):
         self.dt               = torch.tensor(dt)
         self.environment_size = environment_size
         self.bin_size         = bin_size
-        #assert len(environment_size) == 2*self.latent_dim, "Environment shape and latent dimensions must match"
-
         self.grid = hseu.create_grid(self.environment_size, self.bin_size)
 
         if seed is not None:
@@ -116,6 +121,16 @@ class Momentum(KalmanFilter):
         return res
 
     def _construct_transition_mat(self, decay: torch.Tensor) -> torch.Tensor:
+        r"""Construct the transition matrix in the form
+
+        $$\begin{pmatrix}-\lambda\Delta t + 1& 0 \\ \Delta t &0\end{pmatrix}$$
+
+        Args:
+            decay (torch.Tensor): Decay parameter
+        
+        Returns:
+            torch.Tensor: Transition matrix
+        """
         I  = torch.eye(self.obs_dim)
         Z  = torch.zeros(self.obs_dim, self.obs_dim)
         If = torch.eye(self.augmented_dim)
@@ -126,13 +141,23 @@ class Momentum(KalmanFilter):
         A = torch.cat((top, bottom), dim=0) * self.dt + If
         return A
 
-    def _construct_transition_cov(self, diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
+    def _construct_transition_cov(self, diffusion: torch.Tensor) -> torch.Tensor:
+        r"""Construct the transition covariance matrix in the form
+
+        $$\begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & 0\end{pmatrix}$$
+
+        Args:
+            diffusion (torch.Tensor): Diffusion parameter
+        
+        Returns:
+            torch.Tensor: Transition covariance
+        """
         I = torch.eye(self.obs_dim)
         Z = torch.zeros((self.obs_dim, self.obs_dim))
 
         sigma_m = diffusion * torch.sqrt(self.dt) * I
         top = torch.cat((sigma_m, Z), dim=1)
-        bottom = torch.cat((I, I*jitter), dim=1)
+        bottom = torch.cat((Z, Z), dim=1)
         Gamma = torch.cat((top, bottom), dim=0)
         return Gamma
 
@@ -140,8 +165,10 @@ class Momentum(KalmanFilter):
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
-        Meanwhile, $P(z_2|z_1) = \mathcal{N}(z_2|z_1, \sigma_0^2 dt)$: a simple gaussian.
-
+        $$U(N_x,N_y) \approx \mathcal{N}\left(
+            \begin{bmatrix}N_x/2 \\ N_y/2\end{bmatrix},
+            \begin{bmatrix}N_x^2/12 & 0 \\ 0 & N_y^2/12
+            \end{bmatrix}\right)$$
         Returns:
             (torch.Tensor): Prior mean for augmented state $[z_t; z_{t-1}]^T$
             (torch.Tensor): Prior covariance for augmented state
@@ -163,7 +190,7 @@ class Momentum(KalmanFilter):
         """Construct transition matrices for momentum SSM.
 
         Returns:
-            (torch.Tensor): transition matrix for augmented state $[z_t; z_{t-1}]^T$
+            (torch.Tensor): transition matrix for augmented state $(v_t \;  z_t)^T$
             (torch.Tensor): process noise covariance for augmented state
         """
         A = self._construct_transition_mat(self.decay.exp())
@@ -172,6 +199,10 @@ class Momentum(KalmanFilter):
         return A,Q
 
     def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Build the observation transition matrix and noise matrix.
+        The noise is computed analytically from the data, while the transition
+        matrix has the form $$\begin{bmatrix}I_2 & 0_2\end{bmatrix}$$
+        """
         I = torch.eye(self.obs_dim)
         Z = torch.zeros(self.obs_dim, self.obs_dim)
         H = torch.hstack((I, Z))
@@ -179,17 +210,6 @@ class Momentum(KalmanFilter):
         return H,R
 
     def _filter_init(self, values: MomentumResults, batch: int) -> MomentumResults:
-        """Initialize the filter for the first observation.
-        Since we have a uniform prior for this model, we use the information filter
-        to handle it.
-
-        Args:
-            values (MomentumResults): Results from previous filter passes.
-            batch (int): Batch index
-        
-        Results:
-            (MomentumResults): Filtered results
-        """
         """
         mu1 = values.observations[batch][0]
         P1  = self.observation_covariance[batch][0]
@@ -218,6 +238,7 @@ class Momentum(KalmanFilter):
         return values
 
     def filter(self, values: MomentumResults) -> MomentumResults:
+        """Filtering step. We save the observation covariance and reset it at each step."""
         obs_cov = self.observation_covariance
         for batch in range(len(values.observations)):
             self.observation_covariance = obs_cov[batch][0]
@@ -265,91 +286,114 @@ class Momentum(KalmanFilter):
             Ezx=None
         )
 
-    def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
-        """Calculate the log-likelihood for the model given the current state.
+    def _loglikelihood(self, values: MomentumResults, _: KalmanStatistics) -> torch.Tensor:
+        r"""Calculate the log-likelihood for the model given the current state.
+
+        Since Q, our latent covariance, is non-PSD, we have to use a pseudo inverse to approximate
+        the log-likelihood.
+        First we perform SVD where $$\bar{Q} = U\Sigma U^T$$
+        We can then use the pseudo-inverse and make $\Sigma^+ = \Sigma^{-1}$, but only using the upper non-zero corner.
+        $\Sigma$ contains our matrice's positive eigenvalues.
+
+        Our pseudo-determinant then becomes $|\Sigma|^+ = \prod_{i=1}^r \sigma_i$
+
+        We have to replace our normalization constant's $d$ value with the matrix rank $r$
+        The resulting log-density for the initial and latent states becomes:
+            $$-\frac{1}{2}(ln|\Sigma|^+ + rlog(2\pi) + z_t^T \Sigma^+ z_t)$$
         
+        TODO: Write out the full expression for the log-likelihood here
+
         Args:
             values (MomentumResults): The current decoded values for hidden states.
-            stats (KalmanStatistics): Sufficient statistics calculated from these values.
+            _ (KalmanStatistics): Ignored for this model.
 
         Returns:
             torch.Tensor: The log-likelihood for the model.
         """
-        #ell = stats.Exx[b] - stats.Exz[b] @ C.mT - C @ stats.Ezx[b] + C @ stats.Ezz[b] @ C.mT
-        #ell = torch.linalg.solve(Sigma[b] + .00001 * torch.eye(self.obs_dim), ell)
-        #ell = torch.sum(ell, axis=0)
-        #_ll += torch.trace(ell) 
+        loglike = 0.
 
-        ll = 0
-        idiff = torch.exp(self.initial_diffusion)
-        diff  = torch.exp(self.diffusion)
-        decay = torch.exp(self.decay)
+        A   = self.transition_matrices
+        C   = self.observation_matrices
+        mu0 = self.initial_state_mean
+        Sigma  = self.observation_covariance
+        Gamma  = self.transition_covariance
+        Gamma0 = self.initial_state_covariance
 
-        Sigma = self.observation_covariance
-        v1 = idiff**2 * self.dt 
-        alpha = 1 + torch.exp(-decay * self.dt)
-        gamma = (diff * self.dt)**2 / (2*decay) * (1 - torch.exp(-2*decay * self.dt))
+        rank = self.obs_dim
+        GammaU,GammaS,GammaVh = torch.linalg.svd(Gamma)
+        GammaPinv = torch.diag(1 / GammaS[:rank])
+        GammaPlogdet = torch.log(torch.prod(GammaS[:rank]))
 
         for b in range(len(values.observations)): 
-            T = values.observations[b].shape[0]
-            _ll = 0
-            _ll += torch.log(v1**2)
-            _ll += torch.log(gamma**2) * (T-2)
-            #_ll += torch.sum(torch.logdet(Sigma[b]))
+            T = len(values.observations[b])
+            _loglike = 0
 
-            ill = stats.Ezz[b][1] - 2*stats.Ezz1[b][0] + stats.Ezz[b][0]
-            ill = ill / v1 
-            _ll += ill
+            muhat = values.smoothed_mean[b]
+            vhat  = values.smoothed_cov[b]
+            Jhat  = values.smoothed_gain[b]
+            
+            Exx  = values.observations[b] @ values.observations[b].mT
+            Ezz  = vhat + muhat @ muhat.mT
+            Ezz1 = Jhat[:-1] @ vhat[1:] + muhat[1:] @ muhat[:-1].mT 
+            
+            ill_c = torch.logdet(Gamma0) + rank * torch.log(2*PI)
+            zll_c = (T-1) * (GammaPlogdet + rank * torch.log(2*PI))
+            oll_c = T * (torch.sum(torch.logdet(Sigma[b])) + rank * torch.log(2*PI))
+            _loglike += ill_c + zll_c + oll_c
 
-            tll = stats.Ezz[b][2:] - 2*alpha*Ezz1[b][1:] + alpha**2 * stats.Ezz[b][1:-1]
-            tll = torch.sum(tll, axis=0) / gamma 
-            _ll += tll 
+            ip1 = Ezz[0,:self.obs_dim,:self.obs_dim]
+            ip2 = mu0 @ muhat[0,:self.obs_dim].mT
+            ip3 = mu0 @ mu0.mT
+            ill = torch.trace(hseu.mulinv(
+                2*Gamma0,
+                ip1 - ip2 - ip2.mT + ip3
+            ))
+            zp1 = Ezz[1:,:self.obs_dim,:self.obs_dim]
+            zp2 = (Ezz1 @ A.mT)[:,:self.obs_dim,:self.obs_dim]
+            zp3 = (A @ Ezz[:-1] @ A.mT)[:,:self.obs_dim,:self.obs_dim]
+            zll = GammaPinv @ torch.sum(
+                zp1 - zp2 - zp2.mT + zp3, 
+                axis=0
+            )
+            zll = torch.trace(zll)
 
-            #ell = stats.Exx[b] - stats.Ezx[b] - stats.Ezx[b].mT + stats.Ezz[b]
+            op1 = Exx 
+            op2 = C @ muhat @ values.observations[b].mT
+            op3 = C @ Ezz @ C.mT
+            oll = torch.sum(hseu.mulinv(
+                Sigma[b],
+                op1 - op2 - op2.mT + op3
+            ), axis=0)
+            oll = torch.trace(oll)
 
-            ll += _ll / 2 + T * self.augmented_dim * torch.log(2 * PI)
+            _loglike += ill + zll + oll
 
-        return ll
+            loglike -= _loglike / 2.
 
-    def _em_mle(self, values, stats, normalize):
-        raise NotImplementedError("Maximum likelihood estimators not implemented for momentum models. Use autograd.")
+        return loglike
 
-    def _em_autograd(self, 
+    def _solve_parameters(
+            self, 
             values: MomentumResults,
             stats: SufficientStatistics,
-            _: bool,
             optimizer: str = "Adam",
             lr: float = .01, 
             n_epochs: int = 1000, 
             gd_tol: float = 1e-3, 
-            seed: int|None = 42
         ) -> torch.Tensor:
         """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
 
         Args:
             values (MomentumResults): Momentum filtering pass results.
             stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
-            _ (bool): Option to normalize the transition and observation matrices. Ignored.
             optimizer (str): The optimizer to use.
             lr (float): Learning rate for the optimizer.
             n_epochs (int): Number of epochs for SGD.
             gd_tol (float): Tolerance for SGD.
-            seed (int|None): Seed for the random number generator.
 
         Returns:
             torch.Tensor: The final negative log likelihood.
         """
-        if seed is not None:
-            torch.random.manual_seed(seed)
-
-        optimizers = {
-            'Adam': torch.optim.Adam,
-            'SGD': torch.optim.SGD,
-            'AdamW': torch.optim.AdamW,
-            'LBFGS': torch.optim.LBFGS
-        }
-
-        I = torch.eye(self.latent_dim)
 
         decay             = torch.zeros(1, requires_grad=True)
         diffusion         = torch.zeros(1, requires_grad=True)
@@ -357,46 +401,50 @@ class Momentum(KalmanFilter):
             decay.copy_(self.decay)
             diffusion.copy_(self.diffusion)
 
-        optimizer = optimizers[optimizer](
-            [diffusion, decay],
-            lr=lr
+        params = [decay, diffusion]
+
+        def loss_closure(params, closure_kwargs):
+            decay,diffusion = params
+
+            n_batches = closure_kwargs['n_batches']
+            stats     = closure_kwargs['stats']
+
+            Ezz  = stats.Ezz
+            Ezz1 = stats.Ezz1
+            
+            M     = -torch.exp(decay) * self.dt + 1 
+            sigma = torch.exp(diffusion)**2 * self.dt
+
+            total_loss = 0
+            for i in range(n_batches):
+                loss = 0 
+                T = len(Ezz[i])
+
+                #loss = Ezz[i][1:] - 2 * M * Ezz1[i] + M**2 * Ezz[i][:-1]
+                loss = Ezz[i][2:] - 2 * M * Ezz1[i][1:] + M**2 * Ezz[i][1:-1]
+                loss = torch.sum(loss, axis=0) / sigma
+                loss = (T-1) * torch.log(sigma**2) + loss
+
+                total_loss += loss / 2
+            return total_loss
+
+        loss,params = self._optimize(
+            loss_closure, 
+            params,
+            {
+                'n_batches': len(values.observations), 
+                'stats': stats
+            },
+            {
+                'optimizer': optimizer,
+                'lr': lr,
+                'n_epochs': n_epochs,
+                'gd_tol': gd_tol
+            }
         )
-
-        prev_loss = np.inf
-
-        Ezz  = stats.Ezz
-        Ezz1 = stats.Ezz1
-
-        for epoch in range(n_epochs):
-            def loss_closure():
-                optimizer.zero_grad()
-
-                M = -torch.exp(decay) * self.dt + 1 
-                sigma = torch.exp(diffusion)**2 * self.dt
-
-                total_loss = 0
-                for i in range(len(values.observations)):
-                    loss = 0. 
-                    T = values.observations[i].shape[0]
-
-
-                    loss = Ezz[i][2:] - 2 * M * Ezz1[i][1:] + M **2 * Ezz[i][1:-1]
-                    loss = torch.sum(loss,axis=0) / sigma
-                    loss = (T-2) * torch.log(sigma**2) + loss
-
-                    total_loss += loss / 2
-                total_loss.backward(retain_graph=True)
-                return total_loss
-
-            total_loss = optimizer.step(loss_closure)
-
-            if epoch > 0 and abs((total_loss.item() - prev_loss) / prev_loss) < gd_tol: 
-                break
-
-            prev_loss = total_loss.item()
         
-        self.decay             = decay.detach()
-        self.diffusion         = diffusion.detach()
+        self.decay     = params[0].detach()
+        self.diffusion = params[1].detach()
 
         (
             self.transition_matrices,
@@ -407,15 +455,14 @@ class Momentum(KalmanFilter):
             self.initial_state_covariance,
         ) = self._initialize_parameters()
 
-        return torch.tensor(prev_loss)
+        return loss
 
     def fit(self, 
             X=None, 
             n_iter: int = 1000, 
             emtol: float = 1e-3, 
-            maximization_type: str = 'autograd', 
             checkpoint_path: str|None = None,
-            **diff_args
+            **maximization_args
         ) -> MomentumResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
@@ -423,57 +470,16 @@ class Momentum(KalmanFilter):
             X (None): Value ignored. We treat self.approx_mean as the observed variable.
             n_iter (int): Number of EM iterations.
             emtol (float): Tolerance for the change in log-likelihood between iterations.
-            maximization_type (str): Type of maximization algorithm to use. In this model, only 'autograd' is implemented.
             checkpoint_path (str|None): Path to save checkpoint files. Checkpoint files are deleted after a successful run.
-            **diff_args: Keyword arguments to pass to the parent class's maximization method.
+            **maximization_args: Keyword arguments to pass to the parent class's maximization method.
 
         Returns:
             MomentumResults: Results of fitting the model to the data.
         """
-        (
-            self.transition_matrices,
-            self.transition_covariance,
-            self.observation_matrices,
-            self.observation_covariance,
-            self.initial_state_mean,
-            self.initial_state_covariance,
-        ) = self._initialize_parameters()
-
-        values = self._initialize(self.approximate_mean)
-
-        if checkpoint_path is not None:
-            os.makedirs(checkpoint_path, exist_ok=True)
-
-        for i in range(n_iter):
-            with torch.no_grad():
-                values = self.filter(values)
-                values = self.smooth(values)
-            ll = self._em(
-                values,
-                normalize=False,
-                maximization_type=maximization_type,
-                **diff_args
-            )
-
-            values.loglike.append(-ll)
-            if not torch.isfinite(values.loglike[-1]):
-                print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
-                break
-
-            if i > 0 and abs((values.loglike[-1] - values.loglike[-2]) / values.loglike[-2]) < emtol:
-                print(f"Converged after {i} epochs, exiting")
-                break
-
-            if i % 50 == 0:
-                print(f"Iteration {i}: {-ll.item()}")
-                if checkpoint_path:
-                    hseu.save_pickle(values, f"./{checkpoint_path}/momentum_epoch_{i}.pkl")
-                    hseu.save_pickle(self, f"./{checkpoint_path}/momentum_model_epoch_{i}.pkl")
-
-        
-        if i == n_iter - 1:
-            warnings.warn(f"Failed to converge after {i} epochs, exiting")
-
-        values.cumulative_probabilities = self._calculate_marginals(self.environment_size, self.bin_size, values)
-
-        return values
+        return super().fit(
+            self.approximate_mean,
+            n_iter,
+            emtol,
+            checkpoint_path,
+            **maximization_args
+        )
