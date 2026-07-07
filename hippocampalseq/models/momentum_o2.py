@@ -20,11 +20,10 @@ class MomentumO2(Momentum):
         left = torch.cat((I, I), dim=0)
         return torch.cat((left, Z), dim=1)
 
-    def _construct_init_var(self, initial_diffusion: torch.Tensor, jitter=0.0) -> torch.Tensor:
+    def _construct_init_var(self, initial_diffusion: torch.Tensor) -> torch.Tensor:
         I = torch.eye(self.latent_dim)
         init_cov = torch.zeros(self.augmented_dim, self.augmented_dim)
         init_cov[:self.latent_dim, :self.latent_dim] = initial_diffusion**2 * self.dt * I
-        init_cov[self.latent_dim:, self.latent_dim:] = jitter * I
         return init_cov
 
     def _construct_transition_mat(self, decay: torch.Tensor) -> torch.Tensor:
@@ -151,6 +150,47 @@ class MomentumO2(Momentum):
         return values
 
     def _loglikelihood(self, values: MomentumResults, _: KalmanStatistics) -> torch.Tensor:
+        r"""Calculate the log-likelihood for this model given the current state.
+        The full log-likelihood is:
+        $$ln\ P(X,Z|\theta) = ln\ P(z_1) + ln\ P(z_2|z_1,\sigma_0) + \sum_{t=3}^T P(z_t|z_{t-1},\sigma,\lambda)
+            + \sum_{t=1}^T ln\ P(x_t|z_t)
+        $$
+        Args:
+            values (MomentumResults): Current state of the model. 
+            _ (KalmanStatistics): Not used
+
+        Returns:
+            torch.Tensor: The log-likelihood for the model
+        """
+        return 0
+        loglike = 0
+
+        A = self.transition_matrices
+        C = self.observation_matrices
+        mu0 = self.initial_state_mean
+        Gamma = self.transition_covariance
+        Sigma = self.observation_covariance
+        P0    = self.initial_state_covariance
+        im,ic = super()._init_priors()
+
+        rank = self.obs_dim
+
+        log2pi = torch.log(2*PI)
+
+        for b in range(len(values.observations)):
+            T = len(values.observations[b])
+            _loglike = 0
+
+            muhat = values.smoothed_mean[b]
+            vhat  = values.smoothed_cov[b]
+            Jhat  = values.smoothed_gain[b]
+
+            Exx = values.observations[b] @ values.observations[b].mT 
+            Ezz = vhat + muhat @ muhat.mT 
+            Ezz1 = Jhat[:-1] @ vhat[1:] + muhat[1:] @ muhat[:-1].mT
+
+            illc = torch.logdet(ic) + rank * log2pi
+
         return 0
 
     def _solve_parameters(self,

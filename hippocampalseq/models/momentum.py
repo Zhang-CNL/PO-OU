@@ -123,7 +123,7 @@ class Momentum(KalmanFilter):
     def _construct_transition_mat(self, decay: torch.Tensor) -> torch.Tensor:
         r"""Construct the transition matrix in the form
 
-        $$\begin{pmatrix}-\lambda\Delta t + 1& 0 \\ \Delta t &0\end{pmatrix}$$
+        $$\begin{pmatrix}-\lambda\Delta t + 1& 0 \\ \Delta t &1\end{pmatrix}$$
 
         Args:
             decay (torch.Tensor): Decay parameter
@@ -187,7 +187,7 @@ class Momentum(KalmanFilter):
         return init_mean, init_cov
 
     def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Construct transition matrices for momentum SSM.
+        r"""Construct transition matrices for momentum SSM.
 
         Returns:
             (torch.Tensor): transition matrix for augmented state $(v_t \;  z_t)^T$
@@ -199,7 +199,7 @@ class Momentum(KalmanFilter):
         return A,Q
 
     def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Build the observation transition matrix and noise matrix.
+        r"""Build the observation transition matrix and noise matrix.
         The noise is computed analytically from the data, while the transition
         matrix has the form $$\begin{bmatrix}I_2 & 0_2\end{bmatrix}$$
         """
@@ -301,8 +301,9 @@ class Momentum(KalmanFilter):
         The resulting log-density for the initial and latent states becomes:
             $$-\frac{1}{2}(ln|\Sigma|^+ + rlog(2\pi) + z_t^T \Sigma^+ z_t)$$
         
-        TODO: Write out the full expression for the log-likelihood here
-
+        Our full log-likelihood expression is:
+        $$ln\ P(X,Z|\theta) =  ln\ P(z_1) + \sum_{t=2}^T ln\ P(z_t|z_{t-1},\sigma,\lambda)
+            + \sum_{t=1}^T ln\ P(x_t|z_t)$$
         Args:
             values (MomentumResults): The current decoded values for hidden states.
             _ (KalmanStatistics): Ignored for this model.
@@ -324,6 +325,8 @@ class Momentum(KalmanFilter):
         GammaPinv = torch.diag(1 / GammaS[:rank])
         GammaPlogdet = torch.log(torch.prod(GammaS[:rank]))
 
+        log2pi = torch.log(2*PI)
+
         for b in range(len(values.observations)): 
             T = len(values.observations[b])
             _loglike = 0
@@ -336,9 +339,9 @@ class Momentum(KalmanFilter):
             Ezz  = vhat + muhat @ muhat.mT
             Ezz1 = Jhat[:-1] @ vhat[1:] + muhat[1:] @ muhat[:-1].mT 
             
-            ill_c = torch.logdet(Gamma0) + rank * torch.log(2*PI)
-            zll_c = (T-1) * (GammaPlogdet + rank * torch.log(2*PI))
-            oll_c = T * (torch.sum(torch.logdet(Sigma[b])) + rank * torch.log(2*PI))
+            ill_c = torch.logdet(Gamma0) + rank * log2pi
+            zll_c = (T-1) * (GammaPlogdet + rank * log2pi)
+            oll_c = T * (torch.sum(torch.logdet(Sigma[b])) + rank * log2pi)
             _loglike += ill_c + zll_c + oll_c
 
             ip1 = Ezz[0,:self.obs_dim,:self.obs_dim]
@@ -386,7 +389,13 @@ class Momentum(KalmanFilter):
         Args:
             values (MomentumResults): Momentum filtering pass results.
             stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
-            optimizer (str): The optimizer to use.
+            optimizer (str): The optimizer to usepredicted_mean = _copy(tf_base),
+            predicted_cov  = _copy(cov_base),
+            filtered_mean  = _copy(tf_base),
+            filtered_cov   = _copy(cov_base),
+            smoothed_gain  = _copy(cov_base),
+            smoothed_mean  = _copy(tf_base),
+            smoothed_cov   = _copy(cov_base),.
             lr (float): Learning rate for the optimizer.
             n_epochs (int): Number of epochs for SGD.
             gd_tol (float): Tolerance for SGD.

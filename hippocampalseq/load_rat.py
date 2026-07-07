@@ -11,6 +11,7 @@ class RawData:
     running_position   : nap.TsdFrame 
     raw_spikes         : nap.TsGroup 
     running_spikes     : nap.TsGroup
+    running_spike_info : Dict[int, nap.TsdFrame]
     ripple_periods     : nap.IntervalSet
     excitatory_neurons : np.ndarray
     inhibitory_neurons : np.ndarray
@@ -75,6 +76,7 @@ def load_and_preprocess(
         running_position,
         raw_spikes,
         running_spikes,
+        running_spike_info,
         ripple_periods,
         excitatory_neurons,
         inhibitory_neurons

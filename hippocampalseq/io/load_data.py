@@ -104,29 +104,35 @@ def filter_noisy_epochs(
         rat_name: str, 
         session: int,
         track_type: str,
-        position_data,
-        spike_data,
-        spike_info
+        raw_position_data,
+        raw_spike_data,
+        running_spike_data,
+        running_spike_info,
     ):
     if rat_name in PFEIFFER_NOISY_EPOCHS:
-        rs = PFEIFFER_NOISY_EPOCHS[rat_name]
+        rat_values = PFEIFFER_NOISY_EPOCHS[rat_name]
         session = f"{track_type}{session}"
-        if session in rs:
-            print("Removing noisy epochs")
-            starts = rs[session]['starts']
-            ends = rs[session]['ends']
-            ts = position_data.time_support
-            cleaned = ts.set_diff(starts, ends)
-            position_data = position_data.restrict(cleaned)
-            spike_data = spike_data.restrict(cleaned)
-            spike_info_clean = {}
-            for uid,ts in spike_info.items():
-                clean = ts.restrict(cleaned)
-                if len(clean) > 0:
-                    spike_info_clean[uid] = clean
-            spike_info = np.TsGroup(spike_info_clean)
+        if session in rat_values:
+            starts = rat_values[session]['starts']
+            ends   = rat_values[session]['ends']
 
-    return position_data, spike_data, spike_info
+            print(f"Removing noisy {len(starts)} epochs")
+
+            ts = raw_position_data.time_support
+            cleaned = ts.set_diff(nap.IntervalSet(starts, ends))
+
+            raw_position_data  = raw_position_data.restrict(cleaned)
+            raw_spike_data     = raw_spike_data.restrict(cleaned)
+            running_spike_data = running_spike_data.restrict(cleaned)
+            for uid in running_spike_info:
+                running_spike_info[uid] = running_spike_info[uid].restrict(cleaned)
+
+    return (
+        raw_position_data,
+        raw_spike_data,
+        running_spike_data,
+        running_spike_info
+    )
 
 def load_clean_data(
         data_path: str,
@@ -198,7 +204,26 @@ def load_clean_data(
     running_position = raw_position.restrict(epoch)
     running_spikes   = spike_data.restrict(epoch)
 
-    running_spikes,running_spike_info = align_spikes_to_position(running_spikes, running_position, minimum_dt)
+    running_spikes,running_spike_info = align_spikes_to_position(
+        running_spikes, 
+        running_position, 
+        minimum_dt
+    )
+
+    (
+        raw_position,
+        spike_data,
+        running_spikes,
+        running_spike_info    
+    ) = filter_noisy_epochs(
+        rat_name, 
+        session, 
+        track_type, 
+        raw_position, 
+        spike_data,
+        running_spikes, 
+        running_spike_info
+    )
 
     path = os.path.join(data_path, rat_name, f"{track_type}{session}")
     lfp = load_lfp_data(raw_position, spike_data, path)
