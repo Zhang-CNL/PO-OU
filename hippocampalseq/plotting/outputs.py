@@ -7,11 +7,11 @@ from .core import reset_plotting, change_font_sizes
 from .placefields import plot_linear_placefields,plot_open_placefields
 from .trajectories import plot_spikemat_position_aligned
 
-import hippocampalseq.preprocessing as hsep
+import hippocampalseq as hse
 
 def plot_place_fields(
-        place_field_data: hsep.PlaceFields, 
-        raw_data: nap.TsdFrame, 
+        place_field_data: hse.PlaceFields, 
+        raw_data: hse.RawData, 
         track_type: str, 
         results_path: str,
         filename: str = "place_fields.pdf"

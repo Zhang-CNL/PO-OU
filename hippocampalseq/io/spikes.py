@@ -26,7 +26,7 @@ def load_spiking_data(
         (np.ndarray): X-Position.
         (np.ndarray): Y-Position.
         (np.ndarray): Head-direction.
-        (np.ndarray): Epoch starts selected from ripple type.
+        (np.ndarray): Epoch starts selected from ripple type, for instance runs.
         (np.ndarray): Epoch ends selected from ripple type.
         (nap.TsGroup): Raw spike data.
     """

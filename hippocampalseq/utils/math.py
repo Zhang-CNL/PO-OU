@@ -5,6 +5,56 @@ from typing import Tuple
 
 from .utils import changeover_functions
 
+def optimize(
+        closure: Callable[[List[torch.Tensor], Dict[str, Any]], torch.Tensor], 
+        parameters: List[torch.Tensor], 
+        closure_kwargs: Dict[str, Any],
+        autograd_kwargs: Dict[str, Any]
+    ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+    """
+    Optimize a given set of variables using pytorch's autograd feature.
+
+    Args:
+        closure (Callable[[List[torch.Tensor], Dict[str, Any]], torch.Tensor]): A function used to compute the log-likelihood.
+        parameters (List[torch.Tensor]): The parameters to optimize. Passed as the first argument to `closure()`.
+        closure_kwargs (Dict[str, Any]): Keyword arguments for the loss function. Passed as the second argument to `closure()`.
+        autograd_kwargs (Dict[str, Any]): Keyword arguments for the optimizer.
+
+    Returns:
+        torch.Tensor: The final negative log likelihood.
+        List[torch.Tensor]: The optimized parameters.
+    """
+    for p in parameters:
+        p.requires_grad_(True)
+
+    optimizers = {
+        'Adam'  : torch.optim.Adam,
+        'SGD'   : torch.optim.SGD,
+        'AdamW' : torch.optim.AdamW,
+        'LBFGS' : torch.optim.LBFGS
+    }
+    optimizer = optimizers[autograd_kwargs.get('optimizer', 'Adam')](
+        parameters, 
+        lr=autograd_kwargs.get('lr', .01)
+    )
+
+    prev_loss = np.inf
+
+    def wrapped_closure():
+        optimizer.zero_grad()
+        loss = closure(parameters, closure_kwargs)
+        loss.backward()
+        return loss
+
+    for epoch in range(autograd_kwargs.get('n_epochs', 1000)):
+        loss = optimizer.step(wrapped_closure)
+        if epoch > 0 and abs((loss.item() - prev_loss) / prev_loss) < autograd_kwargs.get('gd_tol', 1e-3):
+            break
+        prev_loss = loss.item()
+
+    return loss.detach(),parameters
+
+
 # Poisson distribution:  $Pois(k=x_{t,i}|\lambda=f_i(z_t)\gamma\delta t) = \frac{\lambda^ke^{-\lambda}}{k!}$
 
 # Log-version becomes: $k\cdot ln(\lambda) -\lambda - ln(k!)$

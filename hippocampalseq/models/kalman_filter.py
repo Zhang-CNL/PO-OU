@@ -26,7 +26,7 @@ class KalmanResults:
     smoothed_gain  : List[torch.Tensor] = field(default_factory=list)
     smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
     smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
-    loglike        : List[float] = field(default_factory=list)
+    loglike        : List[float]  = field(default_factory=list)
     loglike_full   : torch.Tensor = field(default_factory=lambda: torch.empty(0))
     aic            : float = 0
     bic            : float = 0

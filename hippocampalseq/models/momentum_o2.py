@@ -245,7 +245,7 @@ class MomentumO2(Momentum):
                 total_loss += loss / 2
             return total_loss
 
-        loss,params = self._optimize(
+        loss,params = hseu.optimize(
             loss_closure,
             params,
             {
