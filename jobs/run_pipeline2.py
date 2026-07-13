@@ -132,21 +132,13 @@ def main(
                 data_path,
                 rat,
                 session_n,
-                track_type            = track_type,
-                ripple_type           = parameters.get('ripple_type', 'awake'),
-                minimum_dt            = parameters.get('minimum_dt', np.inf),
-                environment_size      = env_size,
-                place_field_posterior = parameters.get('place_field_posterior', True),
-                bin_size_cm           = parameters.get('bin_size_cm', 2),
-                place_field_gaussian_sd_cm    = parameters.get('place_field_gaussian_sd_cm', 2.0),
-                prior_mean_rat_sps    = parameters.get('prior_mean_rat_sps', 1.0),
-                prior_beta_s          = parameters.get('prior_beta_s', .01),
-                min_spikerate         = parameters.get('min_spikerate', 1.0),
-                velocity_cutoff       = parameters.get('velocity_cutoff', 5.0),
-                theta_time_window_ms  = parameters.get('theta_time_window_ms', 60.0),
-                theta_time_window_advance_ms  = parameters.get('theta_time_window_advance_ms', None),
-                ripple_time_window_ms = parameters.get('ripple_time_window_ms', 5.0),
-                ripple_time_window_advance_ms = parameters.get('ripple_time_window_advance_ms', None)
+                track_type        = track_type,
+                environment_size  = env_size,
+                bin_size_cm       = parameters.get('bin_size_cm', 2),
+                loading_kwargs    = parameters.get('loading_args', {}),
+                placefield_kwargs = parameters.get('placefield_args', {}),
+                theta_kwargs      = parameters.get('theta_args', {}),
+                ripple_kwargs     = parameters.get('ripple_args', {})
             )
 
             save_raw_data(

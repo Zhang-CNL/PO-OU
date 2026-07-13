@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import numpy.typing as npt
+from typing import Optional
 from dataclasses import dataclass
 
 from .statespace import * 
@@ -17,7 +18,7 @@ class SCA(StateSpace):
             self, 
             factor_dim: int, 
             sparse_weight: float, 
-            orthogonal_weight: float
+            orthogonal_weight: float,
         ):
         super().__init__()
 
@@ -25,10 +26,42 @@ class SCA(StateSpace):
         self.sparse_weight = sparse_weight
         self.orthogonal_weight = orthogonal_weight
 
-    def fit(self, X: npt.ArrayLike, weights: npt.ArrayLike, **maximization_args):
+
+    def fit(
+        self, 
+        X: npt.ArrayLike, 
+        init_type: str = "random",
+        weights: Optional[npt.ArrayLike] = None, 
+        **maximization_args
+    ):
         assert len(X) == weights.shape[0] and len(X) == weights.shape[1],"Weights must have the shape (T,T)"
         assert len(X.shape) == 2, "X must be 2D (T,N)"
         X = torch.from_numpy(X)
+        T,N = X.shape
+
+        if weights is None:
+            weights = np.ones((T,1))
+
+        if init_type == "random":
+            _U = hseu.orthog(torch.random.randn(T, self.factor_dim))
+            _V = _U.T
+        elif init_type == 'pca':
+            _,_U,_ = hseu.pca(X, self.factor_dim)
+            _V = _U.T 
+        elif init_type == 'svd':
+            _U,_,_V = torch.linalg.svd(X, full_matrices=False)
+            _U = _U[:,:self.factor_dim]
+            _V = _V[:,:self.factor_dim]
+        else:
+            raise Exception(f"Unknown initialization type {init_type}. Must be random, pca or svd.")
+        
+        U = torch.zeros(_U.shape, requires_grad=True)
+        V = torch.zeros(_V.shape, requires_grad=True)
+        with torch.no_grad():
+            U.copy_(_U)
+            V.copy_(_V)
+
+        # SCA loss optimization
         def _sca(params, kwargs):
             U,V = params
             X  = kwargs["x"]
@@ -49,11 +82,7 @@ class SCA(StateSpace):
                 + sw * sparse_time \
                 + ow * orthogonal_space
 
-        U = torch.random.randn(T, self.factor_dim, requires_grad=True)
-        V = torch.random.randn(self.factor_dim, N, requires_grad=True)
-
         params = [U,V]
-
         _,params = hseu.optimize(
             sca, 
             params,

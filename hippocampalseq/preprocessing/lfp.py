@@ -1,11 +1,27 @@
 import numpy as np
 import pynapple as nap
+from typing import Dict
 
-def assign_spikes_theta_phase(spike_info: nap.TsGroup, lfp_with_cycles):
-    lfp_times   = lfp_with_cycles['phase'].index.values.astype(float)
-    phase_deg   = np.asarray(lfp_with_cycles['phase_deg'].values, dtype=float)
-    cycle_dur_s = np.asarray(lfp_with_cycles['cycle_duration'].values, dtype=float)
-    monotonic   = np.asarray(lfp_with_cycles['monotonic_increasing'].values, dtype=float)
+def assign_spikes_theta_phase(
+        spike_info: Dict[int, nap.TsdFrame], 
+        lfp_with_cycles: nap.TsdFrame
+    ) -> Dict[int, nap.TsdFrame]:
+    """Takes the full spike information and uses the LFP information to assign the bins what phase of theta
+    they're in.
+
+    Args:
+        spike_info (Dict[int,nap.TsdFrame]): A dict matching cell IDs to their information.
+        lfp_with_cycles (nap.TsdFrame): The full LFP data after `hippocampalseq.preprocessing.theta.detect_theta_cycles` has been called on it.
+        
+    Returns:
+        (Dict[int,nap.TsdFrame]): Cell ID matched to the frame with theta pahse assigned.
+    """
+
+    # TODO: Check to see if the cell type field is used anywhere else
+    lfp_times   = lfp_with_cycles['Phase Deg'].index.values.astype(float)
+    phase_deg   = np.asarray(lfp_with_cycles['Phase Deg'].values, dtype=float)
+    cycle_dur_s = np.asarray(lfp_with_cycles['Cycle Duration'].values, dtype=float)
+    monotonic   = np.asarray(lfp_with_cycles['Monotonic Increasing'].values, dtype=float)
 
 
     def nearest_indices(query_times):
@@ -33,21 +49,21 @@ def assign_spikes_theta_phase(spike_info: nap.TsGroup, lfp_with_cycles):
         cols      = list(ts.columns)
         x_vals    = ts.values[:, cols.index('x')]
         y_vals    = ts.values[:, cols.index('y')]
-        vel_vals  = ts.values[:, cols.index('velocity')]
-        time_diff = ts.values[:, cols.index('time_diff')]
-        cell_type_a = ts.values[:, cols.index('cell_type')]  # already an array
+        vel_vals  = ts.values[:, cols.index('Velocity')]
+        time_diff = ts.values[:, cols.index('Delta t')]
+        #cell_type_a = ts.values[:, cols.index('cell_type')]  # already an array
 
         out[cell_id] = nap.TsdFrame(
             t=spike_times,
             d=np.c_[
-                x_vals, y_vals, vel_vals, time_diff, cell_type_a,
+                x_vals, y_vals, vel_vals, time_diff, #cell_type_a,
                 phase_deg[idx], cycle_dur_s[idx], monotonic[idx],
                 lfp_match_times,
             ],
             columns=[
-                'x', 'y', 'velocity', 'time_diff', 'cell_type',
-                'theta_phase', 'cycle_duration', 'monotonic_increasing',
-                'lfp_sample_time',
+                'x', 'y', 'Velocity', 'Delta t', #'cell_type',
+                'Phase Deg', 'Cycle Duration', 'Monotonic Increasing',
+                'LFP Sample Time',
             ],
         )
         all_diffs.append(np.abs(spike_times - lfp_match_times))

@@ -1,7 +1,10 @@
 {
-    "theta_time_window_ms": 250,
     "ignore_theta" : false,
-    "place_field_posterior": false,
-    "ripple_time_window_ms": 3,
+    "theta_args" : {
+        "time_window_ms": 250
+    },
+    "placefield_args": {
+        "place_field_posterior" : false
+    },
     "ignore_ripples" : true
 }

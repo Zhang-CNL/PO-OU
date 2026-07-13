@@ -50,88 +50,7 @@ def select_run_snippets(
     true_trajectories = extract_trajectories(run_position_data, starts, ends)
     return starts, ends, true_trajectories
 
-def detect_theta_cycles(
-        lfp_data: dict,
-        limit_analysis_by_theta_length: bool = True,
-        theta_length_s: Tuple[float, float] = (0.08, 0.16),
-        max_cycle_duration_s: float = 1.0
-    ) -> Tuple[nap.TsdFrame, np.ndarray, np.ndarray]:
-    """Filter LFP data for individual theta cycle numbers.
-
-    Args:
-        lfp_data (dict): Raw LFP data from `hippocampalseq.io.load_lfp_data`
-        limit_analysis_by_theta_length (bool): Use `theta_length_s` to filter out LFP segments that are too short. Defaults to True. 
-        theta_length_s (Tuple[float, float]): Minimum and maximum lengths allowed for a cycle to be used in analysis. Defaults to (0.08,0.16).
-        max_cycle_duration (float): Maximum length of time a cycle can be 
-    """
-    phase_times = lfp_data.index.values
-    phase_deg = np.degrees(lfp_data['Phase Rad'].values) % 360
-
-    # Detect troughs via phase resets (360 -> 0)
-    phase_diff = np.diff(phase_deg)
-    troughs = np.where(phase_diff < -345)[0] + 1
-
-    n_samples = len(phase_deg)
-    cycle_duration = np.zeros(n_samples)
-    monotonic_increasing = np.zeros(n_samples)
-    cycle_id = np.zeros(n_samples)
-
-    n_valid            = 0
-    n_skipped_boundary = 0
-    n_skipped_length   = 0
-
-    for i in range(len(troughs) - 1):
-        start = troughs[i]
-        end   = troughs[i+1]
-        duration = phase_times[end] - phase_times[start]
-
-        # TODO: This seems superfluous given the next if-statement
-        if duration > max_cycle_duration_s:
-            n_skppied_boundary += 1 
-            continue
-
-        if limit_analysis_by_theta_length and (duration < theta_length_s[0] or duration > theta_length_s[1]):
-            n_skipped_length += 1
-            continue 
-        
-        cycle_phases = phase_deg[start:end] 
-        is_monotonic = np.all(np.diff(cycle_phases) > 0)
-
-        n_valid += 1
-        cycle_duration[start:end] = duration 
-        monotonic_increasing[start:end] = is_monotonic.astype(int)
-        cycle_id[start:end] = n_valid
-
-    lfp_cycles = nap.TsdFrame(
-        t=phase_times,
-        d=np.c_[
-            lfp_data['Filtered LFP'].values,
-            lfp_data['Amplitude'].values,
-            lfp_data['Power'].values,
-            lfp_data['Raw LFP'].values,
-            lfp_data['Phase Rad'].values,
-            phase_deg,
-            cycle_duration,
-            monotonic_increasing,
-            cycle_id
-        ],
-        columns=[
-            'Filtered LFP', 'Amplitude', 'Power'
-            'Raw LFP', 'Phase Rad', 'Phase Deg',
-            'Cycle Duration', 'Monotonic', 'Cycle ID'
-        ],
-        time_units='s'
-    )
-    warnings.warn(f"{n_skipped_boundary}/{n_valid} theta cycles boundary-rejected")
-    warnings.warn(f"{n_skipped_length}/{n_valid} theta cycles length filtered")
-    trough_times = nap.Ts(t=phase_times[troughs], time_units='s')
-    return (
-        lfp_cycles, 
-        troughs_indices,
-        trough_times
-    )
-
-def process_theta(
+def extract_theta_segments(
         run_position_data: nap.TsdFrame,
         run_spikes: nap.TsGroup,
         place_cell_ids: np.ndarray,
@@ -186,5 +105,94 @@ def process_theta(
         )
         spikemats.append(spikemat[:,place_cell_ids].astype(int))
 
-    return true_trajectories,spikemats
+    return (
+        true_trajectories,
+        spikemats
+    )
+
+def detect_theta_cycles(
+        lfp_data: nap.TsdFrame,
+        limit_analysis_by_theta_length: bool = True,
+        theta_length_s: Tuple[float, float] = (0.08, 0.16),
+        max_cycle_duration_s: float = 6.0
+    ) -> Tuple[nap.TsdFrame, nap.Ts]:
+    """Filter LFP data for individual theta cycle numbers.
+
+    Args:
+        lfp_data (dict): Raw LFP data from `hippocampalseq.io.load_lfp_data`
+        limit_analysis_by_theta_length (bool): Use `theta_length_s` to filter out LFP segments that are too short. Defaults to True. 
+        theta_length_s (Tuple[float, float]): Minimum and maximum lengths allowed for a cycle to be used in analysis. Defaults to (0.08,0.16).
+        max_cycle_duration (float): Maximum length of time a cycle can be in seconds. Defaults to 6.0.
+
+    ReturnsL
+        (nap.TsdFrame): LFP frame synced to the phase of theta.
+        (nap.Ts): Time-series representation of the troughs of theta.
+    """
+    # TODO: Double-check the correctness of the chatgpt optimized version compared with this one.
+    phase_times = lfp_data.index.values
+    phase_deg = np.degrees(lfp_data['Phase Rad'].values) % 360
+
+    # Detect troughs via phase resets (360 -> 0)
+    phase_diff = np.diff(phase_deg)
+    troughs = np.where(phase_diff < -345)[0] + 1
+
+    n_samples = len(phase_deg)
+    cycle_duration = np.zeros(n_samples)
+    monotonic_increasing = np.zeros(n_samples)
+    cycle_id = np.zeros(n_samples)
+
+    n_valid            = 0
+    n_skipped_boundary = 0
+    n_skipped_length   = 0
+
+    for i in range(len(troughs) - 1):
+        start = troughs[i]
+        end   = troughs[i+1]
+        duration = phase_times[end] - phase_times[start]
+
+        # TODO: This seems superfluous given the next if-statement
+        if duration > max_cycle_duration_s:
+            n_skipped_boundary += 1 
+            continue
+
+        if limit_analysis_by_theta_length and (duration < theta_length_s[0] or duration > theta_length_s[1]):
+            n_skipped_length += 1
+            continue 
+        
+        cycle_phases = phase_deg[start:end] 
+        is_monotonic = np.all(np.diff(cycle_phases) > 0)
+
+        n_valid += 1
+        cycle_duration[start:end] = duration 
+        monotonic_increasing[start:end] = is_monotonic.astype(int)
+        cycle_id[start:end] = n_valid
+
+    lfp_cycles = nap.TsdFrame(
+        t=phase_times,
+        d=np.c_[
+            lfp_data['Filtered LFP'].values,
+            lfp_data['Amplitude'].values,
+            lfp_data['Power'].values,
+            lfp_data['Raw LFP'].values,
+            lfp_data['Phase Rad'].values,
+            phase_deg,
+            cycle_duration,
+            monotonic_increasing,
+            cycle_id
+        ],
+        columns=[
+            'Filtered LFP', 'Amplitude', 'Power',
+            'Raw LFP', 'Phase Rad', 'Phase Deg',
+            'Cycle Duration', 'Monotonic Increasing', 'Cycle ID'
+        ],
+        time_units='s'
+    )
+    warnings.warn(f"{n_skipped_boundary}/{n_valid} theta cycles boundary-rejected")
+    warnings.warn(f"{n_skipped_length}/{n_valid} theta cycles length filtered")
+    trough_times = nap.Ts(t=phase_times[troughs], time_units='s')
+    return (
+        lfp_cycles, 
+        trough_times
+    )
+
             

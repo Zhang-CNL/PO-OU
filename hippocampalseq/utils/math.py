@@ -123,20 +123,111 @@ def analytical_gaussian_approximation(
     
     return mu.unsqueeze(-1), sigma
 
-def mT(x: np.ndarray|torch.Tensor):
+def mT(x: npt.ArrayLike):
     """Shorthand for np.matrix_transpose or torch.Tensor.mT"""
     if isinstance(x, torch.Tensor):
         return x.mT
     return np.matrix_transpose(x)
 
-def invmul(A: np.ndarray|torch.Tensor, B: np.ndarray|torch.Tensor):
+def invmul(A: npt.ArrayLike, B: npt.ArrayLike):
     """Computes :math:`AB^{-1}`"""
     if isinstance(A, torch.Tensor):
         return mT(torch.linalg.solve(mT(B), mT(A)))
     return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
 
-def mulinv(B: np.ndarray|torch.Tensor, A: np.ndarray|torch.Tensor):
+def mulinv(B: npt.ArrayLike, A: npt.ArrayLike):
     """Computes :math:`B^{-1}A`"""
     if isinstance(A, torch.Tensor):
         return torch.linalg.solve(B, A)
     return np.linalg.solve(B, A)
+
+def orthog(X: npt.ArrayLike):
+    if isinstance(X, torch.Tensor):
+        U,S,V = torch.linalg.svd(X)
+        M,N = U.shape[0],V.shape[1]
+        rcond = np.finfo(S.dtype).eps * max(M,N)
+        tol = np.amax(S, initial=0.) * rcond
+        num = np.sum(S > tol, dtype=int)
+        return U[:,:num]
+    else:
+        return scipy.linalg.orth(X)
+
+def pca(X: npt.ArrayLike, n_components: Optional[int] = None):
+    mean,cov,argsort,dot = changeover_functions(type(X), 'mean', 'cov', 'argsort', 'dot')
+
+    centered_x = X - mean(X, axis=0)
+    _cov = cov(centered_x.T)
+    if isinstance(X, torch.Tensor):
+        eval,evec = torch.linalg.eigh(_cov)
+    else:
+        eval,evec = np.linalg.eigh(_cov)
+    
+    idx = argsort(eval)[::-1]
+    eval = eval[idx]
+    evec = evec[:,idx]
+    if n_components is not None:
+        evec = evec[:,:n_components]
+        eval = eval[:n_components]
+
+    return (
+        dot(centered_x, evec),
+        eval,
+        evec
+    )
+
+def find_halfheight_peaks(signal: npt.ArrayLike, peak_idx: int):
+    """Reimplementation of MATLAB's findpeaks with WidthReference='halfheight'.
+    The threshold is peak_values / 2. We walk outward from the peak until 
+    the signal drops below the threshold (interpolating between samples
+    for sub-bin precision), and return right_pos - left_pos.
+    """
+    n = len(signal)
+    peak = signal[peak_idx]
+    threshold = peak / 2.0
+
+    left_hits = np.flatnonzero(signal[:peak_idx] < threshold)
+    if len(left_hits) > 0:
+        left = left_hits[-1]
+        y0,y1 = signal[left], signal[left + 1]
+        left_p = left + (threshold - y0) / (y1 - y0)
+    else:
+        left = 0.0
+
+    right_hits = np.flatnonzero(signal[peak_idx+1:] < threshold)
+    if len(right_hits) > 0:
+        right = peak_idx + 1 + right_hits[0]
+        y0,y1 = signal[right - 1], signal[right]
+        right_p = right - 1 + (y0 - threshold) / (y0 - y1)
+    else:
+        right = n - 1
+
+    return right_p - left_p
+
+def _components(X: npt.ArrayLike, p: float = 1.0, phi: float = 0.0, axis: Optional[int] = None):
+    """Compute the generalized rectangular components of circular data.
+    Essentially the projections of a vector onto perpendicular axes.
+    $V_x = V cos(\theta)$ and $V_y = V sin(\theta)$. 
+    """
+    C = np.sum(np.cos(p * (X - phi)), axis=axis)
+    S = np.sum(np.sin(p * (X - phi)), axis=axis)
+    return C, S
+
+def rayleightest(X: npt.ArrayLike, axis: Optional[int] = None):
+    """Taken from https://docs.astropy.org/en/stable/_modules/astropy/stats/circstats.html#rayleightest
+    because I don't want to install a full package.
+    """
+    if axis is None:
+        n = X.size 
+    else:
+        n = X.shape[axis]
+    C,S = _components(X, 1.0, 0.0, axis=axis)
+    Rbar = np.hypot(S,C)
+    z = n * Rbar * Rbar
+    tmp = 1.0
+    if n < 50:
+        tmp = 1 + (2 * z - z**2) / (4 * n) \
+            - (24*z - 132 * z**2 + 76 * z**3 - 9 * z**4) \
+            / (288 * n**2)
+
+    pval = np.exp(-z) * tmp
+    return pval

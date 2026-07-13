@@ -7,43 +7,6 @@ from pathlib import Path
 from astropy.stats import rayleightest
 from scipy.ndimage import label
 
-def matlab_halfheight_width(signal, peak_idx):
-    """
-    Width at half the absolute peak height, MATLAB uses findpeaks which I think it similar
-    with WidthReference='halfheight'.
-
-    The half-height threshold is peak_value / 2. We walk outward from the
-    peak until the signal drops below threshold (interpolating between
-    samples for sub-bin precision), and return right_pos - left_pos.
-    """
-    n         = len(signal)
-    peak_val  = signal[peak_idx]
-    threshold = peak_val / 2.0
-
-    # Walk left
-    left = peak_idx
-    while left > 0 and signal[left] >= threshold:
-        left -= 1
-    if signal[left] < threshold and left + 1 <= peak_idx:
-        y0, y1   = signal[left], signal[left + 1]
-        frac     = (threshold - y0) / (y1 - y0)
-        left_pos = left + frac
-    else:
-        left_pos = 0.0   # never crossed below threshold
-
-    # Walk right
-    right = peak_idx
-    while right < n - 1 and signal[right] >= threshold:
-        right += 1
-    if signal[right] < threshold and right - 1 >= peak_idx:
-        y0, y1    = signal[right - 1], signal[right]
-        frac      = (y0 - threshold) / (y0 - y1)
-        right_pos = (right - 1) + frac
-    else:
-        right_pos = float(n - 1)   # never crossed below threshold
-
-    return right_pos - left_pos
-
 def classify_theta_modality(firing_rate_per_phase, phase_centers, spike_info_with_phase,
                             excitatory_neurons, phase_bin=10, rayleigh_p_cutoff=0.05):
 
