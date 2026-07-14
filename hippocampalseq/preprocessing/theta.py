@@ -128,44 +128,49 @@ def detect_theta_cycles(
         (nap.TsdFrame): LFP frame synced to the phase of theta.
         (nap.Ts): Time-series representation of the troughs of theta.
     """
-    # TODO: Double-check the correctness of the chatgpt optimized version compared with this one.
     phase_times = lfp_data.index.values
     phase_deg = np.degrees(lfp_data['Phase Rad'].values) % 360
 
     # Detect troughs via phase resets (360 -> 0)
     phase_diff = np.diff(phase_deg)
-    troughs = np.where(phase_diff < -345)[0] + 1
+    troughs    = np.where(phase_diff < -345)[0] + 1
 
-    n_samples = len(phase_deg)
-    cycle_duration = np.zeros(n_samples)
+    n_samples            = len(phase_deg)
+    cycle_duration       = np.zeros(n_samples)
     monotonic_increasing = np.zeros(n_samples)
-    cycle_id = np.zeros(n_samples)
+    cycle_id             = np.zeros(n_samples)
 
-    n_valid            = 0
-    n_skipped_boundary = 0
-    n_skipped_length   = 0
+    n_valid,n_skipped_boundary,n_skipped_length = 0,0,0
 
-    for i in range(len(troughs) - 1):
-        start = troughs[i]
-        end   = troughs[i+1]
-        duration = phase_times[end] - phase_times[start]
+    if len(troughs) >= 2:
+        starts = troughs[:-1]
+        ends   = troughs[1:]
+        durations = phase_times[ends] - phase_times[starts]
 
-        # TODO: This seems superfluous given the next if-statement
-        if duration > max_cycle_duration_s:
-            n_skipped_boundary += 1 
-            continue
+        boundary_mask = durations > max_cycle_duration_s
+        n_skipped_boundary = np.sum(boundary_mask)
 
-        if limit_analysis_by_theta_length and (duration < theta_length_s[0] or duration > theta_length_s[1]):
-            n_skipped_length += 1
-            continue 
-        
-        cycle_phases = phase_deg[start:end] 
-        is_monotonic = np.all(np.diff(cycle_phases) > 0)
+        if limit_analysis_by_theta_length:
+            length_mask = ~boundary_mask \
+                & ((durations < theta_length_s[0]) | (durations > theta_length_s[1]))
+        else:
+            length_mask = np.zeros_like(durations)
 
-        n_valid += 1
-        cycle_duration[start:end] = duration 
-        monotonic_increasing[start:end] = is_monotonic.astype(int)
-        cycle_id[start:end] = n_valid
+        n_skipped_length = np.sum(length_mask)
+
+        valid_mask = ~boundary_mask & ~length_mask
+        n_valid = np.sum(valid_mask)
+
+        starts = starts[valid_mask]
+        ends   = ends[valid_mask]
+        durations = durations[valid_mask]
+
+        for cid, (start,end,duration) in enumerate(zip(starts,ends,durations),start=1):
+            is_monotonic = np.all(phase_diff[start:end-1] > 0)
+            cycle_duration[start:end]       = duration
+            monotonic_increasing[start:end] = is_monotonic.astype(int)
+            cycle_id[start:end]             = cid
+
 
     lfp_cycles = nap.TsdFrame(
         t=phase_times,

@@ -116,7 +116,7 @@ def filter_noisy_epochs(
             starts = rat_values[session]['starts']
             ends   = rat_values[session]['ends']
 
-            print(f"Removing noisy {len(starts)} epochs")
+            print(f"Removing {len(starts)} noisy epoch{'s' if len(starts) > 1 else ''}")
 
             ts = raw_position_data.time_support
             cleaned = ts.set_diff(nap.IntervalSet(starts, ends))

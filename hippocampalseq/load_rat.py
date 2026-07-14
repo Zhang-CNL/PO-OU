@@ -1,6 +1,7 @@
 import numpy as np
 import pynapple as nap
 import warnings
+import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
 
@@ -69,6 +70,7 @@ def load_and_preprocess(
     ) -> Tuple[RawData, PlaceFields, Theta, Replay]:
 
     # Load raw data and raw data segmented into the running period.
+    begin = time.time()
     (
         raw_position,
         running_position,
@@ -87,6 +89,7 @@ def load_and_preprocess(
         ripple_type = loading_kwargs.get('ripple_type', 'awake'),
         minimum_dt  = loading_kwargs.get('minimum_dt', np.inf)
     )
+    print(f"Loading took {time.time() - begin} seconds")
 
     warnings.warn("Dropping LFP metadata. If you want to keep it, you can call `hseio.load_clean_data` manually.")
     lfp_data = lfp_data['LFP']
@@ -104,6 +107,7 @@ def load_and_preprocess(
     )
 
     # Generate place fields based on the data
+    begin = time.time()
     (
         place_fields,
         place_cell_ids
@@ -122,9 +126,11 @@ def load_and_preprocess(
         min_spike_rate     = placefield_kwargs.get('min_spikerate', 1.0), 
         velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 5.0)
     )
+    print(f"Place field calculation took {time.time() - begin} seconds")
     place_field_data = PlaceFields(place_fields, place_cell_ids)
 
     # Process theta and theta LFP
+    begin = time.time()
     (
         true_trajectories,
         theta_spikemats 
@@ -139,6 +145,9 @@ def load_and_preprocess(
         time_window_ms             = theta_kwargs.get('time_window_ms', 60),
         time_window_advance_ms     = theta_kwargs.get('time_window_advance_ms', None)
     )
+    print(f"Theta segment extraction took {time.time() - begin} seconds")
+
+    begin = time.time()
     (
         theta_lfp_data,
         theta_trough_times
@@ -153,6 +162,7 @@ def load_and_preprocess(
         running_spike_info,
         theta_lfp_data
     )
+    print(f"Theta cycle detection took {time.time() - begin} seconds")
 
     theta = Theta(
         true_trajectories, 
@@ -163,6 +173,7 @@ def load_and_preprocess(
     )
 
     # Process replay data.
+    begin = time.time()
     ripple_spikemats = hsepp.process_ripples(
         ripple_periods,
         running_spikes,
@@ -170,6 +181,7 @@ def load_and_preprocess(
         time_window_ms         = ripple_kwargs.get('time_window_ms', 5.0),
         time_window_advance_ms = ripple_kwargs.get('time_window_advance_ms', None),
     )
+    print(f"Ripple processing took {time.time() - begin} seconds")
     ripples = Replay(ripple_spikemats)
 
     return (
