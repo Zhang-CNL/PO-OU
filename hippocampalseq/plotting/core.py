@@ -1,6 +1,7 @@
 import os
-import matplotlib.pyplot as plt
 import functools
+import matplotlib.pyplot as plt
+from matplotlib.backend_pdf import PdfPages
 
 __plotting_initialized = False
 
@@ -13,6 +14,7 @@ def change_font_sizes(small_size, medium_size, big_size):
     plt.rc('axes', titlesize=big_size)     # fontsize of the axes title
     plt.rc('figure', titlesize=big_size)  # fontsize of the figure title
     plt.rc('lines', linewidth=2, color='r')
+    plt.rcParams['figure.dpi'] = 300
     #plt.rcParams['font.sans-serif'] = ['Helvetica']
 
 def __init_plotting():
@@ -33,14 +35,19 @@ def reset_plotting():
 
 def save_wrapper(fn):
     @functools.wraps(fn)
-    def wrapper(*args, file_path=None, file_name=None, **kwargs):
+    def wrapper(*args, file_path: str=None, file_name: str|list[str]=None, **kwargs):
+
         __init_plotting() 
         res = fn(*args, **kwargs)
-        if file_name is not None:
+        if not isinstance(res, list):
+            res = [res]
+        if file_name is not None and len(res) > 0:
             if file_path is None:
                 file_path = "./results/"
             if not os.path.exists(file_path):
                 os.makedirs(file_path)
-            plt.savefig(os.path.join(file_path, file_name), dpi=300)
+            with PdfPages(os.path.join(file_path, file_name)) as pdf:
+                for fig in res:
+                    pdf.savefig(fig)
         return res
     return wrapper
