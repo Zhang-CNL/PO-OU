@@ -50,6 +50,9 @@ def process_ratdata(
     )
     print(f"Calculating population firing rates took {time.time() - begin} seconds")
 
+    excitatory_set      = set(raw_data.excitatory_neurons)
+    true_excit_in_phase = sorted(set(theta_data.spikes_with_phase.keys()) & excitatory_set)
+
     begin = time.time()
     unimodal_cells,bimodal_cells = hsea.classify_place_cell_modality(
         place_field_data.place_fields,
@@ -57,7 +60,7 @@ def process_ratdata(
         place_field_data.position_hist,
         theta_data.spikes_with_phase,
         modality_results,
-        raw_data.excitatory_neurons,
+        true_excit_in_phase,
         velocity_cutoff,
         min_field_fractions,
         min_contiguous_bins

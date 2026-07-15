@@ -35,7 +35,7 @@ def map_theta_modalities_to_str(modalities: dict[int, Any]) -> list[str]:
 
 def calculate_phase_locking(
         spike_info_with_phase: dict[int, nap.TsdFrame],
-        total_duration,
+        total_duration: float,
         velocity_cutoff: float = 5.0,
         phase_bin_size_deg: int = 10,
         gaussian_std: float = 12,
