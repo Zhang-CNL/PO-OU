@@ -1,7 +1,7 @@
 import os
 import functools
 import matplotlib.pyplot as plt
-from matplotlib.backend_pdf import PdfPages
+from matplotlib.backends.backend_pdf import PdfPages
 
 __plotting_initialized = False
 
@@ -33,12 +33,11 @@ def reset_plotting():
     global __plotting_initialized
     __plotting_initialized = False
 
-def save_wrapper(fn):
-    @functools.wraps(fn)
+def save_wrapper(func):
+    @functools.wraps(func)
     def wrapper(*args, file_path: str=None, file_name: str|list[str]=None, **kwargs):
-
         __init_plotting() 
-        res = fn(*args, **kwargs)
+        res = func(*args, **kwargs)
         if not isinstance(res, list):
             res = [res]
         if file_name is not None and len(res) > 0:
@@ -46,8 +45,13 @@ def save_wrapper(fn):
                 file_path = "./results/"
             if not os.path.exists(file_path):
                 os.makedirs(file_path)
-            with PdfPages(os.path.join(file_path, file_name)) as pdf:
-                for fig in res:
-                    pdf.savefig(fig)
+            if ".pdf" in file_name:
+                with PdfPages(os.path.join(file_path, file_name)) as pdf:
+                    for fig in res:
+                        pdf.savefig(fig)
+            else:
+                for i,fig in enumerate(res):
+                    fn = str(i) + file_name if i > 0 else file_name
+                    fig.savefig(os.path.join(file_path, fn))
         return res
     return wrapper

@@ -72,6 +72,7 @@ def read_mat(file: str) -> dict[str, Any]:
         return sio.loadmat(file, squeeze_me=True, struct_as_record=False)
 
 def extract_times_from_boolean(boolean_arr, run_times):
+    # TODO: Optimize this function. Get rid of the loop.
     start_times = []
     end_times   = []
     prev        = boolean_arr[0]

@@ -6,59 +6,22 @@ from scipy.stats import mannwhitneyu
 
 from .core import save_wrapper
 
-# TODO: Rewrite plot_phase_locked such that n_cells is optional
 # TODO: Split up modality plotting code into separate functions
 # TODO: Split `plot_unimodal_bimodal_summary` into separate functions
+
 @save_wrapper
-def plot_phase_locked(firing_rate_per_phase: dict[int,Any], phase_centers: np.ndarray, n_cells: int =12):
-    ids = list(firing_rate_per_phase.keys())[:n_cells]
-    n = len(ids)
-    if n == 0:
-        return None
-
-    cols = int(np.ceil(np.sqrt(n)))
-    rows = int(np.ceil(n / cols))
-
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 4, rows * 3), squeeze=False)
-    axes = axes.ravel()
-
-    # Doubled axis for 0-720° display (two cycles of theta)
-    phase_doubled = np.concatenate([phase_centers, phase_centers + 360])
-
-    for i, cid in enumerate(ids):
-        ax = axes[i]
-        d = firing_rate_per_phase[cid]
-
-        raw_d    = np.concatenate([d['raw_counts'],    d['raw_counts']])
-        smooth_d = np.concatenate([d['smooth_counts'], d['smooth_counts']])
-
-        ax.bar(phase_doubled, raw_d,
-            width=phase_centers[1] - phase_centers[0],
-            color='black', edgecolor='none', alpha=0.7, label='Raw')
-        ax.plot(phase_doubled, smooth_d, color='red', lw=1.5, label='Smoothed')
-
-        ax.set_title(f"Cell {cid} (n={d['n_spikes']})", fontsize=10)
-        ax.set_xlim(0, 720)
-        ax.set_xticks([0, 360, 720])
-        ax.set_xlabel("Theta phase (°)")
-        ax.set_ylabel("Count")
-        ax.set_ylim(bottom=0)
-        if i == 0:
-            ax.legend(fontsize=8)
-
-    for j in range(n, rows * cols):
-        axes[j].axis("off")
-
-    fig.tight_layout()
-    return fig
-
-def plot_all_phase_locked(
+def plot_phase_locked(
         firing_rate_per_phase: dict[int,Any], 
         phase_centers: np.ndarray,
         cols: int = 4, 
-        rows_per_page: int = 5
+        rows_per_page: int = 5,
+        n_cells: Optional[int] = None
     ):
     """Plot every cell, paginated. Returns list of figures."""
+    if n_cells is not None:
+        firing_rate_per_phase = {
+            i: firing_rate_per_phase[i] for i in range(n_cells)
+        }
     ids = list(firing_rate_per_phase.keys())
     n_total = len(ids)
     if n_total == 0:
