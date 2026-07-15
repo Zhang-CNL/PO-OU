@@ -4,8 +4,6 @@ import pynapple as nap
 from collections.abc import Iterable
 from typing import Optional
 
-from torch._dynamo import exc
-
 import hippocampalseq.utils as hseu
 from .core import save_wrapper
 

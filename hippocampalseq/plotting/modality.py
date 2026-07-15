@@ -1,11 +1,16 @@
-from scipy.signal import filtfilt
-from scipy.signal.windows import gaussian
 import numpy as np
-import matplotlib.pyplot as plt
 import pynapple as nap
-from pathlib import Path
+import matplotlib.pyplot as plt 
+from typing import Any, Optional
+from scipy.stats import mannwhitneyu
 
-def plot_phase_locked(firing_rate_per_phase, phase_centers, n_cells=12):
+from .core import save_wrapper
+
+# TODO: Rewrite plot_phase_locked such that n_cells is optional
+# TODO: Split up modality plotting code into separate functions
+# TODO: Split `plot_unimodal_bimodal_summary` into separate functions
+@save_wrapper
+def plot_phase_locked(firing_rate_per_phase: dict[int,Any], phase_centers: np.ndarray, n_cells: int =12):
     ids = list(firing_rate_per_phase.keys())[:n_cells]
     n = len(ids)
     if n == 0:
@@ -47,8 +52,12 @@ def plot_phase_locked(firing_rate_per_phase, phase_centers, n_cells=12):
     fig.tight_layout()
     return fig
 
-def plot_all_phase_locked(firing_rate_per_phase, phase_centers,
-                        cols=4, rows_per_page=5):
+def plot_all_phase_locked(
+        firing_rate_per_phase: dict[int,Any], 
+        phase_centers: np.ndarray,
+        cols: int = 4, 
+        rows_per_page: int = 5
+    ):
     """Plot every cell, paginated. Returns list of figures."""
     ids = list(firing_rate_per_phase.keys())
     n_total = len(ids)
@@ -106,9 +115,14 @@ def plot_all_phase_locked(firing_rate_per_phase, phase_centers,
 
     return figures
 
-def plot_modality_classification(firing_rate_per_phase,
-                                modality_results, population_stats,
-                                phase_centers, n_examples=3):
+@save_wrapper
+def plot_modality_classification(
+        firing_rate_per_phase: dict[int,Any],
+        modality_results: dict[int,Any], 
+        population_stats: dict[str,dict[str,Any]],
+        phase_centers: np.ndarray, 
+        n_examples: int = 3
+    ):
 
     fig = plt.figure(figsize=(16, 12))
     gs  = fig.add_gridspec(3, 3, hspace=0.4, wspace=0.3)
@@ -212,8 +226,13 @@ def plot_modality_classification(firing_rate_per_phase,
     plt.tight_layout()
     return fig
 
-def plot_modality_all_cells(firing_rate_per_phase, modality_results, phase_centers,
-                             cols=4, rows_per_page=5):
+def plot_modality_all_cells(
+        firing_rate_per_phase: dict[int,Any], 
+        modality_results: dict[int,Any], 
+        phase_centers: np.ndarray,
+        cols: int = 4, 
+        rows_per_page: int = 5
+    ):
     """Plot every cell grouped by modality. Returns list of figures."""
 
     modality_groups = [
@@ -287,10 +306,12 @@ def plot_modality_all_cells(firing_rate_per_phase, modality_results, phase_cente
 
     return figures
 
-def plot_place_field_comparison(unimodal_props, bimodal_props, expt_name=None):
+def plot_place_field_comparison(
+        unimodal_props: dict[str,list], 
+        bimodal_props: dict[str,list], 
+        expt_name: Optional[str] = None
+    ):
     """Compare place field properties between unimodal and bimodal cells."""
-    from scipy.stats import mannwhitneyu
-
     fig, axes = plt.subplots(2, 3, figsize=(14, 9))
 
     metrics = [
@@ -352,9 +373,14 @@ def plot_place_field_comparison(unimodal_props, bimodal_props, expt_name=None):
     return fig
 
 
-def plot_unimodal_bimodal_summary(firing_rate_per_phase, modality_results, population_stats,
-                                phase_centers, unimodal_props, bimodal_props,
-                                excitatory_neurons, save_dir=None):
+def plot_unimodal_bimodal_summary(
+        modality_results: dict[int,Any], 
+        population_stats: dict[int,Any],
+        phase_centers: np.ndarray, 
+        unimodal_props: dict[str,list], 
+        bimodal_props: dict[str,list],
+        excitatory_neurons: np.ndarray
+    ):
     """
     Comprehensive plotting of unimodal vs bimodal cell properties.
     Matches MATLAB: IRFS_PLOT_UNIMODAL_BIMODAL_CELL_PROPERTIES (without waveform parts)
@@ -500,19 +526,10 @@ def plot_unimodal_bimodal_summary(firing_rate_per_phase, modality_results, popul
     fig4.suptitle('Unimodal vs Bimodal Place Field Properties', fontsize=14, fontweight='bold')
     fig4.tight_layout()
     
-    # Save figures if directory provided
-    if save_dir is not None:
-        save_dir = Path(save_dir)
-        save_dir.mkdir(exist_ok=True, parents=True)
-        fig1.savefig(save_dir / 'population_phase_locked_firing.png', dpi=150, bbox_inches='tight')
-        fig2.savefig(save_dir / 'phase_locked_firing_overlay.png', dpi=150, bbox_inches='tight')
-        fig3.savefig(save_dir / 'modality_pie_chart.png', dpi=150, bbox_inches='tight')
-        fig4.savefig(save_dir / 'place_field_comparison.png', dpi=150, bbox_inches='tight')
-        print(f'Figures saved to {save_dir}')
-    
     return fig1, fig2, fig3, fig4
 
-def plot_modality_overlay(population_stats, phase_centers):
+@save_wrapper
+def plot_modality_overlay(population_stats: dict[str,dict[str,Any]], phase_centers: np.ndarray):
     """Three-panel overlay of All/Unimodal/Bimodal populations across phase."""
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
     phase_doubled = np.concatenate([phase_centers, phase_centers + 360])
@@ -556,7 +573,8 @@ def plot_modality_overlay(population_stats, phase_centers):
     return fig
 
 
-def plot_modality_pie(modality_results):
+@save_wrapper
+def plot_modality_pie(modality_results: dict[int,Any]):
     """Pie chart of cell modality counts (matches MATLAB output)."""
     counts = {1: 0, 2: 0, 3: 0, -1: 0, 0: 0}
     for r in modality_results.values():
@@ -588,10 +606,12 @@ def plot_modality_pie(modality_results):
     return fig
 
 
-def plot_individual_cell_histograms(firing_rate_per_phase, modality_results, phase_centers,
-                                    n_per_category=6, save_dir=None):
-
-    
+def plot_individual_cell_histograms(
+        firing_rate_per_phase: dict[int,Any], 
+        modality_results: dict[int,Any], 
+        phase_centers: np.ndarray,
+        n_per_category: int = 6, 
+    ):
     # Separate cells by modality
     unimodal_ids = [cid for cid, r in modality_results.items() if r['modality'] == 1]
     bimodal_ids = [cid for cid, r in modality_results.items() if r['modality'] == 2]
@@ -677,14 +697,5 @@ def plot_individual_cell_histograms(firing_rate_per_phase, modality_results, pha
         fig_bi.tight_layout()
     else:
         fig_bi = None
-    
-    # Save if directory provided
-    if save_dir is not None:
-        save_dir = Path(save_dir)
-        save_dir.mkdir(exist_ok=True, parents=True)
-        if fig_uni is not None:
-            fig_uni.savefig(save_dir / 'unimodal_cell_histograms.png', dpi=150, bbox_inches='tight')
-        if fig_bi is not None:
-            fig_bi.savefig(save_dir / 'bimodal_cell_histograms.png', dpi=150, bbox_inches='tight')
     
     return fig_uni, fig_bi

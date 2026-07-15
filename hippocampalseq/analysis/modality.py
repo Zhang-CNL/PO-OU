@@ -305,6 +305,8 @@ def classify_place_cell_modality(
     if total_duration > 0:
         normalized_time_in_position /= total_duration
 
+    place_cell_properties = {}
+
     unimodal_cell_properties = {
         'mean_field_size'         : [],
         'n_fields'                : [],
@@ -350,8 +352,6 @@ def classify_place_cell_modality(
         binary_field = (place_field >= peak_fr * min_field_fraction).astype(int)
         labeled,n_raw = label(binary_field, structure=eight_conn)
 
-        # TODO: Double-check this code's correctness
-        #""""
         counts = np.bincount(labeled.ravel(), minlength=n_raw + 1)
         sizes = counts[1:n_raw+1]
         valid_ids = np.nonzero(sizes >= min_contiguous_bins)[0]
@@ -362,18 +362,6 @@ def classify_place_cell_modality(
         valid_mask[valid_ids] = np.arange(1, n_fields+1)
         valid_mask = valid_mask[labeled]
 
-        """
-        field_sizes = []
-        valid_mask = np.zeros_like(labeled)
-        n_fields = 0
-        for fid in range(1, n_raw + 1):
-            mask = (labeled == fid)
-            sz = int(mask.sum())
-            if sz >= min_contiguous_bins:
-                n_fields += 1 
-                valid_mask[mask] = n_fields
-                field_sizes.append(sz)
-        #"""
         mean_infield_fr = mean_field_size = np.nan
         if n_fields > 0:
             infield_mask = valid_mask > 0
@@ -393,7 +381,19 @@ def classify_place_cell_modality(
         to_set['mean_infield_firing_rate'].append(mean_infield_fr)
         to_set['field_sizes'].append(field_sizes)
 
+        place_cell_properties[id] = {
+            'modality'                 : modality,
+            'mean_field_size'          : mean_field_size,
+            'n_fields'                 : n_fields,
+            'peak_firing_rate'         : peak_fr,
+            'mean_firing_rate'         : mean_fr,
+            'information_per_spike'    : info_p_spike,
+            'mean_infield_firing_rate' : mean_infield_fr,
+            'field_sizes'              : field_sizes
+        }
+
     return (
+        place_cell_properties,
         unimodal_cell_properties,
         bimodal_cell_properties
     )

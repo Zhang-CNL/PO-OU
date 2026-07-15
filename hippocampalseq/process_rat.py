@@ -54,7 +54,11 @@ def process_ratdata(
     true_excit_in_phase = sorted(set(theta_data.spikes_with_phase.keys()) & excitatory_set)
 
     begin = time.time()
-    unimodal_cells,bimodal_cells = hsea.classify_place_cell_modality(
+    (
+        pooled_placefield_properties,
+        unimodal_cells,
+        bimodal_cells 
+    )= hsea.classify_place_cell_modality(
         place_field_data.place_fields,
         place_field_data.place_cell_ids,
         place_field_data.position_hist,
