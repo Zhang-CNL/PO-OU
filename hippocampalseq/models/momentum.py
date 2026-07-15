@@ -1,13 +1,7 @@
-import os
 import numpy as np
-import numpy.typing as npt
 import pynapple as nap
 import torch
-import warnings
-from typing import List, Tuple
 from dataclasses import dataclass, field
-from scipy.optimize import least_squares
-from torch.nn import ParameterList
 
 import hippocampalseq.utils as hseu
 
@@ -19,9 +13,9 @@ __all__ = [
 
 @dataclass
 class MomentumResults(KalmanResults):
-    emission_probabilities : List[torch.Tensor] = field(default_factory=list)
-    approximate_mean       : List[torch.Tensor] = field(default_factory=list)
-    approximate_covariance : List[torch.Tensor] = field(default_factory=list)
+    emission_probabilities : list[torch.Tensor] = field(default_factory=list)
+    approximate_mean       : list[torch.Tensor] = field(default_factory=list)
+    approximate_covariance : list[torch.Tensor] = field(default_factory=list)
 
 class Momentum(KalmanFilter):
     """State-space model that includes momentum as a parameters.
@@ -30,8 +24,8 @@ class Momentum(KalmanFilter):
     """
     def __init__(
             self,
-            place_fields: npt.ArrayLike, 
-            spikemat: List[npt.ArrayLike],
+            place_fields: hseu.NDArray, 
+            spikemat: list[hseu.NDArray],
             dt: float, 
             environment_size: tuple,
             bin_size: int, 
@@ -55,16 +49,16 @@ class Momentum(KalmanFilter):
         """
         super().__init__(4, 2, 1)
 
-        self.dt               = torch.tensor(dt)
-        self.environment_size = environment_size
-        self.bin_size         = bin_size
-        self.grid = hseu.create_grid(self.environment_size, self.bin_size)
+        self.dt : torch.Tensor              = torch.tensor(dt)
+        self.environment_size: tuple[int,...] = environment_size
+        self.bin_size : int        = bin_size
+        self.grid: torch.Tensor = hseu.create_grid(self.environment_size, self.bin_size)
 
         if seed is not None:
             torch.random.manual_seed(seed)
 
-        place_fields = torch.from_numpy(place_fields)
-
+        if isinstance(place_fields, np.ndarray):
+            place_fields = torch.from_numpy(place_fields)
 
         values = MomentumResults(
             emission_probabilities = [],
@@ -86,7 +80,6 @@ class Momentum(KalmanFilter):
             approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
                 self.grid,
                 emission_probability,
-                self.bin_size
             )
             
             self.emission_probabilities.append(emission_probability)
@@ -161,7 +154,7 @@ class Momentum(KalmanFilter):
         Gamma = torch.cat((top, bottom), dim=0)
         return Gamma
 
-    def _init_priors(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_priors(self) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
@@ -186,7 +179,7 @@ class Momentum(KalmanFilter):
         ])
         return init_mean, init_cov
 
-    def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Construct transition matrices for momentum SSM.
 
         Returns:
@@ -198,7 +191,7 @@ class Momentum(KalmanFilter):
 
         return A,Q
 
-    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Build the observation transition matrix and noise matrix.
         The noise is computed analytically from the data, while the transition
         matrix has the form $$\begin{bmatrix}I_2 & 0_2\end{bmatrix}$$

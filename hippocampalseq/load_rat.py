@@ -3,7 +3,7 @@ import pynapple as nap
 import warnings
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any
 
 import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsepp
@@ -14,7 +14,7 @@ class RawData:
     running_position   : nap.TsdFrame 
     raw_spikes         : nap.TsGroup 
     running_spikes     : nap.TsGroup
-    running_spike_info : Dict[int, nap.TsdFrame]
+    running_spike_info : dict[int, nap.TsdFrame]
     ripple_periods     : nap.IntervalSet
     excitatory_neurons : np.ndarray
     inhibitory_neurons : np.ndarray
@@ -24,18 +24,20 @@ class RawData:
 class PlaceFields: 
     place_fields   : np.ndarray
     place_cell_ids : np.ndarray
+    position_hist  : np.ndarray
 
 @dataclass 
 class Theta:
-    true_trajectory : List[np.ndarray]
-    spikes          : List[np.ndarray]
+    true_trajectory : list[np.ndarray]
+    spikes          : list[np.ndarray]
     lfp_data        : nap.TsdFrame
     trough_times    : nap.Ts
-    spikes_with_phase : Dict[int, nap.TsdFrame]
+    trough_indices  : np.ndarray
+    spikes_with_phase : dict[int, nap.TsdFrame]
 
 @dataclass
 class Replay:
-    spikes : List[np.ndarray]
+    spikes : list[np.ndarray]
 
 def load_and_preprocess(
         base_data_path: str,
@@ -110,11 +112,11 @@ def load_and_preprocess(
     begin = time.time()
     (
         place_fields,
-        place_cell_ids
+        place_cell_ids,
+        position_histogram
     ) = hsepp.calculate_placefields(
         running_position,
         running_spike_info,
-        running_spikes,
         excitatory_neurons,
         environment_size   = environment_size,
         track_type         = track_type,
@@ -127,7 +129,7 @@ def load_and_preprocess(
         velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 5.0)
     )
     print(f"Place field calculation took {time.time() - begin} seconds")
-    place_field_data = PlaceFields(place_fields, place_cell_ids)
+    place_field_data = PlaceFields(place_fields, place_cell_ids, position_histogram)
 
     # Process theta and theta LFP
     begin = time.time()
@@ -150,7 +152,8 @@ def load_and_preprocess(
     begin = time.time()
     (
         theta_lfp_data,
-        theta_trough_times
+        theta_trough_times,
+        theta_trough_indices
     ) = hsepp.detect_theta_cycles(
         lfp_data,
         limit_analysis_by_theta_length = theta_kwargs.get('limit_analysis_by_theta_length', True),
@@ -169,6 +172,7 @@ def load_and_preprocess(
         theta_spikemats,
         theta_lfp_data,
         theta_trough_times,
+        theta_trough_indices,
         spike_info_with_phase
     )
 

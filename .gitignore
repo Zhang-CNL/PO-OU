@@ -16,4 +16,8 @@ logs/
 results/
 checkpoints/
 
+# Temporarily hide this until I figure out the pyright nonsense
+typings/
+pyrightconfig.json
+
 *.log

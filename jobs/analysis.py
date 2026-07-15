@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 import hippocampalseq as hse
+import hippocampalseq.io as hseio
 import hippocampalseq.plotting as hsepl
 import hippocampalseq.utils as hseu
 
@@ -37,7 +38,7 @@ def replay_analysis(results_path, track_type, raw_data, replay_data):
 @click.command()
 @click.option("--results-path", default="../results/")
 @click.option("--run-config")
-@click.option("--rats", multiple=True, type=click.Choice(hseu.RAT_NAMES), default=hseu.RAT_NAMES)
+@click.option("--rats", multiple=True, type=click.Choice(hseio.RAT_NAMES), default=hseio.RAT_NAMES)
 def main(
         results_path,
         run_config,

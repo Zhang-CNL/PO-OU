@@ -10,6 +10,7 @@ from .core import save_wrapper
 def plot_theta_lfp_segment(
         lfp_data: nap.TsdFrame,
         trough_times: nap.Ts, 
+        trough_indices: np.ndarray,
         n_seconds: float,
         segment_start: Optional[float] = None,
         plot_trough_markers: bool = True
@@ -17,6 +18,8 @@ def plot_theta_lfp_segment(
     times = lfp_data.index.values
     if segment_start is None:
         t0 = times[0]
+    else:
+        t0 = segment_start
     t1 = min(t0 + n_seconds, times[-1])
 
     seg_mask = hseu.restrict_indices(times, t0, t1)
@@ -24,7 +27,7 @@ def plot_theta_lfp_segment(
     phi_seg = lfp_data['Phase Deg'].values[seg_mask]
     lfp_seg = lfp_data['Filtered LFP'].values[seg_mask]
 
-    trough_times = times[trough_times]
+    trough_times = times[trough_indices]
     troughs = hseu.restrict_indices(trough_times, t0, t1)
 
     fig,ax = plt.subplots(2,1, figsize=(12,5), dpi=300, sharex=True)
@@ -39,8 +42,8 @@ def plot_theta_lfp_segment(
     if plot_trough_markers:
         ax[0].vlines(
             trough_times[troughs], 
-            ymin=lfp_seg.min(), 
-            ymax=lfp_seg.max(), 
+            ymin=np.min(lfp_seg), 
+            ymax=np.max(lfp_seg), 
             linestyles='dashed',
             alpha=0.6
         )

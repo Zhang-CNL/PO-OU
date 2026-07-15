@@ -47,10 +47,10 @@ def assign_spikes_theta_phase(
 
         # Pull columns by position 
         cols      = list(ts.columns)
-        x_vals    = ts.values[:, cols.index('x')]
-        y_vals    = ts.values[:, cols.index('y')]
-        vel_vals  = ts.values[:, cols.index('Velocity')]
-        time_diff = ts.values[:, cols.index('Delta t')]
+        x_vals    = ts['x'].values
+        y_vals    = ts['y'].values
+        vel_vals  = ts['Velocity'].values
+        time_diff = ts['Delta t'].values
         #cell_type_a = ts.values[:, cols.index('cell_type')]  # already an array
 
         out[cell_id] = nap.TsdFrame(

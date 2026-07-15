@@ -6,7 +6,11 @@ from typing import Optional, List, Tuple
 
 import hippocampalseq.utils as hseu
 
-def extract_trajectories(run_position_data: nap.TsdFrame, starts: npt.ArrayLike, ends: npt.ArrayLike) -> List[np.ndarray]:
+def extract_trajectories(
+        run_position_data: nap.TsdFrame, 
+        starts: npt.ArrayLike, 
+        ends: npt.ArrayLike
+    ) -> List[np.ndarray]:
     """Extract ground truth trajectories from position data.
     Args:
         run_position_data (nap.TsdFrame): Position data.
@@ -115,7 +119,7 @@ def detect_theta_cycles(
         limit_analysis_by_theta_length: bool = True,
         theta_length_s: Tuple[float, float] = (0.08, 0.16),
         max_cycle_duration_s: float = 6.0
-    ) -> Tuple[nap.TsdFrame, nap.Ts]:
+    ) -> Tuple[nap.TsdFrame, nap.Ts, np.ndarray]:
     """Filter LFP data for individual theta cycle numbers.
 
     Args:
@@ -127,6 +131,7 @@ def detect_theta_cycles(
     ReturnsL
         (nap.TsdFrame): LFP frame synced to the phase of theta.
         (nap.Ts): Time-series representation of the troughs of theta.
+        (np.ndarray): Indices of the troughs of theta.
     """
     phase_times = lfp_data.index.values
     phase_deg = np.degrees(lfp_data['Phase Rad'].values) % 360
@@ -152,7 +157,9 @@ def detect_theta_cycles(
 
         if limit_analysis_by_theta_length:
             length_mask = ~boundary_mask \
-                & ((durations < theta_length_s[0]) | (durations > theta_length_s[1]))
+                & ((durations < theta_length_s[0]) 
+                    | (durations > theta_length_s[1])
+                )
         else:
             length_mask = np.zeros_like(durations)
 
@@ -197,7 +204,8 @@ def detect_theta_cycles(
     trough_times = nap.Ts(t=phase_times[troughs], time_units='s')
     return (
         lfp_cycles, 
-        trough_times
+        trough_times,
+        troughs
     )
 
             

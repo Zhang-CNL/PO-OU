@@ -1,16 +1,15 @@
 import os
 import numpy as np
 import pynapple as nap 
-import warnings
 from scipy.signal import butter, filtfilt
-from typing import Tuple, Dict
+from typing import Any
 
 from .metadata import *
 from .lfp import * 
 from .spikes import *
 
 
-def calc_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def calc_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Calculate velocity from position and time data.
 
     Args:
@@ -48,7 +47,7 @@ def align_spikes_to_position(
         spikeframe: nap.TsGroup, 
         posframe: nap.TsdFrame, 
         minimum_dt: float = 0.1
-    ) -> Tuple[nap.TsdFrame, Dict[int, nap.TsdFrame]]:
+    ) -> tuple[nap.TsGroup, dict[int, nap.TsdFrame]]:
     """Align spikes to position data using nearest neighbor.
     Eliminates spikes that occur when no position data is available.
 
@@ -60,8 +59,8 @@ def align_spikes_to_position(
             Defaults to 0.1.
 
     Returns:
-        (nap.TsdFrame): Place cell spike times aligned to positions
-        (Dict[int, nap.TsdFrame]): Dictionary of position information for each place cell's spikes.
+        (nap.TsGroup): Place cell spike times aligned to positions
+        (dict[int, nap.TsdFrame]): Dictionary of position information for each place cell's spikes.
     """
     spike_info = {}
     spike_times_filt = {}
@@ -104,17 +103,17 @@ def filter_noisy_epochs(
         rat_name: str, 
         session: int,
         track_type: str,
-        raw_position_data,
-        raw_spike_data,
-        running_spike_data,
-        running_spike_info,
+        raw_position_data: nap.TsdFrame,
+        raw_spike_data: nap.TsGroup,
+        running_spike_data: nap.TsGroup,
+        running_spike_info: dict[int, nap.TsdFrame],
     ):
     if rat_name in PFEIFFER_NOISY_EPOCHS:
         rat_values = PFEIFFER_NOISY_EPOCHS[rat_name]
-        session = f"{track_type}{session}"
-        if session in rat_values:
-            starts = rat_values[session]['starts']
-            ends   = rat_values[session]['ends']
+        tsession = f"{track_type}{session}"
+        if tsession in rat_values:
+            starts = rat_values[tsession]['starts']
+            ends   = rat_values[tsession]['ends']
 
             print(f"Removing {len(starts)} noisy epoch{'s' if len(starts) > 1 else ''}")
 
@@ -141,10 +140,10 @@ def load_clean_data(
         track_type: str = 'Linear',
         ripple_type: str = 'awake',
         minimum_dt: float = 0.1
-    ):
+    ) -> tuple[nap.TsdFrame, nap.TsdFrame, nap.TsGroup, dict[int,nap.TsdFrame], nap.TsGroup, dict[str,Any], nap.IntervalSet, np.ndarray, np.ndarray]:
     """Load and segment data.
 
-    Args:
+    Args List, :
         data_path (str): Path to data directory.
         rat_name (str): Rat name.
         session (int): Session number.
@@ -158,15 +157,13 @@ def load_clean_data(
         (nap.TsdFrame): Raw, unfiltered position data.
         (nap.TsdFrame): Running position data. Filtered out according to `ripple_type`.
         (nap.TsGroup): Raw spiking data.
-        (Dict[int, nap.TsdFrame]): Dictionary of position information for each cell's spikes.
+        (dict[int, nap.TsdFrame]): Dictionary of position information for each cell's spikes.
         (nap.TsGroup): Filtered spiking data aligned to positions and run times according to `ripple_type`.
         (nap.IntervalSet): Start and end periods of sharp-wave ripples.
         (dict): Lfp data such as phase and amplitude in a dict.
         (np.ndarray): Indices of excitatory neurons.
         (np.ndarray): Indices of inhibitory neurons.
     """
-
-    # TODO: Where in here do I use the function to filter noisy epochs
 
     (
         time,

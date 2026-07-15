@@ -9,8 +9,10 @@ sys.path.append(os.path.realpath(".."))
 import numpy as np
 import scipy.io as sio
 from dataclasses import asdict
+from typing import Any
 
 import hippocampalseq as hse
+import hippocampalseq.preprocessing as hsepp
 import hippocampalseq.models as hsem
 
 def save_raw_data(
@@ -32,12 +34,12 @@ def save_raw_data(
 
 def run_models_over_data(
         save_name: str,
-        parameters: dict,
+        parameters: dict[str, Any],
         place_fields: np.ndarray,
         spikemats: np.ndarray,
         dt: float,
         bin_size: int,
-        environment_size: tuple,
+        environment_size: tuple[int,...],
     ):
     start = time.time()
     map_model = hsem.BayesianMAP(
@@ -98,15 +100,14 @@ def run_models_over_data(
 @click.option("--data-path", default="../data/")
 @click.option("--results-path", default="../results")
 @click.option("--run-config")
-@click.option("--rats", multiple=True, type=click.Choice(hsep.RAT_NAMES), default=hsep.RAT_NAMES)
+@click.option("--rats", multiple=True, type=click.Choice(hsepp.RAT_NAMES), default=hsepp.RAT_NAMES)
 def main(
-        data_path, 
-        results_path, 
-        run_profile,
-        rats
+        data_path: str, 
+        results_path: str, 
+        run_config: str,
+        rats: list[str]
     ):
     os.makedirs(results_path, exist_ok=True)
-    os.makedirs(checkpoint_path, exist_ok=True)
 
     with open(os.path.realpath(run_config), 'r') as f:
         parameters = json.loads(f)
@@ -117,7 +118,7 @@ def main(
             print(f"Started working on rat {rat}, session {session}")
 
             results_dir = os.path.join(rat_path, session)
-            os.makedirs(results, exist_ok=True)
+            os.makedirs(results_dir, exist_ok=True)
 
             track_type = session[:-1]
             session_n  = int(session[-1])
@@ -167,6 +168,7 @@ def main(
                         place_field_data.place_fields,
                         theta_data.spikemats,
                         parameters.get('theta_time_window_ms', 60.0)/1000,
+                        parameters.get('bin_size_cm', 2),
                         env_size
                     )
             except Exception as e:
@@ -181,6 +183,7 @@ def main(
                         place_field_data.place_fields,
                         ripple_data.spikemats,
                         parameters.get('ripple_time_window_ms', 5.0)/1000,
+                        parameters.get('bin_size_cm', 2),
                         env_size
                     )
             except Exception as e:

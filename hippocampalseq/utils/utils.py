@@ -1,16 +1,15 @@
 import os
 import mat73 
 import scipy.io as sio
-from scipy.special import factorial
-from scipy.stats import multivariate_normal
-from scipy.optimize import minimize
-from itertools import product
 import numpy as np
 import numpy.typing as npt
 import pynapple as nap
 import compress_pickle
 import torch
-from typing import List, Any
+from typing import Any 
+from collections.abc import Callable, Iterable
+
+type NDArray = np.ndarray|torch.Tensor
 
 class AttrDict(dict):
     def __init__(self, dct):
@@ -18,20 +17,30 @@ class AttrDict(dict):
         self.__dict__ = dct
 
     def __setitem__(self, k, v):
-        super().__setitem__(self, k, v)
+        super().__setitem__(k, v)
         self.__dict__[k] = v
 
     def __copy__(self):
         return AttrDict(self)
 
-def changeover_functions(type, *args):
-    module = torch if type == torch.Tensor else np
+def changeover_functions(_type: type, *args: Iterable[str]) -> Callable[...,Any]|list[Callable[...,Any]]:
+    """Given a type of an array, return an arbritrary list of functions from the proper module
+    (torch or numpy) corresponding to the arguments.
+
+    Args:
+        _type (type): The type of the array.
+        *args (tuple[str,...]): The names of the functions to return.
+
+    Returns:
+        Callable[...,Any]|list[Callable[...,Any]]: The functions from the proper module.
+    """
+    module = torch if _type == torch.Tensor else np
     attrs = [getattr(module, arg) for arg in args]
     if len(attrs) == 1:
         return attrs[0]
     return attrs
 
-def create_interval_mask(length, starts, ends):
+def create_interval_mask(length: int, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
     """Helper to create a boolean mask from start/end indices."""
     mask = np.zeros(length + 1, dtype=int)
     np.add.at(mask, starts, 1)
@@ -54,7 +63,7 @@ def read_pickle(fname: str):
         raw = f.read()
     return compress_pickle.loads(raw, "gzip")
 
-def read_mat(file: str):
+def read_mat(file: str) -> dict[str, Any]:
     if not os.path.exists(file):
         raise FileNotFoundError(f"{file} not found, make sure you have the complete dataset.")
     try:
@@ -80,7 +89,7 @@ def extract_times_from_boolean(boolean_arr, run_times):
         end_times.append(run_times[-1])
     return np.array(start_times), np.array(end_times)
 
-def restrict_indices(t_array, start, end):
+def restrict_indices(t_array: np.ndarray, start: float, end: float) -> slice:
     start_ind = int(np.searchsorted(t_array, start, side='left'))
     end_ind   = int(np.searchsorted(t_array, end, side='right'))
     return slice(start_ind, end_ind)
@@ -91,7 +100,7 @@ def times_to_bool(data_times, start_time, end_time):
     window_ind = times_after_start & times_before_end
     return window_ind
 
-def cm_to_bins(array_in_cm, bin_size_cm: int = 2):
+def cm_to_bins(array_in_cm: float|np.ndarray, bin_size_cm: int = 2):
     return np.floor(array_in_cm / bin_size_cm)  # cm to bins
 
 
@@ -150,7 +159,7 @@ def extract_spikemat(
                 spikemat[i,:] = counts
     return spikemat
     
-def create_grid(grid_shape, bins):
+def create_grid(grid_shape: tuple[int,...], bins: int|tuple[int,int]) -> torch.Tensor:
     if isinstance(bins, int):
         bins = (bins,bins)
     X = torch.arange(grid_shape[0], grid_shape[2], bins[0]) + bins[0] / 2
@@ -158,31 +167,7 @@ def create_grid(grid_shape, bins):
     X,Y = torch.meshgrid(X,Y, indexing='xy')
     return torch.stack([X.ravel(), Y.ravel()]).T
 
-def construct_test_mvn(n_points, dz, mu, sigma):
-    """Construct test multivariate normal distribution centered around mu
-
-    Args:
-        n_points (int): Number of points in each dimension for the test distribution.
-        dz (float): Grid spacing in each dimension.
-        mu (list): Mean of the test distribution.
-        sigma (list): Covariance of the test distribution.
-
-    Returns:
-        (np.ndarray): Grid points for the test distribution.
-        (np.ndarray): Probability values for the test distribution.
-    """
-    n_dims = len(mu)
-    z = np.meshgrid(*[np.arange(-n_points//2 + mu[i], n_points//2 + mu[i], dz) for i in range(n_dims)])
-    #z = np.meshgrid(*[np.arange(-n_points//2 , n_points//2 , dz) for i in range(n_dims)])
-    #print("Reloaded")
-    z = np.column_stack([_z.ravel() for _z in z])
-
-    rv = multivariate_normal(mean=mu, cov=sigma)
-    #pz = np.array([rv.pdf(_z) for _z in z])
-    pz = rv.pdf(z)
-    return np.array(z),pz
-
-def atleast_2d(x):
+def atleast_2d(x: NDArray) -> NDArray:
     """Ensure that the input array has at least 2 dimensions.
     Differs from np.atleast_2d in that it appends the dimension instead of prepending it
 

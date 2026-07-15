@@ -1,6 +1,5 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List, Tuple, Any, Dict
 from dataclasses import dataclass
 
 import hippocampalseq.utils as hseu
@@ -9,11 +8,11 @@ from .statespace import *
 
 @dataclass
 class BayesianMAPResults:
-    decoded_trajectories: List[npt.ArrayLike]
-    cumulative_probabilities: npt.ArrayLike
+    decoded_trajectories: list[np.ndarray]
+    cumulative_probabilities: np.ndarray
 
 class BayesianMAP(StateSpace):
-    def __init__(self, place_fields: npt.ArrayLike, dt: float, bin_size_cm: float):
+    def __init__(self, place_fields: np.ndarray, dt: float, bin_size_cm: float):
         """Model for Bayesian Maximum A-Posteriori decoding.
         Args:
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
@@ -26,9 +25,9 @@ class BayesianMAP(StateSpace):
 
     def bayesian_decoding_one(
             self,
-            spikemat: npt.ArrayLike, 
+            spikemat: np.ndarray, 
             decoding_method: str = 'max'
-        ) -> npt.ArrayLike:
+        ) -> np.ndarray:
         """MAP decoding of a single trajectory.
 
         Args:
@@ -68,10 +67,10 @@ class BayesianMAP(StateSpace):
         return np.column_stack((cols, rows)),cum_prob
 
     def fit(self, 
-            X: List[npt.ArrayLike], 
+            X: list[np.ndarray], 
             maximization_type: str = 'max',
-            *_: Tuple[Any,...],
-            **__: Dict[Any,Any]
+            *_: tuple,
+            **__: dict
         ) -> BayesianMAPResults:
         """Run MAP decoding on a list of spikemats.
         Args:

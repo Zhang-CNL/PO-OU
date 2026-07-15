@@ -4,11 +4,6 @@ import numpy.typing as npt
 from typing import (
     Protocol,
     runtime_checkable,
-    Tuple,
-    Any,
-    Callable,
-    Dict,
-    List
 )
 
 __all__ = [
@@ -41,7 +36,7 @@ class StateSpace:
         return 2*(self.n_parameters - max_loglikelihood)
 
     def fit(self,
-            X: npt.ArrayLike, 
-            *_: Tuple[Any,...],
+            X: np.ndarray,
+            *_: tuple,
         ) -> StateSpaceResults:
         raise NotImplementedError

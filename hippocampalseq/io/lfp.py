@@ -6,8 +6,11 @@ import pynapple as nap
 from scipy.signal import butter, sosfiltfilt, hilbert
 from scipy.ndimage import gaussian_filter1d
 from neo.io import NeuralynxIO
+from typing import Any
 
-def parse_ncs_timestamps(csc_file: str, samples_per_record: int=512):
+
+
+def parse_ncs_timestamps(csc_file: str, samples_per_record: int=512) -> np.ndarray:
     """
     Read per-record timestamps from a Neuralynx .ncs file and interpolate
     to per-sample times. This is the ground truth for sample timing,
@@ -59,7 +62,7 @@ def load_lfp_data(
         position_data: nap.TsdFrame, 
         spike_data: nap.TsGroup, 
         datapath: str
-    ):
+    ) -> dict[str, Any]:
     """Load LFP data from a .ncs file
     Args:
         position_data (nap.TsdFrame): Raw position data from the rat.

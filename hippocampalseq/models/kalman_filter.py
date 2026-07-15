@@ -1,8 +1,9 @@
 import torch 
 import numpy as np
+import warnings
 from torch.distributions import MultivariateNormal
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import hippocampalseq.utils as hseu
 from .statespace import *
@@ -18,15 +19,15 @@ PI = torch.tensor(np.pi)
 
 @dataclass
 class KalmanResults:
-    observations   : List[torch.Tensor] = field(default_factory=list)
-    predicted_mean : List[torch.Tensor] = field(default_factory=list)
-    predicted_cov  : List[torch.Tensor] = field(default_factory=list)
-    filtered_mean  : List[torch.Tensor] = field(default_factory=list)
-    filtered_cov   : List[torch.Tensor] = field(default_factory=list)
-    smoothed_gain  : List[torch.Tensor] = field(default_factory=list)
-    smoothed_mean  : List[torch.Tensor] = field(default_factory=list)
-    smoothed_cov   : List[torch.Tensor] = field(default_factory=list)
-    loglike        : List[float]  = field(default_factory=list)
+    observations   : list[torch.Tensor] = field(default_factory=list)
+    predicted_mean : list[torch.Tensor] = field(default_factory=list)
+    predicted_cov  : list[torch.Tensor] = field(default_factory=list)
+    filtered_mean  : list[torch.Tensor] = field(default_factory=list)
+    filtered_cov   : list[torch.Tensor] = field(default_factory=list)
+    smoothed_gain  : list[torch.Tensor] = field(default_factory=list)
+    smoothed_mean  : list[torch.Tensor] = field(default_factory=list)
+    smoothed_cov   : list[torch.Tensor] = field(default_factory=list)
+    loglike        : list[float]  = field(default_factory=list)
     loglike_full   : torch.Tensor = field(default_factory=lambda: torch.empty(0))
     aic            : float = 0
     bic            : float = 0
@@ -34,18 +35,18 @@ class KalmanResults:
 
 @dataclass
 class KalmanStatistics:
-    Cov  : List[torch.Tensor] # $\hat{V}_tJ_{t-1}$
-    Ez   : List[torch.Tensor] # $\mathbb{E}[z^T]$
-    Ezz  : List[torch.Tensor] # $\mathbb{E}[zz^T]$
-    Ezz1 : List[torch.Tensor] # $\mathbb{E}[z_{t}z_{t-1}^T]$
-    Ez1z : List[torch.Tensor] # $\mathbb{E}[z_{t-1}z_t^T]$
-    Exx  : List[torch.Tensor] # $\mathbb{E}[xx^T]  $
-    Exz  : List[torch.Tensor] # $\mathbb{E}[xz^T]  $
-    Ezx  : List[torch.Tensor] # $\mathbb{E}[zx^T]$
+    Cov  : list[torch.Tensor] # $\hat{V}_tJ_{t-1}$
+    Ez   : list[torch.Tensor] # $\mathbb{E}[z^T]$
+    Ezz  : list[torch.Tensor] # $\mathbb{E}[zz^T]$
+    Ezz1 : list[torch.Tensor] # $\mathbb{E}[z_{t}z_{t-1}^T]$
+    Ez1z : list[torch.Tensor] # $\mathbb{E}[z_{t-1}z_t^T]$
+    Exx  : list[torch.Tensor] # $\mathbb{E}[xx^T]  $
+    Exz  : list[torch.Tensor] # $\mathbb{E}[xz^T]  $
+    Ezx  : list[torch.Tensor] # $\mathbb{E}[zx^T]$
 
 class KalmanFilter(StateSpace):
     """Base state space modeling class that implements a kalman filter"""
-    def __init__(self, latent_dim, obs_dim, order=1):
+    def __init__(self, latent_dim: int, obs_dim: int, order: int = 1):
         """Initialize the kalman filter
 
         Args:
@@ -70,7 +71,7 @@ class KalmanFilter(StateSpace):
         # Observation matrix -> nxm
         # Observation noise -> mxm
 
-    def _parse_observations(self, obs) -> List[torch.Tensor]:
+    def _parse_observations(self, obs: torch.Tensor|list[torch.Tensor]|None) -> list[torch.Tensor]|None:
         """Safely convert observations to their expected format."""
         if obs is None:
             return obs
@@ -157,32 +158,32 @@ class KalmanFilter(StateSpace):
                 values = self._smooth(values, batch, t)
         return values
 
-    def _init_priors(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_priors(self) -> tuple[torch.Tensor, torch.Tensor]:
         m = torch.randn(self.augmented_dim, 1)
         n = torch.eye(self.augmented_dim)
         return m,n
 
-    def _init_transition_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
         F = torch.rand(self.augmented_dim, self.augmented_dim)
         F = F / F.sum(axis=1, keepdim=True)
         Q = torch.randn(self.augmented_dim, self.augmented_dim)
         Q = Q @ Q.T 
         return F,Q
 
-    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
         H = torch.rand(self.augmented_dim, self.obs_dim)
         H = H / H.sum(axis=1, keepdim=True)
         R = torch.randn(self.obs_dim, self.obs_dim)
         R = R @ R.T
         return H, R
 
-    def _initialize_parameters(self) -> Tuple[torch.Tensor,...]:
+    def _initialize_parameters(self) -> tuple[torch.Tensor,...]:
         initial_mean, initial_cov = self._init_priors()
         trans_mat, trans_cov      = self._init_transition_matrices()
         obs_mat, obs_cov          = self._init_observation_matrices()
         return trans_mat, trans_cov, obs_mat, obs_cov, initial_mean, initial_cov
 
-    def _initialize(self, X: torch.Tensor) -> KalmanResults:
+    def _initialize(self, X: list[torch.Tensor]) -> KalmanResults:
         tf_base  = [torch.zeros_like(x) for x in X]
         cov_base = [torch.zeros(x.shape[:-1] + (self.augmented_dim,)) for x in X]
         def _copy(x):
@@ -379,7 +380,7 @@ class KalmanFilter(StateSpace):
         return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
 
     def fit(self, 
-            X: List[torch.Tensor],
+            X: list[torch.Tensor],
             n_iter: int = 100, 
             emtol: float = 1e-3, 
             checkpoint_path: Optional[str] = None,

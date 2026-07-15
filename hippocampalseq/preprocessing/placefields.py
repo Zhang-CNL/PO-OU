@@ -42,10 +42,10 @@ def calculate_one_placefield(
     return place_field_smoothed
 
 def calculate_linear_placefield(
-        spike_hists: np.ndarray, 
-        position_hists: np.ndarray, 
-        axis: int, 
-        pf_gaussian_sd: float 
+        spike_hists: np.ndarray,
+        position_hists: np.ndarray,
+        axis: int,
+        pf_gaussian_sd: float
     ) -> np.ndarray:
     """Calculate a linear place field from a position histogram and a spike histogram.
     In the linear case it sums along either the x or y axis depending on which is chosen.
@@ -59,10 +59,6 @@ def calculate_linear_placefield(
     Returns:
         (np.ndarray): Linear place field.
     """
-    linear_spike_hist = np.sum(spike_hists, axis=axis)
-    linear_position_hist = np.sum(position_hists, axis=axis-1)
-
-    nbins = linear_position_hist.shape[0]
 
     linear_placefield = np.zeros_like(linear_spike_hist)
     for cell in range(linear_spike_hist.shape[0]):
@@ -78,9 +74,8 @@ def calculate_linear_placefield(
 def calculate_placefields(
         run_position_data: nap.TsdFrame,
         run_spike_info: Dict[int, nap.TsdFrame],
-        run_spikes: nap.TsGroup,
         excitatory_neurons: np.ndarray,
-        environment_size: Optional[Tuple[int]] = (0,0,200,200),
+        environment_size: Optional[Tuple[int,...]] = (0,0,200,200),
         track_type = 'Linear',
         bin_size_cm: int = 2,
         place_field_gaussian_sd_cm: float = 4.0,
@@ -89,14 +84,13 @@ def calculate_placefields(
         posterior: bool = True,
         min_spike_rate: float = 1.0,
         velocity_cutoff: float = 5.0
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Calculate place fields from position and spike data.
 
     Args:
         run_position_data (nap.TsdFrame): X,Y, and delta time data.
         run_spike_info (Dict[int, nap.TsdFrame]): Position data corresponding to, and aligned with, individual cells.
-        run_spikes (nap.TsGroup): Spike time data for each cell aligned to position data.
         excitatory_neurons (np.ndarray): Excitatory neuron ids.
         environment_size (Optional[Tuple[int]]): Environment size. If None, adapts bins from data. Defaults to (0,0,200,200).
         track_type (str): Track type. Can be one of ("Open", "Linear"). Defaults to 'Linear'.
@@ -111,6 +105,7 @@ def calculate_placefields(
     Returns:
         (np.ndarray): Place fields.
         (np.ndarray): Place cell ids.
+        (np.ndarray): Number of times the rat was in a specific position.
     """
     assert track_type in ['Open', 'Linear']
     prior_alpha_s = prior_beta_s * prior_mean_rat_sps + 1
@@ -135,7 +130,7 @@ def calculate_placefields(
     spatial_grid_x = np.linspace(environment_size[0], environment_size[2], nbx + 1) + bin_size_cm / 2
     spatial_grid_y = np.linspace(environment_size[1], environment_size[3], nby + 1) + bin_size_cm / 2
 
-    position_hist,xedges,_ = np.histogram2d(
+    position_hist,_,_ = np.histogram2d(
         x, y,
         bins=(spatial_grid_x,spatial_grid_y),
         weights=dt
@@ -161,9 +156,12 @@ def calculate_placefields(
         xspan = x.max() - x.min()
         yspan = y.max() - y.min()
         axis = 1 if xspan >= yspan else 2
+
+        spike_hist = np.sum(spike_hists, axis=axis)
+        position_hist = np.sum(position_hists, axis=axis-1)
         place_fields = calculate_linear_placefield(
-            spike_hists, 
-            position_hist, 
+            spike_hists,
+            position_hist,
             pf_gaussian_sd=pf_gaussian_sd,
             axis=axis
         )
@@ -187,4 +185,8 @@ def calculate_placefields(
     above_thresh = np.squeeze(np.argwhere(max_firingrate > min_spike_rate))
     place_cell_ids = np.intersect1d(excitatory_neurons, above_thresh)
 
-    return place_fields[place_cell_ids], place_cell_ids
+    return (
+        place_fields, 
+        place_cell_ids, 
+        position_hist
+    )
