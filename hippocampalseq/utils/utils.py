@@ -71,24 +71,27 @@ def read_mat(file: str) -> dict[str, Any]:
     except:
         return sio.loadmat(file, squeeze_me=True, struct_as_record=False)
 
-def extract_times_from_boolean(boolean_arr, run_times):
-    # TODO: Optimize this function. Get rid of the loop.
-    start_times = []
-    end_times   = []
-    prev        = boolean_arr[0]
-    if prev:
-        start_times.append(run_times[0])
-    for count, val in enumerate(boolean_arr[1:]):
-        i = count + 1
-        if val != prev:
-            if val:
-                start_times.append(run_times[i])
-            else:
-                end_times.append(run_times[i])
-        prev = val
-    if val:
-        end_times.append(run_times[-1])
-    return np.array(start_times), np.array(end_times)
+def extract_times_from_boolean(mask: np.ndarray, run_times: np.ndarray):
+    b = np.asarray(mask, dtype=bool)
+    run_times = np.asarray(run_times)
+
+    if b.size == 0:
+        return np.array([]), np.array([])
+
+    # +1 where False->True (rising edge), -1 where True->False (falling edge)
+    edges = np.diff(b.astype(np.int8))
+    rising_idx  = np.flatnonzero(edges == 1) + 1
+    falling_idx = np.flatnonzero(edges == -1) + 1
+
+    start_times = run_times[rising_idx]
+    end_times   = run_times[falling_idx]
+
+    if b[0]:
+        start_times = np.concatenate(([run_times[0]], start_times))
+    if b[-1]:
+        end_times = np.concatenate((end_times, [run_times[-1]]))
+
+    return start_times, end_times
 
 def restrict_indices(t_array: np.ndarray, start: float, end: float) -> slice:
     start_ind = int(np.searchsorted(t_array, start, side='left'))
@@ -160,14 +163,19 @@ def extract_spikemat(
                 spikemat[i,:] = counts
     return spikemat
     
-def create_grid(grid_shape: tuple[int,...], bins: int|tuple[int,int]) -> torch.Tensor:
-    if isinstance(bins, int):
-        bins = (bins,bins)
-    X = torch.arange(grid_shape[0], grid_shape[2], bins[0]) + bins[0] / 2
-    Y = torch.arange(grid_shape[1], grid_shape[3], bins[1]) + bins[1] / 2
-    X,Y = torch.meshgrid(X,Y, indexing='xy')
-    return torch.stack([X.ravel(), Y.ravel()]).T
+def make_ndgrid(bounds: list[tuple[float,...]], bin_size: int|list[int], indexing='xy') -> torch.Tensor:
+    n_dims = len(bounds)
+    if isinstance(bin_size, int):
+        bin_size = [bin_size] * n_dims
+    if len(bin_size) != n_dims:
+        raise ValueError(f"Number of bins ({len(n_bins)}) does not match number of dimensions ({n_dims})")
 
+    edges = [
+        torch.arange(lo,hi,nb) + nb / 2 for (lo,hi), nb in zip(bounds, bin_size)
+    ]
+    coords = torch.meshgrid(*edges, indexing=indexing)
+    return torch.stack([c.ravel() for c in coords]).T
+    
 def atleast_2d(x: NDArray) -> NDArray:
     """Ensure that the input array has at least 2 dimensions.
     Differs from np.atleast_2d in that it appends the dimension instead of prepending it

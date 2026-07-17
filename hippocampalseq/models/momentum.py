@@ -47,12 +47,16 @@ class Momentum(KalmanFilter):
             bin_size (int): Size of individual bins in cm.
             seed: (int|None): Seed for the random number generator
         """
-        super().__init__(4, 2, 1)
+        if place_fields.shape[-1] == 1:
+            n_zdim = 1
+        else:
+            n_zdim = 2
+        super().__init__(n_zdim, n_zdim, 2)
 
         self.dt : torch.Tensor              = torch.tensor(dt)
         self.environment_size: tuple[int,...] = environment_size
         self.bin_size : int        = bin_size
-        self.grid: torch.Tensor = hseu.create_grid(self.environment_size, self.bin_size)
+        self.grid: torch.Tensor = hseu.create_grid(self.environment_size, self.bin_size, True)
 
         if seed is not None:
             torch.random.manual_seed(seed)
@@ -60,16 +64,12 @@ class Momentum(KalmanFilter):
         if isinstance(place_fields, np.ndarray):
             place_fields = torch.from_numpy(place_fields)
 
-        values = MomentumResults(
-            emission_probabilities = [],
-            approximate_mean       = [],
-            approximate_covariance = []
-        )
+
         self.emission_probabilities = []
         self.approximate_mean       = []
         self.approximate_covariance = []
-        for k,v in enumerate(spikemat):
-            ep = torch.from_numpy(v).double()
+        for spk in spikemat:
+            ep = torch.from_numpy(spk).double()
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 ep, 
                 place_fields,

@@ -5,7 +5,7 @@ from typing import List
 from .momentum import *
 import hippocampalseq.utils as hseu
 
-class MomentumSynInput(Momentum):
+class CANNDynamics(Momentum):
     def __init__(self, true_position: List[npt.ArrayLike], *args, **kwargs):
         super().__init__(*args, **kwargs)
 

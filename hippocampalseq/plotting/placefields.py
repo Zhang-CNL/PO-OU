@@ -4,6 +4,8 @@ from typing import Optional, List
 
 from .core import save_wrapper
 
+# TODO: Rewrite code to use Eryn's placefield formatting
+
 @save_wrapper
 def plot_open_placefields(
         place_fields: np.ndarray, 

@@ -3,10 +3,47 @@ import matplotlib.pyplot as plt
 import pynapple as nap
 from typing import List, Optional, Dict, Tuple
 
+import hippocampalseq.utils as hseu
 from .core import save_wrapper
 
 @save_wrapper
-def plot_trajectories(trajectories: List[np.ndarray]|Dict[str,np.ndarray], ax=None, **kwargs):
+def plot_trajectories1d(
+        trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray,
+        ax=None,
+        **plot_kwargs
+    ):
+    if not isinstance(trajectories, list) and not isinstance(trajectories, dict):
+        trajectories = [trajectories]
+    if ax is None:
+        ax = plt.gca()
+    
+    for trajectory in trajectories:
+        if isinstance(trajectories, dict):
+            label = trajectory
+            trajectory = trajectories[label]
+        else:
+            label = None 
+
+        x = np.arange(len(trajectory))
+        ax.plot(
+            x, trajectory,
+            '-',
+            alpha=.5,
+            linewidth=.5,
+            label=label,
+            **plot_kwargs
+        )
+
+    if isinstance(trajectories, dict):
+        ax.legend()
+
+@save_wrapper
+def plot_trajectories2d(
+        trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray, 
+        environment_size: Optional[tuple[int,...]] = (0,0,200,200),
+        ax=None, 
+        **plot_kwargs
+    ):
     if not isinstance(trajectories, list) and not isinstance(trajectories, dict):
         trajectories = [trajectories]
     if ax is None:
@@ -17,32 +54,44 @@ def plot_trajectories(trajectories: List[np.ndarray]|Dict[str,np.ndarray], ax=No
             trajectory = trajectories[label]
         else:
             label = None
-        if trajectory.shape[1] == 2:
-            ax.plot(
-                trajectory[:,0],
-                trajectory[:,1], 
-                '-', 
-                alpha=.5, 
-                linewidth=.5,
-                label=label
-            )
-        elif trajectory.shape[1] == 1:
-            x = np.arange(len(trajectory))
-            ax.plot(x, trajectory[:,0], '-', alpha=.5, linewidth=.5, label=label)
-        else:
-            raise ValueError(f"Trajectory shape {trajectory.shape} not supported")
-
+        ax.plot(
+            trajectory[:,0],
+            trajectory[:,1], 
+            '-', 
+            alpha=.5, 
+            linewidth=.5,
+            label=label,
+            **plot_kwargs
+        )
+        
+    if environment_size is not None:
+        xb = environment_size[0]
+        yb = environment_size[1]
+        ax.set_xlim(xb)
+        ax.set_ylim(yb)
+        ax.set_xticks(xb)
+        ax.set_yticks(yb)
+        
     if isinstance(trajectories, dict):
         ax.legend()
-        shape = list(trajectories.items())[0][1].shape
-    else:
-        shape = trajectories[0].shape
-    if shape[1] == 2:
-        ax.set_yticks([0, 200])
-        ax.set_xticks([0, 200])
 
-        ax.set_ylim([0, 200])
-        ax.set_xlim([0, 200])
+@save_wrapper
+def plot_trajectories(
+        trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray, 
+        environment_size: Optional[tuple[int,...]] = None,
+        ax=None, 
+        **plot_kwargs
+    ):
+    if isinstance(trajectories, dict):
+        dim = next(iter(trajectories.values())).shape[-1]
+    elif isinstance(trajectories, list):
+        dim = trajectories[0].shape[-1]
+    else:
+        dim = trajectories.shape[-1]
+    if dim == 1:
+        return plot_trajectories1d(trajectories, ax=ax, **plot_kwargs)
+    elif dim == 2:
+        return plot_trajectories2d(trajectories, environment_size=environment_size, ax=ax, **plot_kwargs)
 
 @save_wrapper
 def plot_spikemat_position_aligned(

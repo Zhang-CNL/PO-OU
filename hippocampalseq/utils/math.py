@@ -79,6 +79,10 @@ def calc_poisson_emission_probabilities_log_2d(
     """
     sum,log,einsum,amax = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'amax')
     lambdas = place_fields * dt
+    if lambdas.ndim == 2:
+        lambdas = lambdas[...,None]
+    if lambdas.ndim > 3:
+        lambdas = lambdas.squeeze()
 
     sum_lambda = sum(lambdas, axis=0)
 

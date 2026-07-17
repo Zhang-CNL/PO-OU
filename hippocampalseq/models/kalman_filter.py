@@ -354,14 +354,14 @@ class KalmanFilter(StateSpace):
         Returns:
             torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
         """
-        Lx = int((environment_size[2] - environment_size[0]) / bin_size)
-        Ly = int((environment_size[3] - environment_size[1]) / bin_size)
-        Z = hseu.create_grid(environment_size, bin_size)
+        Lx = max(int((environment_size[2] - environment_size[0]) / bin_size), 1)
+        Ly = max(int((environment_size[3] - environment_size[1]) / bin_size), 1)
+        Z = hseu.create_grid(environment_size, bin_size, True)
         cumulative_probabilities = torch.zeros((len(values.smoothed_mean), Lx, Ly))
 
         for i in range(len(values.smoothed_mean)):
-            sm = values.smoothed_mean[i][:,:2]
-            sc = values.smoothed_cov[i][:,:2,:2]
+            sm = values.smoothed_mean[i][:,:self.latent_dim]
+            sc = torch.atleast_2d(values.smoothed_cov[i][:,:self.latent_dim,:self.latent_dim])
             _cp = torch.zeros((sm.shape[0], Lx, Ly))
             for t in range(sm.shape[0]):
                 L = torch.linalg.cholesky(sc[t])

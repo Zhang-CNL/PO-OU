@@ -19,6 +19,7 @@ class RawData:
     excitatory_neurons : np.ndarray
     inhibitory_neurons : np.ndarray
     lfp_data           : nap.TsdFrame
+    environment_size   : tuple[int,...]
 
 @dataclass 
 class PlaceFields: 
@@ -96,24 +97,15 @@ def load_and_preprocess(
     warnings.warn("Dropping LFP metadata. If you want to keep it, you can call `hseio.load_clean_data` manually.")
     lfp_data = lfp_data['LFP']
 
-    raw_data = RawData(
-        raw_position,
-        running_position,
-        raw_spikes,
-        running_spikes,
-        running_spike_info,
-        ripple_periods,
-        excitatory_neurons,
-        inhibitory_neurons,
-        lfp_data
-    )
+
 
     # Generate place fields based on the data
     begin = time.time()
     (
         place_fields,
         place_cell_ids,
-        position_histogram
+        position_histogram,
+        environment_size
     ) = hsepp.calculate_placefields(
         running_position,
         running_spike_info,
@@ -129,7 +121,6 @@ def load_and_preprocess(
         velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 5.0)
     )
     print(f"Place field calculation took {time.time() - begin} seconds")
-    place_field_data = PlaceFields(place_fields, place_cell_ids, position_histogram)
 
     # Process theta and theta LFP
     begin = time.time()
@@ -167,15 +158,6 @@ def load_and_preprocess(
     )
     print(f"Theta cycle detection took {time.time() - begin} seconds")
 
-    theta = Theta(
-        true_trajectories, 
-        theta_spikemats,
-        theta_lfp_data,
-        theta_trough_times,
-        theta_trough_indices,
-        spike_info_with_phase
-    )
-
     # Process replay data.
     begin = time.time()
     ripple_spikemats = hsepp.process_ripples(
@@ -186,6 +168,35 @@ def load_and_preprocess(
         time_window_advance_ms = ripple_kwargs.get('time_window_advance_ms', None),
     )
     print(f"Ripple processing took {time.time() - begin} seconds")
+
+    raw_data = RawData(
+        raw_position,
+        running_position,
+        raw_spikes,
+        running_spikes,
+        running_spike_info,
+        ripple_periods,
+        excitatory_neurons,
+        inhibitory_neurons,
+        lfp_data,
+        environment_size
+    )
+
+    place_field_data = PlaceFields(
+        place_fields, 
+        place_cell_ids, 
+        position_histogram
+    )
+
+    theta = Theta(
+        true_trajectories, 
+        theta_spikemats,
+        theta_lfp_data,
+        theta_trough_times,
+        theta_trough_indices,
+        spike_info_with_phase
+    )
+
     ripples = Replay(ripple_spikemats)
 
     return (

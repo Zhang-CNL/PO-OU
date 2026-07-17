@@ -4,6 +4,8 @@ from typing import Optional, Dict, List
 
 from .core import save_wrapper
 
+# TODO: Rewrite raster plots to use new data format.
+
 @save_wrapper
 def spikemat_raster_plot(spike_mat: np.ndarray, **fig_kwargs):
     fig = plt.figure(**fig_kwargs, dpi=300)
