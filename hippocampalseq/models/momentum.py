@@ -27,7 +27,7 @@ class Momentum(KalmanFilter):
             place_fields: hseu.NDArray, 
             spikemat: list[hseu.NDArray],
             dt: float, 
-            environment_size: tuple,
+            environment_size: list[tuple[int,...]],
             bin_size: int, 
             seed: int|None = 42
         ):
@@ -43,7 +43,7 @@ class Momentum(KalmanFilter):
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
             dt (float): Time step for the transition matrix.
-            environment_size (tuple): Size of the environment. (xmin, ymin, xmax, ymax)
+            environment_size (list[tuple[int,...]]): List of coordinates corresponding to the bounds of the environment.
             bin_size (int): Size of individual bins in cm.
             seed: (int|None): Seed for the random number generator
         """
@@ -53,10 +53,10 @@ class Momentum(KalmanFilter):
             n_zdim = 2
         super().__init__(n_zdim, n_zdim, 2)
 
-        self.dt : torch.Tensor              = torch.tensor(dt)
-        self.environment_size: tuple[int,...] = environment_size
-        self.bin_size : int        = bin_size
-        self.grid: torch.Tensor = hseu.create_grid(self.environment_size, self.bin_size, True)
+        self.dt            = torch.tensor(dt)
+        self.environment_size = environment_size
+        self.bin_size = bin_size
+        self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
 
         if seed is not None:
             torch.random.manual_seed(seed)
@@ -167,16 +167,11 @@ class Momentum(KalmanFilter):
             (torch.Tensor): Prior covariance for augmented state
         """
         # $z_2 = I z_1 + \sigma_0^2dt\xi_1$
-        dx = self.environment_size[2] - self.environment_size[0]
-        dy = self.environment_size[3] - self.environment_size[1]
-        init_mean = torch.tensor([
-            [self.environment_size[0] + dx/2],
-            [self.environment_size[1] + dy/2]
-        ])
-        init_cov = torch.tensor([
-            [dx**2 / 12, 0],
-            [0, dy**2 / 12]
-        ])
+        diffs = torch.tensor([es[1] - es[0] for es in self.environment_size])
+        starts = torch.tensor([es[0] for es in self.environment_size])
+        init_mean = (diffs / 2 + starts)[:,None]
+        init_cov = torch.diag(diffs)**2 / 12
+
         return init_mean, init_cov
 
     def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -396,7 +391,6 @@ class Momentum(KalmanFilter):
         Returns:
             torch.Tensor: The final negative log likelihood.
         """
-
         decay             = torch.zeros(1, requires_grad=True)
         diffusion         = torch.zeros(1, requires_grad=True)
         with torch.no_grad():
@@ -405,11 +399,8 @@ class Momentum(KalmanFilter):
 
         params = [decay, diffusion]
 
-        def loss_closure(params, closure_kwargs):
+        def loss_closure(params, n_batches: int, stats: SufficientStatistics):
             decay,diffusion = params
-
-            n_batches = closure_kwargs['n_batches']
-            stats     = closure_kwargs['stats']
 
             Ezz  = stats.Ezz
             Ezz1 = stats.Ezz1
@@ -422,8 +413,7 @@ class Momentum(KalmanFilter):
                 loss = 0 
                 T = len(Ezz[i])
 
-                #loss = Ezz[i][1:] - 2 * M * Ezz1[i] + M**2 * Ezz[i][:-1]
-                loss = Ezz[i][2:] - 2 * M * Ezz1[i][1:] + M**2 * Ezz[i][1:-1]
+                loss = Ezz[i][1:] - 2 * M * Ezz1[i] + M**2 * Ezz[i][:-1]
                 loss = torch.sum(loss, axis=0) / sigma
                 loss = (T-1) * torch.log(sigma**2) + loss
 

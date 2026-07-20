@@ -41,7 +41,7 @@ def optimize(
 
     def wrapped_closure():
         optimizer.zero_grad()
-        loss = closure(parameters, closure_kwargs)
+        loss = closure(parameters, **closure_kwargs)
         loss.backward()
         return loss
 

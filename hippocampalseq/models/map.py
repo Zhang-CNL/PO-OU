@@ -51,7 +51,7 @@ class BayesianMAP(StateSpace):
 
         indices = np.nanargmax(emission_probability.reshape(T,-1), axis=1)
         max_coords = np.unravel_index(indices, coords)
-        max_coords = np.column_stack(max_coords[::-1])
+        max_coords = np.column_stack(max_coords)
         
 
         max_coords = max_coords * self.bin_size + self.bin_size / 2

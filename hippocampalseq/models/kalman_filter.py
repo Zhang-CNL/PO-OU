@@ -354,15 +354,16 @@ class KalmanFilter(StateSpace):
         Returns:
             torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
         """
-        Lx = max(int((environment_size[2] - environment_size[0]) / bin_size), 1)
-        Ly = max(int((environment_size[3] - environment_size[1]) / bin_size), 1)
-        Z = hseu.create_grid(environment_size, bin_size, True)
-        cumulative_probabilities = torch.zeros((len(values.smoothed_mean), Lx, Ly))
+        sz = tuple((es[1] - es[0]) // bin_size for es in environment_size)
+        if len(sz) == 1:
+            sz = sz + (1,)
+        Z = hseu.make_ndgrid(environment_size, bin_size, indexing='ij')
+        cumulative_probabilities = torch.zeros((len(values.smoothed_mean),) + sz)
 
         for i in range(len(values.smoothed_mean)):
             sm = values.smoothed_mean[i][:,:self.latent_dim]
             sc = torch.atleast_2d(values.smoothed_cov[i][:,:self.latent_dim,:self.latent_dim])
-            _cp = torch.zeros((sm.shape[0], Lx, Ly))
+            cp = torch.zeros((sm.shape[0],)+sz)
             for t in range(sm.shape[0]):
                 L = torch.linalg.cholesky(sc[t])
                 mvn = MultivariateNormal(
@@ -370,12 +371,12 @@ class KalmanFilter(StateSpace):
                     scale_tril=L
                 )
                 log_prob = mvn.log_prob(Z)
-                log_prob = log_prob.reshape(Lx, Ly)
-                _cp[t] = log_prob
+                log_prob = log_prob.reshape(sz)
+                cp[t] = log_prob
             
-            _cp -= torch.logsumexp(_cp, dim=(1, 2), keepdim=True)
-            _cp = torch.exp(_cp)
-            cumulative_probabilities[i] = _cp.sum(axis=0)
+            cp -= torch.logsumexp(cp, dim=(1, 2), keepdim=True)
+            cp = torch.exp(cp)
+            cumulative_probabilities[i] = torch.sum(cp,axis=0)
 
         return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
 

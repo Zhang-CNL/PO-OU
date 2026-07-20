@@ -26,7 +26,7 @@ def plot_trajectories1d(
 
         x = np.arange(len(trajectory))
         ax.plot(
-            x, trajectory,
+            x, trajectory.squeeze(),
             '-',
             alpha=.5,
             linewidth=.5,
@@ -40,7 +40,7 @@ def plot_trajectories1d(
 @save_wrapper
 def plot_trajectories2d(
         trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray, 
-        environment_size: Optional[tuple[int,...]] = (0,0,200,200),
+        environment_size: Optional[tuple[int,...]] = [(0,200),(0,200)],
         ax=None, 
         **plot_kwargs
     ):
@@ -83,9 +83,9 @@ def plot_trajectories(
         **plot_kwargs
     ):
     if isinstance(trajectories, dict):
-        dim = next(iter(trajectories.values())).shape[-1]
+        dim = next(iter(trajectories.values())).shape[1]
     elif isinstance(trajectories, list):
-        dim = trajectories[0].shape[-1]
+        dim = trajectories[0].shape[1]
     else:
         dim = trajectories.shape[-1]
     if dim == 1:
