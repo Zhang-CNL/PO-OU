@@ -1,6 +1,9 @@
 import os
 import functools
+import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.collections import LineCollection
 from matplotlib.backends.backend_pdf import PdfPages
 
 __plotting_initialized = False
@@ -38,7 +41,7 @@ def save_wrapper(func):
     def wrapper(*args, file_path: str=None, file_name: str|list[str]=None, **kwargs):
         __init_plotting() 
         res = func(*args, **kwargs)
-        if not isinstance(res, list):
+        if res is not None and not isinstance(res, list):
             res = [res]
         if file_name is not None and len(res) > 0:
             if file_path is None:
@@ -55,3 +58,49 @@ def save_wrapper(func):
                     fig.savefig(os.path.join(file_path, fn))
         return res
     return wrapper
+
+
+def colored_line(
+        x: np.ndarray, 
+        y: np.ndarray, 
+        values: np.ndarray, 
+        ax=None, 
+        cmap='viridis', 
+        norm=None, 
+        **lc_kwargs
+    ):
+    """
+    Plot a line whose color varies along its length according to `values`.
+
+    Args:
+        x, y (np.ndarray): Coordinates of the line (e.g. position over time).
+        values (np.ndarray): Same length as x, y. Value used to color each segment (e.g. velocity).
+        ax (plt.Axes): Axes to plot on. Uses current axes if not given. Defaults to None.
+        cmap (str or Colormap): Colormap to use. Defaults to 'viridis'.
+        norm (matplotlib.colors.Normalize): Normalization for the colormap. Defaults to min/max of `values`.
+        **lc_kwargs: Passed through to LineCollection (e.g. linewidth).
+
+    Returns:
+        (LineCollection) The plotted collection (useful for adding a colorbar).
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+    values = np.asarray(values)
+
+    if ax is None:
+        ax = plt.gca()
+
+    # Build an array of line segments: each segment connects point i to i+1
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+
+    if norm is None:
+        norm = Normalize(vmin=values.min(), vmax=values.max())
+
+    lc = LineCollection(segments, cmap=cmap, norm=norm, **lc_kwargs)
+    lc.set_array(values[:-1])
+
+    line = ax.add_collection(lc)
+    ax.autoscale()  # add_collection doesn't autoscale axes automatically
+
+    return line

@@ -1,14 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pynapple as nap
-from typing import List, Optional, Dict, Tuple
+from typing import Optional
 
 import hippocampalseq.utils as hseu
-from .core import save_wrapper
+from .core import save_wrapper, colored_line
 
-@save_wrapper
-def plot_trajectories1d(
-        trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray,
+def _plot_trajectories1d(
+        trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray,
         ax=None,
         **plot_kwargs
     ):
@@ -37,9 +36,8 @@ def plot_trajectories1d(
     if isinstance(trajectories, dict):
         ax.legend()
 
-@save_wrapper
-def plot_trajectories2d(
-        trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray, 
+def _plot_trajectories2d(
+        trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray, 
         environment_size: Optional[tuple[int,...]] = [(0,200),(0,200)],
         ax=None, 
         **plot_kwargs
@@ -77,7 +75,7 @@ def plot_trajectories2d(
 
 @save_wrapper
 def plot_trajectories(
-        trajectories: List[np.ndarray]|Dict[str,np.ndarray]|np.ndarray, 
+        trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray, 
         environment_size: Optional[tuple[int,...]] = None,
         ax=None, 
         **plot_kwargs
@@ -89,18 +87,69 @@ def plot_trajectories(
     else:
         dim = trajectories.shape[-1]
     if dim == 1:
-        return plot_trajectories1d(trajectories, ax=ax, **plot_kwargs)
+        return _plot_trajectories1d(trajectories, ax=ax, **plot_kwargs)
     elif dim == 2:
-        return plot_trajectories2d(trajectories, environment_size=environment_size, ax=ax, **plot_kwargs)
+        return _plot_trajectories2d(trajectories, environment_size=environment_size, ax=ax, **plot_kwargs)
+
+@save_wrapper
+def plot_trajectory_with_velocity(
+        trajectory: np.ndarray, 
+        velocity: np.ndarray,
+        environment_size: tuple[int,...]|None = None,
+        label: str|None = None,
+        ax=None, 
+        colorbar: bool = True,
+        **plot_kwargs
+    ):
+    if ax is None:
+        ax = plt.gca()
+    
+    dim = trajectory.shape[1]
+
+    if dim == 1:
+        x = np.arange(len(trajectory))
+        y = trajectory
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Position (cm)')
+    else:
+        x = trajectory[:,0]
+        y = trajectory[:,1]
+        ax.set_xlabel('X position (cm)')
+        ax.set_ylabel('Y position (cm)')
+
+    lines = colored_line(
+        x, y, 
+        velocity,
+        cmap='copper',
+        ax=ax,
+        alpha=1,
+        label=label,
+        linewidth=0.7,
+        **plot_kwargs
+    )
+    if colorbar:
+        cbar = plt.colorbar(lines, ax=ax)
+        cbar.set_label('Velocity (cm/s)')
+
+    if environment_size is not None:
+        xb = environment_size[0]
+        yb = environment_size[1]
+        ax.set_xlim(xb)
+        ax.set_ylim(yb)
+        ax.set_xticks(xb)
+        ax.set_yticks(yb)
+        
+    if label is not None:
+        ax.legend()
 
 @save_wrapper
 def plot_spikemat_position_aligned(
-        spike_info: Dict[int, nap.TsdFrame], 
+        spike_info: dict[int, nap.TsdFrame], 
         position_info: nap.TsdFrame, 
         place_cell_ids: np.ndarray, 
-        environment_size: Optional[Tuple[int]] = (0,0,200,200),
+        environment_size: list[tuple[int,...]]|None = [(0,200),(0,200)],
         n_cells: int = 4, 
-        cell_selection: Optional[List[int]]|str = None,
+        cell_selection: Optional[list[int]]|str = None,
         ax = None,
     ):
     if isinstance(cell_selection, list):
@@ -111,7 +160,7 @@ def plot_spikemat_position_aligned(
         cell_ids = place_cell_ids[:n_cells]
 
     if ax is None:
-        fig,ax = plt.subplots(figsize=(16,16), dpi=300)
+        fig,ax = plt.subplots(figsize=(16,16))
     else:
         fig = plt.gcf()
 
@@ -136,12 +185,13 @@ def plot_spikemat_position_aligned(
             np.max(position_info['x']),
             np.max(position_info['y'])
         )
-    ax.set_xlim([environment_size[0], environment_size[2] - 1])
-    ax.set_ylim([environment_size[1], environment_size[3] - 1])
-    ax.set_xticks([environment_size[0], environment_size[2] - 1])
-    ax.set_yticks([environment_size[1], environment_size[3] - 1])
-    ax.set_xticklabels([0,f"{int((environment_size[2]-environment_size[0])/100)}m"])
-    ax.set_yticklabels([0,f"{int((environment_size[3]-environment_size[1])/100)}m"])
+    xax,yax = environment_size
+    ax.set_xlim(xax)
+    ax.set_ylim(yax)
+    ax.set_xticks(xax)
+    ax.set_yticks(yax)
+    ax.set_xticklabels([0,f"{int((xax[1]-xax[0])/100)}m"])
+    ax.set_yticklabels([0,f"{int((yax[1]-yax[0])/100)}m"])
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['bottom'].set_visible(False)
@@ -153,11 +203,3 @@ def plot_spikemat_position_aligned(
 
     ax.legend()
     return fig
-
-@save_wrapper
-def plot_kalman_2d_trajectories(
-        means: np.ndarray, 
-        covs: np.ndarray, 
-        ax = None
-    ):
-    pass
