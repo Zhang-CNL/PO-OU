@@ -15,7 +15,7 @@ def plot_phase_locked(
         phase_centers: np.ndarray,
         cols: int = 4, 
         rows_per_page: int = 5,
-        n_cells: Optional[int] = None
+        n_cells: int|None = None
     ):
     """Plot every cell, paginated. Returns list of figures."""
     if n_cells is not None:
@@ -272,7 +272,7 @@ def plot_modality_all_cells(
 def plot_place_field_comparison(
         unimodal_props: dict[str,list], 
         bimodal_props: dict[str,list], 
-        expt_name: Optional[str] = None
+        expt_name: str|None = None
     ):
     """Compare place field properties between unimodal and bimodal cells."""
     fig, axes = plt.subplots(2, 3, figsize=(14, 9))

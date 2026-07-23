@@ -1,20 +1,19 @@
 import numpy as np
 import pynapple as nap
-from typing import Dict
 
 def assign_spikes_theta_phase(
-        spike_info: Dict[int, nap.TsdFrame], 
+        spike_info: dict[int, nap.TsdFrame], 
         lfp_with_cycles: nap.TsdFrame
-    ) -> Dict[int, nap.TsdFrame]:
+    ) -> dict[int, nap.TsdFrame]:
     """Takes the full spike information and uses the LFP information to assign the bins what phase of theta
     they're in.
 
     Args:
-        spike_info (Dict[int,nap.TsdFrame]): A dict matching cell IDs to their information.
+        spike_info (dict[int,nap.TsdFrame]): A dict matching cell IDs to their information.
         lfp_with_cycles (nap.TsdFrame): The full LFP data after `hippocampalseq.preprocessing.theta.detect_theta_cycles` has been called on it.
         
     Returns:
-        (Dict[int,nap.TsdFrame]): Cell ID matched to the frame with theta pahse assigned.
+        (dict[int,nap.TsdFrame]): Cell ID matched to the frame with theta pahse assigned.
     """
 
     # TODO: Check to see if the cell type field is used anywhere else

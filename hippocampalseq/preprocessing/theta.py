@@ -1,16 +1,14 @@
 import numpy as np
 import pynapple as nap
 import warnings
-import numpy.typing as npt
-from typing import Optional, List, Tuple
 
 import hippocampalseq.utils as hseu
 
 def extract_trajectories(
         run_position_data: nap.TsdFrame, 
-        starts: npt.ArrayLike, 
-        ends: npt.ArrayLike
-    ) -> List[np.ndarray]:
+        starts: np.ndarray, 
+        ends: np.ndarray
+    ) -> list[np.ndarray]:
     """Extract ground truth trajectories from position data.
     Args:
         run_position_data (nap.TsdFrame): Position data.
@@ -18,7 +16,7 @@ def extract_trajectories(
         ends (npt.ArrayLike): List of end times.
 
     Returns:
-        (List[np.ndarray]): List of ground-truth trajectories.
+        (list[np.ndarray]): List of ground-truth trajectories.
     """
     true_trajectories = []
     for start,end in zip(starts,ends):
@@ -32,7 +30,7 @@ def select_run_snippets(
         velocity_cutoff: float = 5.0,
         run_period_threshold: float = 2.0, 
         duration_scaling_factor: float = 2.9 * 6.75
-    ) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
     """Select snippets of runs that are at least `run_period_threshold` seconds long.
     Args:
         run_position_data (nap.TsdFrame): Position data.
@@ -43,7 +41,7 @@ def select_run_snippets(
     Returns:
         (np.ndarray): Start times of runs.
         (np.ndarray): End times of runs.
-        (List[np.ndarray]): List of ground-truth trajectories.
+        (list[np.ndarray]): List of ground-truth trajectories.
     """
     mask = run_position_data['Velocity'].values >= velocity_cutoff 
     run_starts,run_ends = hseu.extract_times_from_boolean(mask, run_position_data.index.values)
@@ -63,8 +61,8 @@ def extract_theta_segments(
         place_field_scaling_factor: float = 2.9,
         velocity_scaling_factor: float = 6.75,
         time_window_ms: float = 250.0,
-        time_window_advance_ms: Optional[float] = None,
-    ):
+        time_window_advance_ms: float|None = None,
+    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """Extract theta snippets and corresponding spiking matrices.
     Args:
         run_position_data (nap.TsdFrame): Position data.
@@ -75,11 +73,11 @@ def extract_theta_segments(
         place_field_scaling_factor (float): Place field scaling factor. Defaults to 2.9.
         velocity_scaling_factor (float): Velocity scaling factor. Defaults to 6.75.
         time_window_ms (float): Time window in ms. Defaults to 250.0.
-        time_window_advance_ms (Optional[float]): Time window advance in ms. Defaults to None.
+        time_window_advance_ms (float|None): Time window advance in ms. Defaults to None.
 
     Returns:
-        (List[np.ndarray]): List of ground-truth trajectories.
-        (List[np.ndarray]): List of spiking matrices.
+        (list[np.ndarray]): List of ground-truth trajectories.
+        (list[np.ndarray]): List of spiking matrices.
     """
     time_window_s = time_window_ms / 1000
     if time_window_advance_ms is None:
@@ -97,9 +95,10 @@ def extract_theta_segments(
         run_period_threshold,
         duration_scaling_factor
     )
-    ncells = len(run_spikes)
+
     spikemats = []
-    for start,end in zip(starts,ends):
+    snippets_to_keep = []
+    for i,(start,end) in enumerate(zip(starts,ends)):
         spikemat = hseu.extract_spikemat(
             run_spikes,
             start,
@@ -107,7 +106,14 @@ def extract_theta_segments(
             time_window_s,
             time_window_advance_s
         )
-        spikemats.append(spikemat[:,place_cell_ids].astype(int))
+        spikemat = spikemat[:,place_cell_ids].astype(int)
+        # Filter empty spiking matrices.
+        if spikemat.shape[0] == 0 or np.sum(spikemat) == 0:
+            continue
+        spikemats.append(spikemat)
+        snippets_to_keep.append(i)
+
+    true_trajectories = [true_trajectories[i] for i in snippets_to_keep]
 
     return (
         true_trajectories,
@@ -116,16 +122,14 @@ def extract_theta_segments(
 
 def detect_theta_cycles(
         lfp_data: nap.TsdFrame,
-        limit_analysis_by_theta_length: bool = True,
-        theta_length_s: Tuple[float, float] = (0.08, 0.16),
+        theta_length_s: tuple[float, float]|None = (0.08, 0.16),
         max_cycle_duration_s: float = 6.0
-    ) -> Tuple[nap.TsdFrame, nap.Ts, np.ndarray]:
+    ) -> tuple[nap.TsdFrame, nap.Ts, np.ndarray]:
     """Filter LFP data for individual theta cycle numbers.
 
     Args:
         lfp_data (dict): Raw LFP data from `hippocampalseq.io.load_lfp_data`
-        limit_analysis_by_theta_length (bool): Use `theta_length_s` to filter out LFP segments that are too short. Defaults to True. 
-        theta_length_s (Tuple[float, float]): Minimum and maximum lengths allowed for a cycle to be used in analysis. Defaults to (0.08,0.16).
+        theta_length_s (tuple[float, float]|None): Minimum and maximum lengths allowed for a cycle to be used in analysis. If none, no filtering by length is done. Defaults to (0.08,0.16).
         max_cycle_duration (float): Maximum length of time a cycle can be in seconds. Defaults to 6.0.
 
     ReturnsL
@@ -155,7 +159,7 @@ def detect_theta_cycles(
         boundary_mask = durations > max_cycle_duration_s
         n_skipped_boundary = np.sum(boundary_mask)
 
-        if limit_analysis_by_theta_length:
+        if theta_length_s is not None:
             length_mask = ~boundary_mask \
                 & ((durations < theta_length_s[0]) 
                     | (durations > theta_length_s[1])

@@ -76,8 +76,7 @@ def load_lfp_data(
     #  Load samples via Neo
     includes = []
     for item in os.listdir(datapath):
-        item_path = os.path.join(datapath, item)
-        if item.endswith('.ncs'):
+        if item.endswith(('.ncs', '.nev', '.ntt', '.nse', '.nvt')):
             includes.append(item)
 
     reader = NeuralynxIO(dirname=str(datapath), include_filenames=includes)
@@ -143,7 +142,7 @@ def load_lfp_data(
                 warnings.warn(f'    Spikes:   (none in this session)')
 
         if sess_end < lfp_start or sess_start > lfp_end:
-            warnings.warn(f'    -> NO LFP overlap, session dropped')
+            warnings.warn(f'    -> NO LFP overlap, session {i+1} dropped')
             continue
 
         actual_start = max(sess_start, lfp_start)

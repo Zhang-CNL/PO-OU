@@ -223,7 +223,7 @@ def load_clean_data(
     )
 
     path = os.path.join(data_path, rat_name, f"{track_type}{session}")
-    lfp = load_lfp_data(raw_position, spike_data, path)
+    lfp = load_lfp_data(running_position, spike_data, path)
 
     return (
         raw_position,

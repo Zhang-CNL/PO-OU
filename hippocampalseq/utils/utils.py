@@ -165,7 +165,7 @@ def extract_spikemat(
     
 def make_ndgrid(bounds: list[tuple[float,...]], bin_size: int|list[int], indexing='xy') -> torch.Tensor:
     n_dims = len(bounds)
-    if isinstance(bin_size, int):
+    if isinstance(bin_size, int) or isinstance(bin_size, float):
         bin_size = [bin_size] * n_dims
     if len(bin_size) != n_dims:
         raise ValueError(f"Number of bins ({len(n_bins)}) does not match number of dimensions ({n_dims})")

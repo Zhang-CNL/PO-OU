@@ -354,7 +354,7 @@ class KalmanFilter(StateSpace):
         Returns:
             torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
         """
-        sz = tuple((es[1] - es[0]) // bin_size for es in environment_size)
+        sz = tuple(int((es[1] - es[0]) / bin_size) for es in environment_size)
         if len(sz) == 1:
             sz = sz + (1,)
         Z = hseu.make_ndgrid(environment_size, bin_size, indexing='ij')

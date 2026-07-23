@@ -12,6 +12,7 @@ from dataclasses import asdict
 from typing import Any
 
 import hippocampalseq as hse
+import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsepp
 import hippocampalseq.models as hsem
 
@@ -29,17 +30,18 @@ def save_raw_data(
             'place_field_data' : asdict(place_field_data),
             'theta_data'       : asdict(theta_data),
             'ripple_data'      : asdict(ripple_data)
-        }
+        },
+        do_compression = True
     )
 
 def run_models_over_data(
         save_name: str,
         parameters: dict[str, Any],
         place_fields: np.ndarray,
-        spikemats: np.ndarray,
+        spikes: np.ndarray,
         dt: float,
         bin_size: int,
-        environment_size: tuple[int,...],
+        environment_size: list[tuple[int,...]],
     ):
     start = time.time()
     map_model = hsem.BayesianMAP(
@@ -47,14 +49,14 @@ def run_models_over_data(
         dt,
         bin_size
     )
-    map_decoded = map_model.fit(spikemats)
+    map_decoded = map_model.fit(spikes)
     end = time.time()
     print(f"Completed MAP decoding. {end-start} seconds")
 
     start = time.time()
     momentum_model = hsem.Momentum(
         place_fields,
-        spikemats,
+        spikes,
         dt,
         environment_size,
         parameters.get('bin_size', 2.0),
@@ -100,7 +102,7 @@ def run_models_over_data(
 @click.option("--data-path", default="../data/")
 @click.option("--results-path", default="../results")
 @click.option("--run-config")
-@click.option("--rats", multiple=True, type=click.Choice(hsepp.RAT_NAMES), default=hsepp.RAT_NAMES)
+@click.option("--rats", multiple=True, type=click.Choice(hseio.RAT_NAMES), default=hseio.RAT_NAMES)
 def main(
         data_path: str, 
         results_path: str, 
@@ -110,7 +112,7 @@ def main(
     os.makedirs(results_path, exist_ok=True)
 
     with open(os.path.realpath(run_config), 'r') as f:
-        parameters = json.loads(f)
+        parameters = json.loads(f.read())
 
     for rat in rats:
         rat_path = os.path.join(data_path, rat)
@@ -122,7 +124,7 @@ def main(
 
             track_type = session[:-1]
             session_n  = int(session[-1])
-            env_size   = None if track_type == 'Linear' else (0,0,200,200)
+            env_size   = None if track_type == 'Linear' else [(0,200),(0,200)]
 
             (
                 raw_data,
@@ -136,8 +138,9 @@ def main(
                 track_type        = track_type,
                 environment_size  = env_size,
                 bin_size_cm       = parameters.get('bin_size_cm', 2),
-                loading_kwargs    = parameters.get('loading_args', {}),
+
                 placefield_kwargs = parameters.get('placefield_args', {}),
+                loading_kwargs    = parameters.get('loading_args', {}),
                 theta_kwargs      = parameters.get('theta_args', {}),
                 ripple_kwargs     = parameters.get('ripple_args', {})
             )
@@ -151,45 +154,42 @@ def main(
             )
 
             print(f"Finished preprocessing {rat} {session}")
-
+            
             if track_type == 'Linear':
-                env_size = (
-                    np.min(raw_data.raw_position['x']),
-                    np.min(raw_data.raw_position['y']),
-                    np.max(raw_data.raw_position['x']),
-                    np.max(raw_data.raw_position['y'])
-                )
+                env_size = raw_data.environment_size
+
+            place_fields = place_field_data.place_fields[place_field_data.place_cell_ids]
 
             try:
                 if not parameters.get("ignore_theta", False):
                     run_models_over_data(
                         os.path.join(results_dir, 'model_theta_results.mat'),
                         parameters,
-                        place_field_data.place_fields,
-                        theta_data.spikemats,
+                        place_fields,
+                        theta_data.spikes,
                         parameters.get('theta_time_window_ms', 60.0)/1000,
-                        parameters.get('bin_size_cm', 2),
+                        int(parameters.get('bin_size_cm', 2)),
                         env_size
                     )
             except Exception as e:
                 print(traceback.format_exc(), file=sys.stderr)
-                print("\n"*5, file=sys.stderr)
-                print(f"Failed to decode theta for {rat} {session}. {e}", file=sys.stderr)
+                print("-"*100, file=sys.stderr)
+                print(f"\nFailed to decode theta for {rat} {session}. {e}", file=sys.stderr)
             try:
-                if not parameters.get("ignore_ripple", False):
+                if not parameters.get("ignore_ripples", False):
                     run_models_over_data(
                         os.path.join(results_dir, 'model_swr_results.mat'),
                         parameters,
-                        place_field_data.place_fields,
-                        ripple_data.spikemats,
+                        place_fields,
+                        ripple_data.spikes,
                         parameters.get('ripple_time_window_ms', 5.0)/1000,
-                        parameters.get('bin_size_cm', 2),
+                        int(parameters.get('bin_size_cm', 2)),
                         env_size
                     )
             except Exception as e:
                 print(traceback.format_exc(), file=sys.stderr)
-                print("\n"*5, file=sys.stderr)
-                print(f"Failed to decode ripple for {rat} {session}. {e}", file=sys.stderr)
+                print("-"*100, file=sys.stderr)
+                print(f"\nFailed to decode ripple for {rat} {session}. {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

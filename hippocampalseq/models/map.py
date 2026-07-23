@@ -1,5 +1,4 @@
 import numpy as np
-import numpy.typing as npt
 from dataclasses import dataclass
 
 import hippocampalseq.utils as hseu
@@ -66,7 +65,7 @@ class BayesianMAP(StateSpace):
         ) -> BayesianMAPResults:
         """Run MAP decoding on a list of spikemats.
         Args:
-            X (List[npt.ArrayLike]): List of spikemats.
+            X (list[npt.ArrayLike]): List of spikemats.
             maximization_type (str, optional): Decoding method. Can either take the 'max' or the 'center_of_mass'. Defaults to 'max'.
 
         Returns:

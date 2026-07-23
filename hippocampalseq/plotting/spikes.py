@@ -2,7 +2,6 @@ import numpy as np
 import numpy as np
 import pynapple as nap
 import matplotlib.pyplot as plt
-from typing import Optional, Dict, List
 
 from .core import save_wrapper
 from .trajectories import plot_trajectory_with_velocity

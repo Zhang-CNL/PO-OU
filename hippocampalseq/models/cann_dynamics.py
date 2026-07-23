@@ -1,12 +1,10 @@
 import torch
-import numpy.typing as npt
-from typing import List
 
 from .momentum import *
 import hippocampalseq.utils as hseu
 
 class CANNDynamics(Momentum):
-    def __init__(self, true_position: List[npt.ArrayLike], *args, **kwargs):
+    def __init__(self, true_position: list[np.ndarray], *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.true_position = [
@@ -35,7 +33,7 @@ class CANNDynamics(Momentum):
         init_cov[self.latent_dim:self.augmented_dim-1, self.latent_dim:self.augmented_dim-1] = jitter * I
         return init_cov
 
-    def _init_observation_matrices(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
         I = torch.eye(self.obs_dim)
         Z = torch.zeros(self.obs_dim, self.augmented_dim-self.obs_dim)
         H = torch.cat((I, Z), dim=1)

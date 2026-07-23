@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pynapple as nap
 from collections.abc import Iterable
-from typing import Optional
 
 import hippocampalseq.utils as hseu
 from .core import save_wrapper
@@ -13,7 +12,7 @@ def plot_theta_lfp_segment(
         trough_times: nap.Ts, 
         trough_indices: np.ndarray,
         n_seconds: float,
-        segment_start: Optional[float] = None,
+        segment_start: float|None = None,
         plot_trough_markers: bool = True
     ):
     times = lfp_data.index.values
@@ -62,7 +61,7 @@ def plot_theta_lfp_segment(
 def plot_theta_cycle_dist(
         lfp_data: nap.TsdFrame,
         bins: int = 40,
-        theta_length_s: Optional[tuple] = (0.08, 0.16)
+        theta_length_s: tuple[float,float]|None = (0.08, 0.16)
     ):
     cycle_duration = lfp_data['Cycle Duration']
     valid_duration = cycle_duration[cycle_duration > 0]
@@ -86,8 +85,8 @@ def plot_theta_cycle_dist(
 def plot_theta_phase_assignment(
         spike_info_with_phase: dict[int,nap.TsdFrame],
         lfp_with_cycles: nap.TsdFrame,
-        lfp_trough_indices: Optional[np.ndarray] = None,
-        excitatory_neurons: Optional[np.ndarray|Iterable[int]] = None,
+        lfp_trough_indices: np.ndarray|None = None,
+        excitatory_neurons: np.ndarray|Iterable[int]|None = None,
         n_cells: int = 6,
         time_window: int = 10,
         skip_top_n: int = 3,

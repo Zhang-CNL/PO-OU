@@ -3,7 +3,7 @@ import pynapple as nap
 import warnings
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict, Any
+from typing import Any
 
 import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsepp
@@ -19,7 +19,7 @@ class RawData:
     excitatory_neurons : np.ndarray
     inhibitory_neurons : np.ndarray
     lfp_data           : nap.TsdFrame
-    environment_size   : tuple[int,...]
+    environment_size   : list[tuple[int,...]]
 
 @dataclass 
 class PlaceFields: 
@@ -45,13 +45,13 @@ def load_and_preprocess(
         rat_name: str,
         session: int,
         track_type: str = 'Linear',
-        environment_size: Optional[Tuple[int,...]] = None,
+        environment_size: list[tuple[int,...]]|None = None,
         bin_size_cm: int = 2,
-        loading_kwargs: Dict[str, Any] = {
+        loading_kwargs: dict[str, Any] = {
             'ripple_type': 'awake',
             'minimum_dt': np.inf
         },
-        placefield_kwargs: Dict[str, Any] = {
+        placefield_kwargs: dict[str, Any] = {
             'place_field_posterior': True,
             'place_field_gaussian_sd_cm': 2.0,
             'prior_mean_sps': 1.0,
@@ -59,18 +59,17 @@ def load_and_preprocess(
             'min_spikerate': 1.0,
             'velocity_cutoff': 5.0
         },
-        theta_kwargs: Dict[str, Any] = {
+        theta_kwargs: dict[str, Any] = {
             'time_window_ms': 60,
             'time_window_advance_ms': None,
-            'limit_analysis_by_theta_length': True,
             'theta_length_s': (0.08, 0.16),
             'max_cycle_duration_s': 1.0
         },
-        ripple_kwargs: Dict[str, Any] = {
+        ripple_kwargs: dict[str, Any] = {
             'time_window_ms': 5.0,
             'time_window_advance_ms': None
         }
-    ) -> Tuple[RawData, PlaceFields, Theta, Replay]:
+    ) -> tuple[RawData, PlaceFields, Theta, Replay]:
 
     # Load raw data and raw data segmented into the running period.
     begin = time.time()
@@ -132,6 +131,7 @@ def load_and_preprocess(
         running_spikes,
         place_cell_ids,
         velocity_cutoff            = placefield_kwargs.get('velocity_cutoff', 5.0),
+        run_period_threshold       = theta_kwargs.get('run_period_threshold', 2.0),
         # Ignore these scaling factors for non-simulated data.
         place_field_scaling_factor = 1.0,
         velocity_scaling_factor    = 1.0,
@@ -147,9 +147,8 @@ def load_and_preprocess(
         theta_trough_indices
     ) = hsepp.detect_theta_cycles(
         lfp_data,
-        limit_analysis_by_theta_length = theta_kwargs.get('limit_analysis_by_theta_length', True),
-        theta_length_s                 = theta_kwargs.get('theta_length_s', (0.08, 0.16)),
-        max_cycle_duration_s           = theta_kwargs.get('max_cycle_duration_s', 1.0)
+        theta_length_s       = theta_kwargs.get('theta_length_s', (0.08, 0.16)),
+        max_cycle_duration_s = theta_kwargs.get('max_cycle_duration_s', 1.0)
     )
 
     spike_info_with_phase = hsepp.assign_spikes_theta_phase(

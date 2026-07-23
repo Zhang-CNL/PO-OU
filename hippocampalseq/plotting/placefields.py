@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Optional, List
 
 from .core import save_wrapper
 
@@ -9,7 +8,7 @@ from .core import save_wrapper
 @save_wrapper
 def plot_open_placefields(
         place_fields: np.ndarray, 
-        pfs: Optional[List[int]] = None, 
+        pfs: list[int]|None = None, 
         show_titles: bool = True, 
         cmap: str|plt.Colormap = 'hot',
         ax = None,
@@ -78,7 +77,7 @@ def plot_open_placefields(
 @save_wrapper
 def plot_linear_placefields(
         place_fields: np.ndarray, 
-        pfs: Optional[List[int]] = None, 
+        pfs: list[int]|None = None, 
         cmap: str|plt.Colormap = 'hot', 
         ax = None,
         **fig_kwargs

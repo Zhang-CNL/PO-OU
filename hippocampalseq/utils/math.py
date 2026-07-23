@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import scipy
-from typing import Callable,Any,Optional
+from typing import Callable,Any
 from .utils import changeover_functions,NDArray
 
 def optimize(
@@ -21,7 +21,7 @@ def optimize(
 
     Returns:
         torch.Tensor: The final negative log likelihood.
-        List[torch.Tensor]: The optimized parameters.
+        list[torch.Tensor]: The optimized parameters.
     """
     for p in parameters:
         p.requires_grad_(True)
@@ -108,7 +108,7 @@ def calc_poisson_emission_probabilities_2d(
 def analytical_gaussian_approximation(
         z: torch.Tensor,
         pz: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
     B, Nx, Ny = pz.shape
     if z.ndim == 2:
         z = z.unsqueeze(0).expand(B,-1,-1)
@@ -152,7 +152,7 @@ def orthog(X: NDArray) -> NDArray:
     else:
         return scipy.linalg.orth(X)
 
-def pca(X: NDArray, n_components: Optional[int] = None) -> tuple[NDArray,...]:
+def pca(X: NDArray, n_components: int|None = None) -> tuple[NDArray,...]:
     mean,cov,argsort,dot = changeover_functions(type(X), 'mean', 'cov', 'argsort', 'dot')
 
     centered_x = X - mean(X, axis=0)
@@ -207,7 +207,7 @@ def _components(
         X: np.ndarray, 
         p: float = 1.0, 
         phi: float = 0.0, 
-        axis: Optional[int] = None
+        axis: int|None = None
     ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the generalized rectangular components of circular data.
     Essentially the projections of a vector onto perpendicular axes.
@@ -217,7 +217,7 @@ def _components(
     S = np.sum(np.sin(p * (X - phi)), axis=axis)
     return C, S
 
-def rayleightest(X: np.ndarray, axis: Optional[int] = None) -> np.ndarray|float:
+def rayleightest(X: np.ndarray, axis: int|None = None) -> np.ndarray|float:
     """Taken from https://docs.astropy.org/en/stable/_modules/astropy/stats/circstats.html#rayleightest
     because I don't want to install a full package.
     """

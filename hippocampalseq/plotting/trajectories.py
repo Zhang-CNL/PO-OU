@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pynapple as nap
-from typing import Optional
 
 import hippocampalseq.utils as hseu
 from .core import save_wrapper, colored_line
@@ -38,7 +37,7 @@ def _plot_trajectories1d(
 
 def _plot_trajectories2d(
         trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray, 
-        environment_size: Optional[tuple[int,...]] = [(0,200),(0,200)],
+        environment_size: tuple[int,...]|None = [(0,200),(0,200)],
         ax=None, 
         **plot_kwargs
     ):
@@ -76,7 +75,7 @@ def _plot_trajectories2d(
 @save_wrapper
 def plot_trajectories(
         trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray, 
-        environment_size: Optional[tuple[int,...]] = None,
+        environment_size: tuple[int,...]|None = None,
         ax=None, 
         **plot_kwargs
     ):
@@ -149,7 +148,7 @@ def plot_spikemat_position_aligned(
         place_cell_ids: np.ndarray, 
         environment_size: list[tuple[int,...]]|None = [(0,200),(0,200)],
         n_cells: int = 4, 
-        cell_selection: Optional[list[int]]|str = None,
+        cell_selection: list[int]|str|None = None,
         ax = None,
     ):
     if isinstance(cell_selection, list):
@@ -179,12 +178,16 @@ def plot_spikemat_position_aligned(
         subset = spike_info[cell] 
         ax.scatter(subset['x'], subset['y'], s=5, color=colors[i], alpha=.5, label=f'Cell {cell}')
     if environment_size is None:
-        environment_size = (
-            np.min(position_info['x']),
-            np.min(position_info['y']),
-            np.max(position_info['x']),
-            np.max(position_info['y'])
-        )
+        environment_size = [
+            (
+                np.min(position_info['x']),
+                np.max(position_info['x'])
+            ),
+            (
+                np.min(position_info['y']),
+                np.max(position_info['y'])
+            )
+        ]
     xax,yax = environment_size
     ax.set_xlim(xax)
     ax.set_ylim(yax)

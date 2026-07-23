@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-from typing import List, Tuple, Any, Dict
-import numpy.typing as npt
 import numpy as np
 from scipy.special import logsumexp
 
@@ -9,20 +7,20 @@ from .statespace import *
 
 @dataclass
 class StationaryResults:
-    model_evidence: List[float]
-    cumulative_probabilities: npt.ArrayLike
+    model_evidence: list[float]
+    cumulative_probabilities: np.ndarray
 
 class Stationary(Statespace):
-    def __init__(self, place_fields: npt.ArrayLike, dt: float):
+    def __init__(self, place_fields: np.ndarray, dt: float):
         super().__init__()
 
         self.place_fields = place_fields
         self.dt = dt
 
     def fit(self,
-        X: List[npt.ArrayLike],
-        *_: Tuple[Any,...],
-        **__: Dict[Any,Any]
+        X: list[np.ndarray],
+        *_: tuple,
+        **__: dict
     ):
         cumulative_probabilities = np.zeros_like((len(X),)+self.place_fields.shape[1:])
         model_evidence = []
