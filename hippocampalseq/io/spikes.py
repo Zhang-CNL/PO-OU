@@ -41,7 +41,7 @@ def load_spiking_data(
         raise FileNotFoundError(f"{path} not found")
 
     pos_mat = hseu.read_mat(os.path.join(path, 'Position_Data.mat'))
-    raw_pos: np.ndarray = pos_mat['Position_Data']
+    raw_pos = pos_mat['Position_Data']
     
     time = raw_pos[:,0] # (Npos, 1)
     x    = raw_pos[:,1]
@@ -50,13 +50,13 @@ def load_spiking_data(
 
     epoch_mat = hseu.read_mat(os.path.join(path, 'Epochs.mat'))
     if ripple_type == 'awake':
-        rt: np.ndarray = np.squeeze(epoch_mat['Run_Times']).astype(float)
+        rt = np.squeeze(epoch_mat['Run_Times']).astype(float)
     elif ripple_type == 'rem':
-        rt: np.ndarray = np.squeeze(epoch_mat['REM_Times']).astype(float)
+        rt = np.squeeze(epoch_mat['REM_Times']).astype(float)
     elif ripple_type == 'sleep':
-        rt: np.ndarray = np.squeeze(epoch_mat['Sleep_Times']).astype(float)
+        rt = np.squeeze(epoch_mat['Sleep_Times']).astype(float)
     elif ripple_type == 'sleep_immobile':
-        rt: np.ndarray = np.squeeze(epoch_mat['Sleep_Box_Immobile_Times']).astype(float)
+        rt = np.squeeze(epoch_mat['Sleep_Box_Immobile_Times']).astype(float)
     else: 
         raise NotImplementedError(f"Ripple type {ripple_type} not implemented")
     
@@ -65,7 +65,7 @@ def load_spiking_data(
     ends   = rt[:,1]
 
     spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
-    spikes: np.ndarray = spike_mat['Spike_Data']
+    spikes = spike_mat['Spike_Data']
 
     # (Nspikes,1)
     spike_ids   = spikes[:,1].astype(int) - 1
@@ -76,7 +76,7 @@ def load_spiking_data(
     inhibitory_neurons = spike_mat['Inhibitory_Neurons'].astype(int) - 1
 
     ripple_mat = hseu.read_mat(os.path.join(path, 'Ripple_Events.mat'))
-    ripples: np.ndarray    = ripple_mat['Ripple_Events']
+    ripples    = ripple_mat['Ripple_Events']
 
     ripple_starts = ripples[:,0]
     ripple_ends   = ripples[:,1]

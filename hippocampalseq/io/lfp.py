@@ -82,9 +82,18 @@ def load_lfp_data(
     reader = NeuralynxIO(dirname=str(datapath), include_filenames=includes)
     block  = reader.read_block(lazy=False, signal_group_mode='split-all')
 
-    analog_signal    = block.segments[0].analogsignals[0]
-    Sample_Frequency = float(analog_signal.sampling_rate.magnitude)
-    Samples_all      = analog_signal.magnitude.flatten()
+    Samples_all = []
+    Sample_Frequency = []
+    for seg in block.segments:
+        for sig in seg.analogsignals:
+            Sample_Frequency.append(float(sig.sampling_rate.magnitude))
+            Samples_all.append(sig.magnitude.flatten())
+            
+    Sample_Frequency = float(np.unique(Sample_Frequency)[0])
+    Samples_all = np.concatenate(Samples_all)
+#    analog_signal    = block.segments[0].analogsignals[0]
+#    Sample_Frequency = float(analog_signal.sampling_rate.magnitude)
+#    Samples_all      = analog_signal.magnitude.flatten()
 
     # Get accurate per-sample times from the .ncs file directly 
     Times_all = parse_ncs_timestamps(os.path.join(datapath,includes[0]))

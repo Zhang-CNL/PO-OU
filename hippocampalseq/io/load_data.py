@@ -189,12 +189,8 @@ def load_clean_data(
 
     raw_position = nap.TsdFrame(
         t=time,
-        d=np.c_[
-            x, 
-            y,
-            hd,
-            v,
-            dt
+        d=np.c_[x, y,
+            hd, v, dt
         ],
         columns=['x','y','Head direction','Velocity','Delta t']
     )

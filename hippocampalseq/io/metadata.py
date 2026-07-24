@@ -1,5 +1,5 @@
 
-RAT_NAMES = ['Harpy', 'Imp', 'Janni', 'Naga']
+RAT_NAMES = ['Ettin', 'Harpy', 'Imp', 'Janni', 'Naga']
 PFEIFFER_ENV_WIDTH_CM  = 200
 PFEIFFER_ENV_HEIGHT_CM = 200
 PFEIFFER_PLACEFIELD_MIN_TUNE_SPIKES_PSEC = 1
