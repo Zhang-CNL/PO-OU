@@ -118,6 +118,12 @@ def main(
         rat_path = os.path.join(data_path, rat)
         for session in os.listdir(rat_path):
             print(f"Started working on rat {rat}, session {session}")
+            if rat == 'Naga' and session == 'Open1':
+                print("Missing LFP data for Naga Open1. Skipping.")
+                continue
+            if rat == 'Ettin':
+                print("Skipping Ettin. Too noisy.")
+                continue
 
             results_dir = os.path.join(rat_path, session)
             os.makedirs(results_dir, exist_ok=True)
@@ -125,6 +131,9 @@ def main(
             track_type = session[:-1]
             session_n  = int(session[-1])
             env_size   = None if track_type == 'Linear' else [(0,200),(0,200)]
+
+            if track_type not in parameters.get("session_types", ["Linear", "Open"]):
+                continue
 
             (
                 raw_data,

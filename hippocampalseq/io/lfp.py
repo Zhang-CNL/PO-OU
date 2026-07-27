@@ -61,7 +61,8 @@ def parse_ncs_timestamps(csc_file: str, samples_per_record: int=512) -> np.ndarr
 def load_lfp_data(
         position_data: nap.TsdFrame, 
         spike_data: nap.TsGroup, 
-        datapath: str
+        datapath: str,
+        n_channels_to_load: int|list[int] = 2
     ) -> dict[str, Any]:
     """Load LFP data from a .ncs file
     Args:
@@ -74,10 +75,15 @@ def load_lfp_data(
     """
 
     #  Load samples via Neo
+    if type(n_channels_to_load) == int:
+        n_channels_to_load = [i for i in range(n_channels_to_load)]
     includes = []
+    channels_loaded = 0
     for item in os.listdir(datapath):
         if item.endswith(('.ncs', '.nev', '.ntt', '.nse', '.nvt')):
-            includes.append(item)
+            channels_loaded += 1
+            if channels_loaded in n_channels_to_load:
+                includes.append(item)
 
     reader = NeuralynxIO(dirname=str(datapath), include_filenames=includes)
     block  = reader.read_block(lazy=False, signal_group_mode='split-all')

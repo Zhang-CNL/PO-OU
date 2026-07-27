@@ -139,7 +139,7 @@ def load_clean_data(
         session: int,
         track_type: str = 'Linear',
         ripple_type: str = 'awake',
-        minimum_dt: float = 0.1
+        minimum_dt: float = np.inf
     ) -> tuple[nap.TsdFrame, nap.TsdFrame, nap.TsGroup, dict[int,nap.TsdFrame], nap.TsGroup, dict[str,Any], nap.IntervalSet, np.ndarray, np.ndarray]:
     """Load and segment data.
 
@@ -151,7 +151,7 @@ def load_clean_data(
         ripple_type (str, optional): Ripple epoch to be extracted. Can be one of ("awake", "rem", "sleep", "sleep_immobile"). Defaults to 'awake'.
         minimum_dt (float, optional): Minimum allowed time difference between spikes and position data. Spikes are
             discarded if the time difference is greater than this value. If set to np.inf, all spikes are kept.
-            Defaults to 0.1.
+            Defaults to np.inf.
 
     Returns:
         (nap.TsdFrame): Raw, unfiltered position data.

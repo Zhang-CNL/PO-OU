@@ -1,4 +1,7 @@
 {
+    "session_types": [
+        "Linear"
+    ],
     "ignore_theta" : false,
     "theta_args" : {
         "time_window_ms": 60

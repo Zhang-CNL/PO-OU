@@ -51,6 +51,8 @@ def assign_spikes_theta_phase(
         vel_vals  = ts['Velocity'].values
         time_diff = ts['Delta t'].values
         #cell_type_a = ts.values[:, cols.index('cell_type')]  # already an array
+        if any([len(x) == 0 for x in [x_vals, y_vals, vel_vals, time_diff]]):
+            continue
 
         out[cell_id] = nap.TsdFrame(
             t=spike_times,
