@@ -119,7 +119,7 @@ def analytical_gaussian_approximation(
     z_centered = z_centered.unsqueeze(-1)
 
     outer_products = z_centered @ z_centered.transpose(-2,-1)
-    sigma = torch.sum(pz.view(B, Nx*Ny, 1, 1) * outer_products, dim=1) # (B, D, D)
+    sigma = torch.sum(pz.reshape(B, Nx*Ny, 1, 1) * outer_products, dim=1) # (B, D, D)
 
     return mu.unsqueeze(-1), sigma
 

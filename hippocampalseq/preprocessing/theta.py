@@ -1,124 +1,150 @@
 import numpy as np
 import pynapple as nap
 import warnings
+from dataclasses import dataclass
 
 import hippocampalseq.utils as hseu
 
-def extract_trajectories(
-        run_position_data: nap.TsdFrame, 
-        starts: np.ndarray, 
-        ends: np.ndarray
-    ) -> list[np.ndarray]:
-    """Extract ground truth trajectories from position data.
-    Args:
-        run_position_data (nap.TsdFrame): Position data.
-        starts (npt.ArrayLike): List of start times.
-        ends (npt.ArrayLike): List of end times.
+@dataclass
+class BimodalPhaseWindows:
+    forward: tuple = (250, 60)
+    reverse: tuple = (80, 230)
+    major_peak: tuple = (200, 70)
+    minor_peak: tuple = (80, 190)
 
-    Returns:
-        (list[np.ndarray]): List of ground-truth trajectories.
-    """
-    true_trajectories = []
-    for start,end in zip(starts,ends):
-        run_subset = run_position_data.restrict(nap.IntervalSet(start,end))
-        trajectory = run_subset[['x','y']].values
-        true_trajectories.append(trajectory)
-    return true_trajectories
-
-def select_run_snippets(
-        run_position_data: nap.TsdFrame, 
-        velocity_cutoff: float = 5.0,
-        run_period_threshold: float = 2.0, 
-        duration_scaling_factor: float = 2.9 * 6.75
-    ) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
-    """Select snippets of runs that are at least `run_period_threshold` seconds long.
-    Args:
-        run_position_data (nap.TsdFrame): Position data.
-        velocity_cutoff (float): Velocity cutoff in cm/s. Defaults to 5.0.
-        run_period_threshold (float): Minimum run period in seconds. Defaults to 2.0.
-        duration_scaling_factor (float): Duration scaling factor. Defaults to 2.9*6.75.
-
-    Returns:
-        (np.ndarray): Start times of runs.
-        (np.ndarray): End times of runs.
-        (list[np.ndarray]): List of ground-truth trajectories.
-    """
-    mask = run_position_data['Velocity'].values >= velocity_cutoff 
-    run_starts,run_ends = hseu.extract_times_from_boolean(mask, run_position_data.index.values)
-    lengths = run_ends - run_starts
-    periods = lengths > run_period_threshold
-    starts,ends = run_starts[periods],run_ends[periods]
-
-    true_trajectories = extract_trajectories(run_position_data, starts, ends)
-    return starts, ends, true_trajectories
 
 def extract_theta_segments(
-        run_position_data: nap.TsdFrame,
-        run_spikes: nap.TsGroup,
+        running_position: nap.TsdFrame,
+        spike_data: nap.TsGroup,
+        lfp_data: nap.TsdFrame,
         place_cell_ids: np.ndarray,
+        time_window_s: float,
+        time_window_advance_s: float|None = None,
+        bimodal_windows: BimodalPhaseWindows = BimodalPhaseWindows(),
+        theta_length_s: tuple[float,float] = (0.08, 0.16),
         velocity_cutoff: float = 5.0,
-        run_period_threshold: float = 2.0,
-        place_field_scaling_factor: float = 2.9,
-        velocity_scaling_factor: float = 6.75,
-        time_window_ms: float = 250.0,
-        time_window_advance_ms: float|None = None,
-    ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Extract theta snippets and corresponding spiking matrices.
+        run_period_threshold: float = 2.0
+    ) -> tuple[list[nap.TsdFrame], list[np.ndarray]]:
+    """Align theta segments to the LFP data and phase. 
+    Numbers the oscillations, extracts trajectories for runs, and spikemats.
+
     Args:
-        run_position_data (nap.TsdFrame): Position data.
-        run_spikes (nap.TsGroup): Spikes.
-        place_cell_ids (np.ndarray): Place cell ids.
-        velocity_cutoff (float): Velocity cutoff in cm/s. Defaults to 5.0.
-        run_period_threshold (float): Minimum run period in seconds. Defaults to 2.0.
-        place_field_scaling_factor (float): Place field scaling factor. Defaults to 2.9.
-        velocity_scaling_factor (float): Velocity scaling factor. Defaults to 6.75.
-        time_window_ms (float): Time window in ms. Defaults to 250.0.
-        time_window_advance_ms (float|None): Time window advance in ms. Defaults to None.
+        running_position (nap.TsdFrame): Dataframe containing coordinates, velocity, and head direction for run intervals.
+        spike_data (nap.TsGroup): Group of time-series data for spikes during run periods.
+        lfp_data (nap.TsdFrame): LFP data frame with ['Phase Deg', 'Power'] fields.
+        place_cell_ids (np.ndarray): IDs of cells that are place cells.
+        time_window_s (float): 
+        time_window_advance_s (float|None):
+        velocity_cutoff (float): Minimum velocity to be counted for a run segment.
+        run_period_threshold (float): Minimum length in seconds to be included as a run segment.
 
     Returns:
-        (list[np.ndarray]): List of ground-truth trajectories.
-        (list[np.ndarray]): List of spiking matrices.
+        (list[nap.TsdFrame]): List of run segments with true positions and LFP data aligned.
+        (list[np.ndarray]): List of (T,N) spike matrices.
     """
-    time_window_s = time_window_ms / 1000
-    if time_window_advance_ms is None:
-        time_window_advance_ms = time_window_ms
-    time_window_advance_s = time_window_advance_ms / 1000
-    duration_scaling_factor = velocity_scaling_factor * place_field_scaling_factor
+    if time_window_advance_s is None:
+        time_window_advance_s = time_window_s
+    theta_starting_phase = 70.0
 
-    (
-        starts, 
-        ends,
-        true_trajectories
-    ) = select_run_snippets(
-        run_position_data, 
-        velocity_cutoff,
-        run_period_threshold,
-        duration_scaling_factor
+    run_mask = running_position['Velocity'].values >= velocity_cutoff
+    run_starts,run_ends = hseu.extract_times_from_boolean(
+        run_mask, 
+        running_position.index.values
     )
+    run_mask = (run_ends - run_starts) >= run_period_threshold
+    run_starts,run_ends = run_starts[run_mask],run_ends[run_mask]
+    
+    pos_t = running_position.index.values
+    lfp_t = lfp_data.index.values
+    phase = lfp_data['Phase Deg'].values
+    power = lfp_data['Power']
 
+    tsdframes = []
     spikemats = []
-    snippets_to_keep = []
-    for i,(start,end) in enumerate(zip(starts,ends)):
+
+    oscillation_number = 0
+
+    for start,end in zip(run_starts, run_ends):
+        if (end - start) < time_window_s:
+            continue
+
+        decoding_times = np.arange(
+            start + time_window_s / 2,
+            end - time_window_s / 2 + 1e-12,
+            time_window_advance_s
+        )
+        if decoding_times.size == 0:
+            continue
+
         spikemat = hseu.extract_spikemat(
-            run_spikes,
+            spike_data,
             start,
             end,
             time_window_s,
             time_window_advance_s
         )
         spikemat = spikemat[:,place_cell_ids].astype(int)
-        # Filter empty spiking matrices.
-        if spikemat.shape[0] == 0 or np.sum(spikemat) == 0:
+        
+        if spikemat.size == 0 or np.sum(spikemat) == 0:
             continue
+
+        # Match decoding windows to nearest samples
+        pos_idx = np.searchsorted(pos_t, decoding_times)
+        pos_idx = np.clip(pos_idx, 1, len(pos_t) - 1)
+        left = pos_idx - 1
+        pos_idx -= (
+            np.abs(decoding_times - pos_t[left])
+            < np.abs(pos_t[pos_idx] - decoding_times)
+        )
+
+        lfp_idx = np.searchsorted(lfp_t, decoding_times)
+        lfp_idx = np.clip(lfp_idx, 1, len(lfp_t) - 1)
+        left = lfp_idx - 1
+        lfp_idx -= (
+            np.abs(decoding_times - lfp_t[left])
+            < np.abs(lfp_t[lfp_idx] - decoding_times)
+        )
+
+        # Number the theta oscillations
+        phase_segment = phase[lfp_idx]
+        crossings = (
+            (phase_segment[:-1] < theta_starting_phase)
+            & (phase_segment[1:] >= theta_starting_phase)
+        )
+        osc = np.zeros(decoding_times.size, dtype=int)
+        crossing_idx = np.flatnonzero(crossings) + 1
+
+        last = 0
+        for c in crossing_idx:
+            osc[last:c] = oscillation_number
+            oscillation_number += 1
+            last = c
+
+        osc[last:] = oscillation_number
+        oscillation_number += 1
+
+        df = nap.TsdFrame(
+            t=decoding_times,
+            d=np.c_[
+                running_position['x'].values[pos_idx],
+                running_position['y'].values[pos_idx],
+                running_position['Head direction'].values[pos_idx],
+                running_position['Velocity'].values[pos_idx],
+                phase_segment,
+                power[lfp_idx],
+                osc
+            ],
+            columns=[
+                'x', 'y', 'Head direction',
+                'Velocity', 'Phase Deg', 'Power', 
+                'Oscillation Number'
+            ]
+        )
+
+        tsdframes.append(df)
         spikemats.append(spikemat)
-        snippets_to_keep.append(i)
 
-    true_trajectories = [true_trajectories[i] for i in snippets_to_keep]
-
-    return (
-        true_trajectories,
-        spikemats
-    )
+    return tsdframes, spikemats  
 
 def detect_theta_cycles(
         lfp_data: nap.TsdFrame,

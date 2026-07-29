@@ -509,33 +509,6 @@ def decode_unimodal_vs_bimodal(predecode, field_results, uni_cells, bi_cells,
         'bi_cell_ids':           bi_cells,
     }        
         
-        # if i == 2:  # or any window you want to test
-        #     print(f"subset_spike_data: {subset_spike_data}")
-        #     print(f"spike_indices: {spike_indices}") #this will be shifted due to 0 indexing
-
-        #     # Fields for the spiking cells in this window
-        #     fields_for_spikes = fields_modified[:, :, spike_indices]  # (ny, nx, n_spikes)
-
-        #     # This is the error decoder version
-        #     lambda_prod = fields_for_spikes.prod(axis=2)
-        #     decoded_prod = lambda_prod * np.exp(-decoding_time_window * sum_fields)
-        #     total_prod = decoded_prod.sum()
-        #     if total_prod > 0:
-        #         decoded_prod = decoded_prod / total_prod
-
-        #     # this is similar but uses log and normalizes it 
-        #     # which is kind of similar to the dividng thing in brad's code
-        #     log_part = np.log(fields_for_spikes).sum(axis=2)
-        #     poisson_term = decoding_time_window * sum_fields
-        #     log_like = log_part - poisson_term
-        #     log_Z = logsumexp(log_like)
-        #     log_like = log_like - log_Z
-        #     decoded_log = np.exp(log_like)
-
-        #     # the difference is super small
-        #     diff = np.abs(decoded_prod - decoded_log)
-        #     print("max abs diff:", diff.max())
-        #     print("sum abs diff:", diff.sum())
         
         
 

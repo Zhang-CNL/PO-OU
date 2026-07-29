@@ -56,7 +56,7 @@ class Momentum(KalmanFilter):
         self.dt            = torch.tensor(dt)
         self.environment_size = environment_size
         self.bin_size = bin_size
-        self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
+        self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='xy')
 
         if seed is not None:
             torch.random.manual_seed(seed)
@@ -73,7 +73,7 @@ class Momentum(KalmanFilter):
             ep = ep[ep.sum(axis=1) > 0]
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 ep, 
-                place_fields,
+                place_fields.transpose(1,2),
                 self.dt
             )
             emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
@@ -418,7 +418,7 @@ class Momentum(KalmanFilter):
                 loss = torch.sum(loss, axis=0) / sigma
                 loss = (T-1) * torch.log(sigma**2) + loss
 
-                total_loss += loss / 2
+                total_loss += loss / (2 * len(stats.Ezz))
             return total_loss
 
         loss,params = hseu.optimize(

@@ -29,17 +29,17 @@ def pre_decoding_check(position_data, spike_data,
     # 
     # Load LFP, position, spike data
     # 
-    phase_ts  = lfp_data['phase']
+    phase_ts  = lfp_data['Phase Deg']
     lfp_t     = phase_ts.index.values
-    lfp_phase = np.degrees(phase_ts.values) % 360.0
-    lfp_power = np.asarray(lfp_data['power'].values)
+    lfp_phase      = phase_ts
+    lfp_power = np.asarray(lfp_data['Power'].values)
 
     pos_t = position_data.index.values
     x     = position_data['x'].values
     y     = position_data['y'].values
-    vel   = position_data['velocity'].values
-    mdir  = position_data['movement_direction'].values
-    hdg   = position_data['head_direction'].values
+    vel   = position_data['Velocity'].values
+    #mdir  = position_data['movement_direction'].values
+    hdg   = position_data['Head direction'].values
 
     # print("type(spike_data):", type(spike_data))
     exc_cell_ids   = [cid for cid in spike_data.keys() if cid in excitatory_neurons]
@@ -116,7 +116,7 @@ def pre_decoding_check(position_data, spike_data,
     DTI[:, 1]  = y[pos_idx]
     DTI[:, 2]  = hdg[pos_idx] if hdg is not None else np.nan
     DTI[:, 3]  = vel[pos_idx]
-    DTI[:, 4]  = mdir[pos_idx]
+    #DTI[:, 4]  = mdir[pos_idx]
     DTI[:, 5]  = lfp_phase[lfp_idx]
     DTI[:, 10] = lfp_power[lfp_idx]
 

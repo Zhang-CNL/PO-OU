@@ -23,6 +23,11 @@ class AttrDict(dict):
     def __copy__(self):
         return AttrDict(self)
 
+def spike_info_to_tsg(spike_info: dict[int, nap.TsdFrame]) -> nap.TsGroup:
+    return nap.TsGroup({
+        cell: nap.Ts(t=spike_info[cell].index.values) for cell in spike_info
+    })
+
 def changeover_functions(_type: type, *args: Iterable[str]) -> Callable[...,Any]|list[Callable[...,Any]]:
     """Given a type of an array, return an arbritrary list of functions from the proper module
     (torch or numpy) corresponding to the arguments.

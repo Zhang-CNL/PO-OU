@@ -357,7 +357,7 @@ class KalmanFilter(StateSpace):
         sz = tuple(int((es[1] - es[0]) / bin_size) for es in environment_size)
         if len(sz) == 1:
             sz = sz + (1,)
-        Z = hseu.make_ndgrid(environment_size, bin_size, indexing='ij')
+        Z = hseu.make_ndgrid(environment_size, bin_size, indexing='xy')
         cumulative_probabilities = torch.zeros((len(values.smoothed_mean),) + sz)
 
         for i in range(len(values.smoothed_mean)):

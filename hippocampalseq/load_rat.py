@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import hippocampalseq.io as hseio
-import hippocampalseq.preprocessing as hsepp
+import hippocampalseq.preprocessing as hsep
 
-@dataclass 
+@dataclass
 class RawData:
-    raw_position       : nap.TsdFrame 
-    running_position   : nap.TsdFrame 
-    raw_spikes         : nap.TsGroup 
+    raw_position       : nap.TsdFrame
+    running_position   : nap.TsdFrame
+    raw_spikes         : nap.TsGroup
     running_spikes     : nap.TsGroup
     running_spike_info : dict[int, nap.TsdFrame]
     ripple_periods     : nap.IntervalSet
@@ -29,24 +29,24 @@ class PlaceFields:
 
 @dataclass 
 class Theta:
-    true_trajectory : list[np.ndarray]
-    spikes          : list[np.ndarray]
-    lfp_data        : nap.TsdFrame
-    trough_times    : nap.Ts
-    trough_indices  : np.ndarray
+    ground_truth      : list[nap.TsdFrame]
+    spikes            : list[np.ndarray]
+    lfp_data          : nap.TsdFrame
+    trough_times      : nap.Ts
+    trough_indices    : np.ndarray
     spikes_with_phase : dict[int, nap.TsdFrame]
 
 @dataclass
 class Replay:
     spikes : list[np.ndarray]
 
-def load_and_preprocess(
+def load_raw_data(
         base_data_path: str,
         rat_name: str,
         session: int,
         track_type: str = 'Linear',
-        environment_size: list[tuple[int,...]]|None = None,
         bin_size_cm: int = 2,
+        environment_size: list[tuple[int,...]]|None = None,
         loading_kwargs: dict[str, Any] = {
             'ripple_type': 'awake',
             'minimum_dt': np.inf
@@ -57,22 +57,11 @@ def load_and_preprocess(
             'prior_mean_sps': 1.0,
             'prior_beta_s': 0.01,
             'min_spikerate': 1.0,
-            'velocity_cutoff': 5.0
-        },
-        theta_kwargs: dict[str, Any] = {
-            'time_window_ms': 60,
-            'time_window_advance_ms': None,
-            'theta_length_s': (0.08, 0.16),
-            'max_cycle_duration_s': 1.0
-        },
-        ripple_kwargs: dict[str, Any] = {
-            'time_window_ms': 5.0,
-            'time_window_advance_ms': None
+            'velocity_cutoff': 10.0,
+            'flatten_linear': True
         }
-    ) -> tuple[RawData, PlaceFields, Theta, Replay]:
-
-    # Load raw data and raw data segmented into the running period.
-    begin = time.time()
+    ) -> tuple[RawData,PlaceFields]:
+    start = time.time()
     (
         raw_position,
         running_position,
@@ -91,82 +80,30 @@ def load_and_preprocess(
         ripple_type = loading_kwargs.get('ripple_type', 'awake'),
         minimum_dt  = loading_kwargs.get('minimum_dt', np.inf)
     )
-    print(f"Loading took {time.time() - begin} seconds")
+    print(f"Loading data took {time.time() - start}s")
 
-    warnings.warn("Dropping LFP metadata. If you want to keep it, you can call `hseio.load_clean_data` manually.")
-    lfp_data = lfp_data['LFP']
-
-
-
-    # Generate place fields based on the data
-    begin = time.time()
+    start = time.time()
     (
         place_fields,
         place_cell_ids,
         position_histogram,
         environment_size
-    ) = hsepp.calculate_placefields(
+    ) = hsep.calculate_placefields(
         running_position,
         running_spike_info,
         excitatory_neurons,
-        environment_size   = environment_size,
-        track_type         = track_type,
-        posterior          = placefield_kwargs.get('place_field_posterior', True),
-        bin_size_cm        = bin_size_cm, 
+        track_type       = track_type,
+        environment_size = environment_size,
+        bin_size_cm      = bin_size_cm,
+        posterior        = placefield_kwargs.get('place_field_posterior', True),
         place_field_gaussian_sd_cm = placefield_kwargs.get('place_field_gaussian_sd_cm', 2.0),
         prior_mean_rat_sps = placefield_kwargs.get('prior_mean_rat_sps', 1.0),
         prior_beta_s       = placefield_kwargs.get('prior_beta_s', .01),
         min_spike_rate     = placefield_kwargs.get('min_spikerate', 1.0), 
-        velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 5.0)
+        velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 10.0),
+        flatten_linear     = placefield_kwargs.get('flatten_linear', True)
     )
-    print(f"Place field calculation took {time.time() - begin} seconds")
-
-    # Process theta and theta LFP
-    begin = time.time()
-    (
-        true_trajectories,
-        theta_spikemats 
-    ) = hsepp.extract_theta_segments(
-        running_position,
-        running_spikes,
-        place_cell_ids,
-        velocity_cutoff            = placefield_kwargs.get('velocity_cutoff', 5.0),
-        run_period_threshold       = theta_kwargs.get('run_period_threshold', 2.0),
-        # Ignore these scaling factors for non-simulated data.
-        place_field_scaling_factor = 1.0,
-        velocity_scaling_factor    = 1.0,
-        time_window_ms             = theta_kwargs.get('time_window_ms', 60),
-        time_window_advance_ms     = theta_kwargs.get('time_window_advance_ms', None)
-    )
-    print(f"Theta segment extraction took {time.time() - begin} seconds")
-
-    begin = time.time()
-    (
-        theta_lfp_data,
-        theta_trough_times,
-        theta_trough_indices
-    ) = hsepp.detect_theta_cycles(
-        lfp_data,
-        theta_length_s       = theta_kwargs.get('theta_length_s', (0.08, 0.16)),
-        max_cycle_duration_s = theta_kwargs.get('max_cycle_duration_s', 1.0)
-    )
-
-    spike_info_with_phase = hsepp.assign_spikes_theta_phase(
-        running_spike_info,
-        theta_lfp_data
-    )
-    print(f"Theta cycle detection took {time.time() - begin} seconds")
-
-    # Process replay data.
-    begin = time.time()
-    ripple_spikemats = hsepp.process_ripples(
-        ripple_periods,
-        running_spikes,
-        place_cell_ids,
-        time_window_ms         = ripple_kwargs.get('time_window_ms', 5.0),
-        time_window_advance_ms = ripple_kwargs.get('time_window_advance_ms', None),
-    )
-    print(f"Ripple processing took {time.time() - begin} seconds")
+    print(f"Calculating place fields took {time.time() - start}s")
 
     raw_data = RawData(
         raw_position,
@@ -177,30 +114,78 @@ def load_and_preprocess(
         ripple_periods,
         excitatory_neurons,
         inhibitory_neurons,
-        lfp_data,
+        lfp_data['LFP'], #Warn about this
         environment_size
     )
+    print(f"Dropping LFP metadata. If you want it, call the functions yourself")
 
-    place_field_data = PlaceFields(
-        place_fields, 
-        place_cell_ids, 
-        position_histogram
+    place_fields = PlaceFields(
+        place_fields,
+        place_cell_ids,
+        position_histogram,
+    )
+    return (
+        raw_data,
+        place_fields
     )
 
-    theta = Theta(
-        true_trajectories, 
-        theta_spikemats,
+def process_theta(
+        raw_data: RawData,
+        placefield_data: PlaceFields,
+        velocity_cutoff: float = 10.0,
+        theta_kwargs: dict[str, Any] = {
+            'time_window_ms': 60,
+            'time_window_advance_ms': None,
+            'theta_length_s': (0.08, 0.16),
+            'max_cycle_duration_s': 1.0,
+            'run_period_threshold': 2.0
+        },
+    ) -> Theta:
+    start = time.time()
+    (
+        theta_lfp_data,
+        theta_trough_times,
+        theta_trough_indices
+    ) = hsep.detect_theta_cycles(
+        raw_data.lfp_data,
+        theta_length_s       = theta_kwargs.get('theta_length_s', (0.08, 0.16)),
+        max_cycle_duration_s = theta_kwargs.get('max_cycle_duration_s', 1.0)
+    ) 
+    print(f"Detecting theta cycles took {time.time() - start}s")
+
+    start = time.time()
+    spike_info_with_phase = hsep.assign_spikes_theta_phase(
+        raw_data.running_spike_info,
+        theta_lfp_data
+    )
+    print(f"Aligning spikes to theta phase took {time.time() - start}")
+
+    start = time.time()
+    (
+        ground_truth,
+        spikemats
+    ) = hsep.extract_theta_segments(
+        raw_data.running_position,
+        raw_data.running_spikes,
+        theta_lfp_data,
+        placefield_data.place_cell_ids,
+        time_window_s         = theta_kwargs.get('time_window_ms', 60) / 1000,
+        time_window_advance_s = theta_kwargs.get('time_window_advance_s', None),
+        velocity_cutoff       = velocity_cutoff,
+        run_period_threshold  = theta_kwargs.get('run_period_threshold', 2.0)
+    )
+    print(f"Extracting theta run sequences took {time.time() - start}")
+
+    return Theta(
+        ground_truth,
+        spikemats,
         theta_lfp_data,
         theta_trough_times,
         theta_trough_indices,
         spike_info_with_phase
     )
 
-    ripples = Replay(ripple_spikemats)
+def process_replay(
 
-    return (
-        raw_data,
-        place_field_data,
-        theta,
-        ripples
-    )
+    ):
+    pass

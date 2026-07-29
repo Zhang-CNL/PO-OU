@@ -20,16 +20,12 @@ def save_raw_data(
         save_name: str,
         raw_data: hse.RawData,
         place_field_data: hse.PlaceFields,
-        theta_data: hse.Theta,
-        ripple_data: hse.Replay,
     ):
     sio.savemat(
         save_name,
         {
             'raw_data'         : asdict(raw_data),
             'place_field_data' : asdict(place_field_data),
-            'theta_data'       : asdict(theta_data),
-            'ripple_data'      : asdict(ripple_data)
         },
         do_compression = True
     )
@@ -137,32 +133,25 @@ def main(
 
             (
                 raw_data,
-                place_field_data,
-                theta_data,
-                ripple_data
-            ) = hse.load_and_preprocess(
+                place_field_data
+            ) = hse.load_raw_data(
                 data_path,
                 rat,
                 session_n,
-                track_type        = track_type,
+                track_type,
+                bin_size_cm       = parameters.get('bin_size_cm', 2.0),
                 environment_size  = env_size,
-                bin_size_cm       = parameters.get('bin_size_cm', 2),
-
-                placefield_kwargs = parameters.get('placefield_args', {}),
                 loading_kwargs    = parameters.get('loading_args', {}),
-                theta_kwargs      = parameters.get('theta_args', {}),
-                ripple_kwargs     = parameters.get('ripple_args', {})
+                placefield_kwargs = parameters.get('placefield_args', {})
             )
 
             save_raw_data(
                 os.path.join(results_dir, 'raw_data.mat'),
                 raw_data,
                 place_field_data,
-                theta_data,
-                ripple_data
             )
 
-            print(f"Finished preprocessing {rat} {session}")
+            print(f"Finished loading {rat} {session}")
             
             if track_type == 'Linear':
                 env_size = raw_data.environment_size
@@ -171,12 +160,25 @@ def main(
 
             try:
                 if not parameters.get("ignore_theta", False):
+                    theta_data = process_theta(
+                        raw_data,
+                        place_field_data,
+                        velocity_cutoff = parameters.get('velocity_cutoff', 10.0),
+                        theta_kwargs    = parameters.get('theta_args', {})
+                    )
+                    sio.savemat(
+                        os.path.join(results_dir, 'theta_raw.mat'),
+                        mdict = {
+                            'theta': asdict(theta_dict)
+                        },
+                        do_compression=True
+                    )
                     run_models_over_data(
                         os.path.join(results_dir, 'model_theta_results.mat'),
                         parameters,
                         place_fields,
                         theta_data.spikes,
-                        parameters.get('theta_time_window_ms', 60.0)/1000,
+                        parameters.get('theta_time_window_ms', 60.0) / 1000,
                         int(parameters.get('bin_size_cm', 2)),
                         env_size
                     )
@@ -184,6 +186,8 @@ def main(
                 print(traceback.format_exc(), file=sys.stderr)
                 print("-"*100, file=sys.stderr)
                 print(f"\nFailed to decode theta for {rat} {session}. {e}", file=sys.stderr)
+
+
             try:
                 if not parameters.get("ignore_ripples", False):
                     run_models_over_data(
