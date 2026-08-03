@@ -286,7 +286,7 @@ class Momentum(KalmanFilter):
             alpha = torch.cholesky_solve(innovation, L)
 
             loglike += T * rank * log2pi \
-                + 2 * T * torch.sum(torch.log(torch.diagonal(L, dim1=-2, dim2=-1))) \
+                + 2 * torch.sum(torch.log(torch.diagonal(L, dim1=-2, dim2=-1))) \
                 + torch.sum(innovation.mT @ alpha, axis=0)
 
         return -0.5 * loglike.squeeze()

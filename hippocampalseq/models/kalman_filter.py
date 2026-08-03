@@ -243,7 +243,7 @@ class KalmanFilter(StateSpace):
             alpha = torch.cholesky_solve(innovation, L)
 
             loglike += T * rank * log2pi \
-                + 2 * T * torch.sum(torch.log(torch.diagonal(L, axis1=-2, axis2=-1))) \
+                + 2 * torch.sum(torch.log(torch.diagonal(L, axis1=-2, axis2=-1))) \
                 + torch.sum(innovation.mT @ alpha, axis=0)
 
         return -0.5 * loglike 
