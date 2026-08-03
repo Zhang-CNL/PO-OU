@@ -4,6 +4,8 @@ import scipy
 from typing import Callable,Any
 from .utils import changeover_functions,NDArray
 
+import matplotlib.pyplot as plt
+
 def optimize(
         closure: Callable[[list[torch.Tensor], dict[str, Any]], torch.Tensor],
         parameters: list[torch.Tensor],
@@ -43,7 +45,8 @@ def optimize(
         optimizer.zero_grad()
         loss = closure(parameters, **closure_kwargs)
         loss.backward()
-        return loss
+        with torch.no_grad():
+            return closure(parameters, **closure_kwargs)
 
     for epoch in range(autograd_kwargs.get('n_epochs', 1000)):
         loss = optimizer.step(wrapped_closure)
@@ -105,15 +108,76 @@ def calc_poisson_emission_probabilities_2d(
     log_emission = calc_poisson_emission_probabilities_log_2d(spikemat, place_fields, dt)
     return exp(log_emission)
 
+def laplacian_approximation(
+        emission_prob: torch.Tensor,
+        grid: torch.Tensor,
+    ):
+    T,Nx,Ny = emission_prob.shape
+    H = torch.empty(T,2,2, dtype=emission_prob.dtype)
+    Sigma = torch.empty(T,2,2, dtype=emission_prob.dtype)
+
+    idx = torch.argmax(emission_prob.reshape(T,-1), axis=1)
+    i,j = torch.unravel_index(idx, (Nx,Ny))
+    mu = grid[idx][...,None]
+
+    bounded_mask = (i < Nx-2) & (j < Ny - 2)
+    batch = np.where(bounded_mask)[0]
+    ib = i[batch]
+    jb = j[batch]
+
+    dx,dy = bin_size,bin_size
+
+    dxx = (
+        emission_prob[batch,ib+1,jb] 
+        - 2*emission_prob[batch,ib,jb] 
+        + emission_prob[batch,ib-1,jb]
+    ) / dx**2
+    dyy = (
+        emission_prob[batch,ib,jb+1] 
+        - 2*emission_prob[batch,ib,jb] 
+        + emission_prob[batch,ib,jb-1]
+    ) / dy**2
+    dxy = (
+        emission_prob[batch,ib+1,jb+1]
+        - emission_prob[batch,ib+1,jb-1]
+        - emission_prob[batch,ib-1,jb+1]
+        + emission_prob[batch,ib-1,jb-1]
+    ) / (4*dx*dy)
+    
+    H[batch,0,0] = -dxx
+    H[batch,0,1] = -dxy
+    H[batch,1,0] = -dxy
+    H[batch,1,1] = -dyy
+
+    Sigma[batch] = torch.linalg.inv(H[batch])
+
+    # Fallback on moment matching for edge cases
+    nb = ~bounded_mask
+    if nb.sum() > 0:
+        nbounded = np.where(nb)[0]
+        mu[nbounded],Sigma[nbounded] = analytical_gaussian_approximation(
+            grid, 
+            emission_prob[nbounded], 
+            'weighted'
+        )
+
+
+    return mu, Sigma
+
 def analytical_gaussian_approximation(
         z: torch.Tensor,
         pz: torch.Tensor,
+        mean_position: str = 'max',
     ) -> tuple[torch.Tensor, torch.Tensor]:
     B, Nx, Ny = pz.shape
     if z.ndim == 2:
         z = z.unsqueeze(0).expand(B,-1,-1)
 
-    mu = torch.sum(pz.reshape(B, Nx*Ny, 1) * z, dim=1) / torch.sum(pz,dim=(1,2))[:,None]
+    if mean_position == 'max':
+        idx = torch.argmax(pz.reshape(B,-1), axis=1)
+        mu = z[0,idx]
+    elif mean_position == 'weighted':
+        mu = torch.sum(pz.reshape(B, Nx*Ny, 1) * z, dim=1) / torch.sum(pz,dim=(1,2))[:,None]
 
     z_centered = z - mu.unsqueeze(1) # (B, N, D)
     z_centered = z_centered.unsqueeze(-1)

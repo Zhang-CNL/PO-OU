@@ -19,14 +19,14 @@ PI = torch.tensor(np.pi)
 
 @dataclass
 class KalmanResults:
-    observations   : list[torch.Tensor] = field(default_factory=list)
-    predicted_mean : list[torch.Tensor] = field(default_factory=list)
-    predicted_cov  : list[torch.Tensor] = field(default_factory=list)
-    filtered_mean  : list[torch.Tensor] = field(default_factory=list)
-    filtered_cov   : list[torch.Tensor] = field(default_factory=list)
-    smoothed_gain  : list[torch.Tensor] = field(default_factory=list)
-    smoothed_mean  : list[torch.Tensor] = field(default_factory=list)
-    smoothed_cov   : list[torch.Tensor] = field(default_factory=list)
+    observations   : list[torch.Tensor] = field(default_factory=list) 
+    predicted_mean : list[torch.Tensor] = field(default_factory=list) # Stores $\mu_{t+1|t}$
+    predicted_cov  : list[torch.Tensor] = field(default_factory=list) # Stores $P_{t+1|t}$
+    filtered_mean  : list[torch.Tensor] = field(default_factory=list) # Stores $\mu_{t|t}$
+    filtered_cov   : list[torch.Tensor] = field(default_factory=list) # Stores $V_{t|t}$
+    smoothed_gain  : list[torch.Tensor] = field(default_factory=list) # Stores $J_t$
+    smoothed_mean  : list[torch.Tensor] = field(default_factory=list) # Stores $\hat{\mu}_{t|T}$
+    smoothed_cov   : list[torch.Tensor] = field(default_factory=list) # Stores $\hat{V}_{t|T}$
     loglike        : list[float]  = field(default_factory=list)
     loglike_full   : torch.Tensor = field(default_factory=lambda: torch.empty(0))
     aic            : float = 0
@@ -89,8 +89,6 @@ class KalmanFilter(StateSpace):
         K1 = hseu.invmul(P0Ct, self.observation_matrices @ P0Ct + self.observation_covariance) 
         mu1 = self.initial_state_mean + K1 @ (values.observations[batch][0] - self.observation_matrices @ self.initial_state_mean)
         v1 = (torch.eye(self.augmented_dim) - K1 @ self.observation_matrices) @ self.initial_state_covariance
-        #mu1 = self.initial_state_mean
-        #v1  = self.initial_state_covariance
 
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = v1
@@ -138,7 +136,7 @@ class KalmanFilter(StateSpace):
     def _smooth(self, values: KalmanResults, batch: int, t: int) -> KalmanResults:
         """Run the RTS smoother for a single time step."""
         Amt   = values.predicted_mean[batch][t]
-        Pt    = values.predicted_cov[batch][t]
+        Pt    = values.predicted_cov[batch][t] # $P_{t+1|t}$
 
         J = hseu.invmul(values.filtered_cov[batch][t] @ self.transition_matrices.T, Pt)
         muht = values.filtered_mean[batch][t] + J @ (values.smoothed_mean[batch][t+1] - Amt) 
@@ -221,8 +219,37 @@ class KalmanFilter(StateSpace):
             Cov, Ez, Ezz, Ezz1, Ez1z, Exx, Exz, Ezx
         )
 
+    def _observed_loglikelihood(self, values: KalmanResults) -> torch.Tensor:
+        r"""Calculates the observed log-likelihood of the data in the Kalman filter.
+        Use this when checking for EM convergence.
+        The formula is:
+        $$
+            L(\theta) = ln\ P(x_{1...T}|\theta) = \sum_{t=1}^T ln\ P(x_t|x_{t-1}\theta) = 
+            -\frac{1}{2} \sum_{t=1}^T m ln\ (2\pi) + ln\ |S_t| + \nu_t^TS_t^{-1}\nu_t
+        $$
+        where $S_t = C_t P_{t|t-1} C_t^T + \Gamma$ and $\nu_t = x_t - C\mu_{t|t-1}$
+
+        """
+        log2pi = torch.log(2*PI)
+        rank = self.augmented_dim
+        loglike = 0
+
+        for b in range(len(values.observations)):
+            T = values.observations[b].shape[0]
+            innovation = values.observations[b] - self.observation_matrices @ values.predicted_mean[b]
+            innovation_cov = self.observation_matrices @ values.predicted_cov[b] @ self.observation_matrices.mT + self.observation_covariance
+
+            L = torch.linalg.cholesky(innovation_cov)
+            alpha = torch.cholesky_solve(innovation, L)
+
+            loglike += T * rank * log2pi \
+                + 2 * T * torch.sum(torch.log(torch.diagonal(L, axis1=-2, axis2=-1))) \
+                + torch.sum(innovation.mT @ alpha, axis=0)
+
+        return -0.5 * loglike 
+
     def _loglikelihood(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
-        """Calculate the log likelihood of the model given the sufficient statistics and current 
+        """Calculate the complete data log likelihood of the model given the sufficient statistics and current 
         parameters.
 
         Args:
@@ -267,7 +294,7 @@ class KalmanFilter(StateSpace):
             ell = torch.trace(ell) / 2
             _ll += ell
 
-            _ll += T * self.latent_dim * torch.log(2*PI)
+            _ll += T * self.augmented_dim * torch.log(2*PI)
             ll += _ll / 2
         return ll
 
@@ -357,12 +384,12 @@ class KalmanFilter(StateSpace):
         sz = tuple(int((es[1] - es[0]) / bin_size) for es in environment_size)
         if len(sz) == 1:
             sz = sz + (1,)
-        Z = hseu.make_ndgrid(environment_size, bin_size, indexing='xy')
+        Z = hseu.make_ndgrid(environment_size, bin_size, indexing='ij')
         cumulative_probabilities = torch.zeros((len(values.smoothed_mean),) + sz)
 
         for i in range(len(values.smoothed_mean)):
-            sm = values.smoothed_mean[i][:,:self.latent_dim]
-            sc = torch.atleast_2d(values.smoothed_cov[i][:,:self.latent_dim,:self.latent_dim])
+            sm = values.smoothed_mean[i][:,self.latent_dim:]
+            sc = torch.atleast_2d(values.smoothed_cov[i][:,self.latent_dim:,self.latent_dim:])
             cp = torch.zeros((sm.shape[0],)+sz)
             for t in range(sm.shape[0]):
                 L = torch.linalg.cholesky(sc[t])
@@ -384,7 +411,6 @@ class KalmanFilter(StateSpace):
             X: list[torch.Tensor],
             n_iter: int = 100, 
             emtol: float = 1e-3, 
-            checkpoint_path: Optional[str] = None,
             **maximization_args
         ) -> KalmanResults:
         """Expectation-Maximization (EM) algorithm for the state-space model.
@@ -393,7 +419,6 @@ class KalmanFilter(StateSpace):
             X (torch.Tensor): The observations to fit the model to. Each individual observation time-series can have variable length.
             n_iter (int, optional): The number of EM iterations to run. Defaults to 100.
             emtol (float, optional): The tolerance for the change in log-likelihood between iterations. Defaults to 1e-3.
-            checkpoint_path (Optional[str], optional): The path to save checkpoint files. Checkpoint files are deleted after a successful run. Defaults to None.
             **maximization_args: Keyword arguments to pass to the `_em` method.
 
         Returns:
@@ -412,36 +437,50 @@ class KalmanFilter(StateSpace):
 
         values = self._initialize(X)
 
-        if checkpoint_path is not None:
-            os.makedirs(checkpoint_path, exist_ok=True)
+        max_ll = -np.inf
+        max_epoch_conv = 0
 
         for i in range(n_iter):
+            # Perform EM
             with torch.no_grad():
                 values = self.filter(values)
                 values = self.smooth(values)
-            ll = self._maximize(
+                ll = self._observed_loglikelihood(values)
+                values.loglike.append(ll)
+
+            _=self._maximize(
                 values,
                 **maximization_args
             )
 
-            values.loglike.append(-ll)
             if not torch.isfinite(values.loglike[-1]):
                 print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
                 break
+
+            if ll > max_ll:
+                max_ll = ll
+                max_epoch_conv = 0
+            else:
+                max_epoch_conv += 1
+                if max_epoch_conv > 10:
+                    print(f"Log-likelihood did not increase for 10 epochs, stopping EM at iter {i}")
+                    print(f"Model decay: {self.decay.exp()}, Model diffusion: {self.diffusion.exp()}")
+                    break
 
             if i > 0 and abs((values.loglike[-1] - values.loglike[-2]) / values.loglike[-2]) < emtol:
                 print(f"Converged after {i} epochs, exiting")
                 break
 
             if i % 50 == 0:
-                print(f"Iteration {i}: {-ll.item()}")
-                if checkpoint_path:
-                    hseu.save_pickle(values, f"./{checkpoint_path}/model_values_epoch_{i}.pkl")
-                    hseu.save_pickle(self, f"./{checkpoint_path}/_model_epoch_{i}.pkl")
+                print(f"Iteration {i}: {ll.item()}")
 
         
         if i == n_iter - 1:
             warnings.warn(f"Failed to converge after {i} epochs, exiting")
+
+        with torch.no_grad():
+            values = self.filter(values)
+            values = self.smooth(values)
 
         stats = self._calc_sufficient_stats(values)
         values.loglike_full = self._loglikelihood(values, stats)

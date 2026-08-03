@@ -22,9 +22,9 @@
 - [ ] Ask Brad for Janni Open field 1,2 data
 
 ## Momentum model
-- [ ] Check coordinate systems for all incoming and internal data.
+- [x] Check coordinate systems for all incoming and internal data.
 - [ ] Simulate trajectory and spiking code to test model recovery
-- [ ] Double-check linear track data
+- [x] Double-check linear track data
 
 ## Circuit subspace model
 - [ ] Add covariance and mean scaling from sum of spikes spikes for replay sequences

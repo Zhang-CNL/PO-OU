@@ -13,8 +13,7 @@ def calculate_one_placefield(
         prior_beta_s: float,
         posterior: bool = True
     ) -> np.ndarray:
-    """
-    Calculate a place field from a position histogram and a spike histogram.
+    """Calculate a place field from a position histogram and a spike histogram.
 
     Args:
         position_hist (np.ndarray): Position histogram.
@@ -90,8 +89,11 @@ def calculate_placefields(
         velocity_cutoff: float = 5.0,
         flatten_linear: bool = False
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[int,...]]]:
-    """
-    Calculate place fields from position and spike data.
+    """Calculate place fields from position and spike data.
+    We want to use the 'ij' indexing convention for the place field data, meaning that
+    if we want to plot the place field using imshow, we must transpose it first.
+    In addition, given a set of points (x,y), indexing of a grid is performed like so:
+    grid[x,y].
 
     Args:
         run_position_data (nap.TsdFrame): X,Y, and delta time data.
@@ -141,7 +143,6 @@ def calculate_placefields(
         bins=(spatial_grid_x,spatial_grid_y),
         weights=dt
     )
-    position_hist = position_hist
 
     spike_hists  = np.zeros((ncells,nbx,nby))
     for cell_id in range(ncells):
@@ -152,7 +153,7 @@ def calculate_placefields(
         cell_y = spike_pos['y'].values[mask]
 
         if len(cell_x) > 0:
-            spike_hist ,_,_ = np.histogram2d(
+            spike_hist,_,_ = np.histogram2d(
                 cell_x,
                 cell_y,
                 bins=(spatial_grid_x,spatial_grid_y),
@@ -187,7 +188,7 @@ def calculate_placefields(
         if track_type == 'Linear':
             environment_size = [
                 (0, (len(xedges) - 1) * bin_size_cm),
-                (0, (len(yedges) - 1) * bin_size_cm)
+                (0, (len(yedges) - 1) * bin_size_cm),
             ]
         place_fields = np.zeros((ncells, nbx, nby))
         for cell_id in range(ncells):
