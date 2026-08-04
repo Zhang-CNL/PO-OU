@@ -39,8 +39,8 @@ def calculate_one_placefield(
     return place_field_smoothed
 
 def calculate_one_linear_placefield(
-        linear_spike_hist: np.ndarray,
         linear_position_hist: np.ndarray,
+        linear_spike_hist: np.ndarray,
         pf_gaussian_sd: float,
         prior_alpha_s: float,
         prior_beta_s: float,
@@ -66,7 +66,7 @@ def calculate_one_linear_placefield(
         place_field = linear_spike_hist_with_prior / linear_position_hist_with_prior_s
     else:
         with np.errstate(divide='ignore', invalid='ignore'):
-            place_field = linear_spike_hist[cell] / linear_position_hist
+            place_field = linear_spike_hist / linear_position_hist
             place_field[~np.isfinite(place_field)] = 0
 
     place_field = gaussian_filter1d(place_field, sigma=pf_gaussian_sd)
@@ -164,12 +164,12 @@ def calculate_placefields(
         xspan = x.max() - x.min()
         yspan = y.max() - y.min()
         if xspan >= yspan:
-            axis = 1
+            axis = 2
             environment_size = [
                 (0, (len(xedges) - 1) * bin_size_cm),
             ]
         else:
-            axis = 2
+            axis = 1
             environment_size = [
                 (0, (len(yedges) - 1) * bin_size_cm)
             ]
@@ -179,9 +179,12 @@ def calculate_placefields(
         place_fields = np.zeros_like(linear_spike_hist)
         for cell_id in range(ncells):
             place_fields[cell_id] = calculate_one_linear_placefield(
-                linear_spike_hist,
                 position_hist,
-                pf_gaussian_sd=pf_gaussian_sd,
+                linear_spike_hist[cell_id],
+                pf_gaussian_sd,
+                prior_alpha_s,
+                prior_beta_s,
+                posterior
             )
         place_fields = place_fields[...,None]
     else:
