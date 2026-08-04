@@ -1,4 +1,5 @@
 import os
+import uuid
 import sys 
 import time
 import json
@@ -68,10 +69,10 @@ def run_models_over_data(
     print(f"Completed momentum decoding. {end-start} seconds")
 
     smoothed_mean = [
-        sm[:,:2].numpy() for sm in momentum_decoded.smoothed_mean
+        sm[:,2:].numpy() for sm in momentum_decoded.smoothed_mean
     ]
     smoothed_cov = [
-        sc[:,:2,:2].numpy() for sc in momentum_decoded.smoothed_cov
+        sc[:,2:,2:].numpy() for sc in momentum_decoded.smoothed_cov
     ]
     sio.savemat(save_name,
         {
@@ -110,10 +111,16 @@ def main(
     with open(os.path.realpath(run_config), 'r') as f:
         parameters = json.loads(f.read())
 
+    profile_name = parameters.get("name", str(uuid.uuid4()))
+    results_path = os.path.join(results_path, profile_name)
+    os.makedirs(results_path, exist_ok=True)
+
+    with open(os.path.join(results_path, "config.json"), 'w') as f:
+        json.dump(parameters, f, indent=4)
+
     for rat in rats:
         rat_path = os.path.join(data_path, rat)
         for session in os.listdir(rat_path):
-            print(f"Started working on rat {rat}, session {session}")
             if rat == 'Naga' and session == 'Open1':
                 print("Missing LFP data for Naga Open1. Skipping.")
                 continue
@@ -121,15 +128,16 @@ def main(
                 print("Skipping Ettin. Too noisy.")
                 continue
 
-            results_dir = os.path.join(rat_path, session)
-            os.makedirs(results_dir, exist_ok=True)
-
             track_type = session[:-1]
             session_n  = int(session[-1])
             env_size   = None if track_type == 'Linear' else [(0,200),(0,200)]
 
             if track_type not in parameters.get("session_types", ["Linear", "Open"]):
                 continue
+
+            print(f"Started working on rat {rat}, session {session}")
+            results_dir = os.path.join(results_path, rat, session)
+            os.makedirs(results_dir, exist_ok=True)
 
             (
                 raw_data,
@@ -160,7 +168,7 @@ def main(
 
             try:
                 if not parameters.get("ignore_theta", False):
-                    theta_data = process_theta(
+                    theta_data = hse.process_theta(
                         raw_data,
                         place_field_data,
                         velocity_cutoff = parameters.get('velocity_cutoff', 10.0),
@@ -169,7 +177,7 @@ def main(
                     sio.savemat(
                         os.path.join(results_dir, 'theta_raw.mat'),
                         mdict = {
-                            'theta': asdict(theta_dict)
+                            'theta': asdict(theta_data)
                         },
                         do_compression=True
                     )
@@ -190,6 +198,7 @@ def main(
 
             try:
                 if not parameters.get("ignore_ripples", False):
+                    raise NotImplementedError("Ripple preprocessing not implemented yet.")
                     run_models_over_data(
                         os.path.join(results_dir, 'model_swr_results.mat'),
                         parameters,

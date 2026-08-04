@@ -1,4 +1,5 @@
 {
+    "name": "3ms_ripple",
     "ignore_theta" : true,
     "theta_args" : {
         "time_window_ms": 250
