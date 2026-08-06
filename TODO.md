@@ -8,7 +8,7 @@
         - [x] Assign an oscillation ID to each position
         - [x] Segments it into run segments 
         - [ ] Filters out segments that are too long (Check this? 160ms seems really short)
-        - [ ] Filter out non-monotonic phase cycles
+        - [x] Filter out non-monotonic phase cycles
         - [x] Count # spikes occuring in major/minor windows of theta
         - [x] Creates spikemats (T,N)
     - [ ] Theta sequence decoding error metrics

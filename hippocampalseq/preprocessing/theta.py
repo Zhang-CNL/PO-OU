@@ -12,6 +12,9 @@ class BimodalPhaseWindows:
     major_peak: tuple = (200, 70)
     minor_peak: tuple = (80, 190)
 
+def filter_nonmonotonic_cycles():
+    pass
+
 
 def extract_theta_segments(
         running_position: nap.TsdFrame,
@@ -106,7 +109,7 @@ def extract_theta_segments(
         )
 
         # Number the theta oscillations
-        phase_segment = phase[lfp_idx]
+        phase_segment = phase[lfp_idx].copy()
         crossings = (
             (phase_segment[:-1] < theta_starting_phase)
             & (phase_segment[1:] >= theta_starting_phase)
@@ -122,6 +125,13 @@ def extract_theta_segments(
 
         osc[last:] = oscillation_number
         oscillation_number += 1
+
+        # Check monotonicity of the phase segment
+        phase_segment[phase_segment <= theta_starting_phase] += 360
+        monotonic = np.all(np.diff(phase_segment) >= 0)
+
+        if not monotonic:
+            continue
 
         df = nap.TsdFrame(
             t=decoding_times,

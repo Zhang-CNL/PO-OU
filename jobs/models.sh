@@ -15,8 +15,7 @@ source $(conda info --base)/etc/profile.d/conda.sh
 
 RAT_NAMES=("Harpy" "Imp" "Janni")
 
-DATETIME=$(date +"%Y-%m-%d")
-RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/${DATETIME}"
+RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/"
 
 conda activate hippocampalswr
 # Runs each model and saves the processed data to {RESULTS_PATH}/{RAT_NAME}/{SESSION}
