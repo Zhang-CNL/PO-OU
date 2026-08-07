@@ -17,7 +17,7 @@ def plot_place_fields(
         filename: str = "place_fields.pdf"
     ):
     with PdfPages(os.path.join(results_path, filename)) as pdf:
-        for i in range(len(place_field_data.place_fields)):
+        for i,cell_id in enumerate(place_field_data.place_cell_ids):
             change_font_sizes(14, 14, 16)
             fig,ax = plt.subplots(1,2,figsize=(20,10), dpi=300)
             if track_type == 'Open':
@@ -41,7 +41,7 @@ def plot_place_fields(
                 raw_data.raw_position,
                 place_field_data.place_cell_ids, 
                 environment_size=esize,
-                cell_selection=[i],
+                cell_selection=[int(cell_id)],
                 ax=ax[1]
             )
             ax[1].set_ylabel("")

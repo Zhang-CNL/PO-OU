@@ -8,6 +8,7 @@ from typing import Any
 import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsep
 
+@hseio.register_type
 @dataclass
 class RawData:
     raw_position       : nap.TsdFrame
@@ -21,12 +22,14 @@ class RawData:
     lfp_data           : nap.TsdFrame
     environment_size   : list[tuple[int,...]]
 
+@hseio.register_type
 @dataclass 
 class PlaceFields: 
     place_fields   : np.ndarray
     place_cell_ids : np.ndarray
     position_hist  : np.ndarray
 
+@hseio.register_type
 @dataclass 
 class Theta:
     ground_truth      : list[nap.TsdFrame]
@@ -36,6 +39,7 @@ class Theta:
     trough_indices    : np.ndarray
     spikes_with_phase : dict[int, nap.TsdFrame]
 
+@hseio.register_type
 @dataclass
 class Replay:
     spikes : list[np.ndarray]

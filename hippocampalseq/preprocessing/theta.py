@@ -12,9 +12,31 @@ class BimodalPhaseWindows:
     major_peak: tuple = (200, 70)
     minor_peak: tuple = (80, 190)
 
-def filter_nonmonotonic_cycles():
-    pass
+def filter_nonmonotonic_runs(runs: list[nap.TsdFrame], theta_starting_phase: float=70.0) -> list[int]:
+    """Filter out runs whose phase is non-monotonic.
 
+    Args:
+        runs (list[nap.TsdFrame]): List of segmented runs to filter. 
+        theta_starting_phase (float, optional): Starting phase of theta sequence. Defaults to 70.0.
+
+    Returns:
+        (list[int]): List of indices of runs that are monotonic.
+    """
+    monotonic_run_idx = []
+    for i,run in enumerate(runs):
+        phase = run['Phase Deg'].values.copy()
+        osc_nums = run['Oscillation Number'].values
+        u_osc = np.unique(osc_nums)
+        monotonic = True
+        for i,osc in enumerate(u_osc):
+            segment = phase[osc_nums == osc]
+            segment[segment <= theta_starting_phase] += (i+1) * 360
+            if not np.all(np.diff(segment) > 0):
+                monotonic = False
+                break
+        if monotonic:
+            monotonic_run_idx.append(i)
+    return monotonic_run_idx
 
 def extract_theta_segments(
         running_position: nap.TsdFrame,
@@ -127,11 +149,21 @@ def extract_theta_segments(
         oscillation_number += 1
 
         # Check monotonicity of the phase segment
-        phase_segment[phase_segment <= theta_starting_phase] += 360
-        monotonic = np.all(np.diff(phase_segment) >= 0)
+        # last = 0
+        # monotonic = True
+        # for c in crossing_idx:
+        #     segment = phase_segment[last:c]
+        #     segment[segment <= theta_starting_phase] += 360
+        #     monotonic = np.all(np.diff(segment) >= 0)
+        #     if not monotonic:
+        #         break
+        #     last = c
+        
+        #phase_segment[phase_segment <= theta_starting_phase] += 360
+        #monotonic = np.all(np.diff(phase_segment) >= 0)
 
-        if not monotonic:
-            continue
+        #if not monotonic:
+        #    continue
 
         df = nap.TsdFrame(
             t=decoding_times,

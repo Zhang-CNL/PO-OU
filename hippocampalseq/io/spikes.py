@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pynapple as nap
 
-import hippocampalseq.utils as hseu
+from .files import read_mat
 from .metadata import *
 
 def load_spiking_data(
@@ -40,7 +40,7 @@ def load_spiking_data(
     if not os.path.exists(path):
         raise FileNotFoundError(f"{path} not found")
 
-    pos_mat = hseu.read_mat(os.path.join(path, 'Position_Data.mat'))
+    pos_mat = read_mat(os.path.join(path, 'Position_Data.mat'))
     raw_pos = pos_mat['Position_Data']
     
     time = raw_pos[:,0] # (Npos, 1)
@@ -48,7 +48,7 @@ def load_spiking_data(
     y    = raw_pos[:,2]
     hd   = raw_pos[:,3]
 
-    epoch_mat = hseu.read_mat(os.path.join(path, 'Epochs.mat'))
+    epoch_mat = read_mat(os.path.join(path, 'Epochs.mat'))
     if ripple_type == 'awake':
         rt = np.squeeze(epoch_mat['Run_Times']).astype(float)
     elif ripple_type == 'rem':
@@ -64,7 +64,7 @@ def load_spiking_data(
     starts = rt[:,0]
     ends   = rt[:,1]
 
-    spike_mat = hseu.read_mat(os.path.join(path, 'Spike_Data.mat'))
+    spike_mat = read_mat(os.path.join(path, 'Spike_Data.mat'))
     spikes = spike_mat['Spike_Data']
 
     # (Nspikes,1)
@@ -75,7 +75,7 @@ def load_spiking_data(
     excitatory_neurons = spike_mat['Excitatory_Neurons'].astype(int) - 1
     inhibitory_neurons = spike_mat['Inhibitory_Neurons'].astype(int) - 1
 
-    ripple_mat = hseu.read_mat(os.path.join(path, 'Ripple_Events.mat'))
+    ripple_mat = read_mat(os.path.join(path, 'Ripple_Events.mat'))
     ripples    = ripple_mat['Ripple_Events']
 
     ripple_starts = ripples[:,0]

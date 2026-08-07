@@ -295,8 +295,8 @@ class KalmanFilter(StateSpace):
             _ll += ell
 
             _ll += T * self.augmented_dim * torch.log(2*PI)
-            ll += _ll / 2
-        return ll
+            ll += _ll
+        return -ll / 2
 
     def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         return torch.atleast_2d(torch.mean(torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean]), axis=0))

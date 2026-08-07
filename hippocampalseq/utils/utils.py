@@ -1,10 +1,5 @@
-import os
-import mat73 
-import scipy.io as sio
 import numpy as np
-import numpy.typing as npt
 import pynapple as nap
-import compress_pickle
 import torch
 from typing import Any 
 from collections.abc import Callable, Iterable
@@ -52,29 +47,6 @@ def create_interval_mask(length: int, starts: np.ndarray, ends: np.ndarray) -> n
     np.add.at(mask, ends, -1)
     return np.cumsum(mask)[:-1] > 0
 
-def save_tsg_mat(file_path, data, **kwargs):
-    out_dict = {}
-    for key in data.keys():
-        out_dict[str(key)] = data[key]
-    sio.savemat(file_path, out_dict, **kwargs)
-
-def save_pickle(data: Any, fname: str):
-    s = compress_pickle.dumps(data, "gzip")
-    with open(fname, 'wb') as f:
-        f.write(s)
-
-def read_pickle(fname: str):
-    with open(fname, 'rb') as f:
-        raw = f.read()
-    return compress_pickle.loads(raw, "gzip")
-
-def read_mat(file: str) -> dict[str, Any]:
-    if not os.path.exists(file):
-        raise FileNotFoundError(f"{file} not found, make sure you have the complete dataset.")
-    try:
-        return mat73.loadmat(file)
-    except:
-        return sio.loadmat(file, squeeze_me=True, struct_as_record=False)
 
 def extract_times_from_boolean(mask: np.ndarray, run_times: np.ndarray):
     b = np.asarray(mask, dtype=bool)

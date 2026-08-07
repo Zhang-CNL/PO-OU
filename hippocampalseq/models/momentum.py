@@ -163,15 +163,17 @@ class Momentum(KalmanFilter):
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
-        $$U(N_x,N_y) \approx \mathcal{N}\left(
+        $$P(z_1) = U(N_x,N_y) \approx \mathcal{N}\left(
             \begin{bmatrix}N_x/2 \\ N_y/2\end{bmatrix},
             \begin{bmatrix}N_x^2/12 & 0 \\ 0 & N_y^2/12
             \end{bmatrix}\right)$$
+
+        The prior for the velocity is a stationary OU process prior:
+            $$P(v_1) = \mathcal{N}(v_1|0, \sigma^2 / (2\lambda))$$
         Returns:
             (torch.Tensor): Prior mean for augmented state $[z_t; z_{t-1}]^T$
             (torch.Tensor): Prior covariance for augmented state
         """
-        # $z_2 = I z_1 + \sigma_0^2dt\xi_1$
         diffs = torch.tensor([es[1] + es[0] for es in self.environment_size])
         starts = torch.tensor([es[0] for es in self.environment_size])
         init_mean_z = (diffs / 2 + starts)[:,None]
@@ -210,7 +212,7 @@ class Momentum(KalmanFilter):
         matrix has the form $$\begin{bmatrix}0_2 & I_2\end{bmatrix}$$
         """
         I = torch.eye(self.obs_dim)
-        Z = torch.zeros(self.obs_dim, self.obs_dim)
+        Z = torch.zeros(self.obs_dim, self.latent_dim)
         H = torch.hstack((Z, I))
         R = self.approximate_covariance
         return H,R
@@ -292,7 +294,7 @@ class Momentum(KalmanFilter):
         return -0.5 * loglike.squeeze()
 
     def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
-        r"""Calculate the log-likelihood for the model given the current state.
+        r"""Calculate the full-data log-likelihood for the model given the current state.
 
         Args:
             values (MomentumResults): The current decoded values for hidden states.
@@ -359,7 +361,7 @@ class Momentum(KalmanFilter):
             _loglike += ell
 
             loglike += _loglike
-        return loglike / 2.0
+        return -loglike / 2.0
 
     def _solve_parameters(
             self, 
@@ -401,8 +403,7 @@ class Momentum(KalmanFilter):
             sig   = torch.exp(diffusion)
             M     = 1 - lmb * self.dt 
             sigma = sig**2 * self.dt
-            #v0    = sig**2 / (2 * lmb)
-            v0 = sigma / (1 - M**2)
+            v0    = sigma / (1 - M**2)
 
             total_loss = 0
             for i in range(n_batches):

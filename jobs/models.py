@@ -8,11 +8,11 @@ import traceback
 sys.path.append(os.path.realpath(".."))
 
 import numpy as np
-import scipy.io as sio
 from dataclasses import asdict
 from typing import Any
 
 import hippocampalseq as hse
+import hippocampalseq.utils as hseu
 import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsepp
 import hippocampalseq.models as hsem
@@ -22,13 +22,12 @@ def save_raw_data(
         raw_data: hse.RawData,
         place_field_data: hse.PlaceFields,
     ):
-    sio.savemat(
+    hseu.save_to_mat(
         save_name,
         {
-            'raw_data'         : asdict(raw_data),
-            'place_field_data' : asdict(place_field_data),
-        },
-        do_compression = True
+            'raw_data'         : raw_data,
+            'place_field_data' : place_field_data
+        }
     )
 
 def run_models_over_data(
@@ -74,7 +73,7 @@ def run_models_over_data(
     smoothed_cov = [
         sc[:,2:,2:].numpy() for sc in momentum_decoded.smoothed_cov
     ]
-    sio.savemat(save_name,
+    hseu.save_to_mat(save_name,
         {
             'dt'               : dt,
             'environment_size' : environment_size,
@@ -86,13 +85,12 @@ def run_models_over_data(
             'momentum': {
                 'trajectory' : smoothed_mean,
                 'cov'        : smoothed_cov,
-                'cumprob'    : momentum_decoded.cumulative_probabilities.numpy(),
+                'cumprob'    : momentum_decoded.cumulative_probabilities,
                 'loglike'    : momentum_decoded.loglike_full,
                 'aic'        : momentum_decoded.aic,
                 'bic'        : momentum_decoded.bic
             }
-        },
-        do_compression=True
+        }
     )
 
 @click.command()
@@ -121,12 +119,12 @@ def main(
     for rat in rats:
         rat_path = os.path.join(data_path, rat)
         for session in os.listdir(rat_path):
-            if rat == 'Naga' and session == 'Open1':
-                print("Missing LFP data for Naga Open1. Skipping.")
-                continue
-            if rat == 'Ettin':
-                print("Skipping Ettin. Too noisy.")
-                continue
+            # if rat == 'Naga' and session == 'Open1':
+            #     print("Missing LFP data for Naga Open1. Skipping.")
+            #     continue
+            # if rat == 'Ettin':
+            #     print("Skipping Ettin. Too noisy.")
+            #     continue
 
             track_type = session[:-1]
             session_n  = int(session[-1])
@@ -174,12 +172,9 @@ def main(
                         velocity_cutoff = parameters.get('velocity_cutoff', 10.0),
                         theta_kwargs    = parameters.get('theta_args', {})
                     )
-                    sio.savemat(
+                    hseu.save_to_mat(
                         os.path.join(results_dir, 'theta_raw.mat'),
-                        mdict = {
-                            'theta': asdict(theta_data)
-                        },
-                        do_compression=True
+                        theta_data
                     )
                     run_models_over_data(
                         os.path.join(results_dir, 'model_theta_results.mat'),
@@ -188,7 +183,7 @@ def main(
                         theta_data.spikes,
                         parameters.get('theta_time_window_ms', 60.0) / 1000,
                         int(parameters.get('bin_size_cm', 2)),
-                        env_size
+                        raw_data.environment_size
                     )
             except Exception as e:
                 print(traceback.format_exc(), file=sys.stderr)
@@ -206,7 +201,7 @@ def main(
                         ripple_data.spikes,
                         parameters.get('ripple_time_window_ms', 5.0)/1000,
                         int(parameters.get('bin_size_cm', 2)),
-                        env_size
+                        raw_data.environment_size
                     )
             except Exception as e:
                 print(traceback.format_exc(), file=sys.stderr)

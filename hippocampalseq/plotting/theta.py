@@ -33,7 +33,7 @@ def plot_theta_lfp_segment(
     fig,ax = plt.subplots(2,1, figsize=(12,5), dpi=300, sharex=True)
     ax[0].plot(tseg, lfp_seg, linewidth=0.5)
     ax[0].set_ylabel(r"Theta-filtered LFP ($\mu$V)")
-    ax[0].set_title("Theta segment" + "with trough markers" if plot_trough_markers else "")
+    ax[0].set_title("Theta segment" + " with trough markers" if plot_trough_markers else "")
 
     ax[1].plot(tseg, phi_seg, linewidth=0.5)
     ax[1].set_ylabel("Phase (deg)")

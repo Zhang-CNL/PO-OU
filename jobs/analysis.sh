@@ -2,7 +2,7 @@
 #SBATCH --job-name=hippocampalseq_analysis
 #SBATCH --partition=256GBv2
 #SBATCH --nodes=1
-#SBATCH --array=0-3
+#SBATCH --array=0-2
 #SBATCH --ntasks=1
 #SBATCH --time=20-00:00:00                                 # run time, format: D-H:M:S (max wallclock time)
 #SBATCH --output=../logs/pipeline.%j.log
@@ -13,10 +13,9 @@
 module load python/3.13.0
 source $(conda info --base)/etc/profile.d/conda.sh
 
-RAT_NAMES=("Harpy" "Imp" "Janni" "Naga")
+RAT_NAMES=("Harpy" "Imp" "Janni")
 
-DATETIME=$(date +"%Y-%m-%d")
-RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/${DATETIME}"
+RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/"
 
 conda activate hippocampalswr
 # Runs each model and saves the processed data to {RESULTS_PATH}/{RAT_NAME}/{SESSION}
