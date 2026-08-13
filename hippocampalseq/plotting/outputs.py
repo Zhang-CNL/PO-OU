@@ -1,5 +1,6 @@
 import os 
 import pynapple as nap
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -20,22 +21,23 @@ def plot_place_fields(
         for i,cell_id in enumerate(place_field_data.place_cell_ids):
             change_font_sizes(14, 14, 16)
             fig,ax = plt.subplots(1,2,figsize=(20,10), dpi=300)
-            if track_type == 'Open':
-                ax[0].set_title(f"Place cell {i}")
-                plot_open_placefields(
-                    place_field_data.place_fields,
-                    pfs=[i],
-                    show_titles=False,
-                    ax=ax[0],
-                )
-                esize = (0,0,200,200)
-            elif track_type == 'Linear':
+            ax[0].set_title(f"Place cell {i}")
+            if track_type == 'Linear' and place_field_data.place_fields.shape[-1] == 1:
                 plot_linear_placefields(
                     place_field_data.place_fields,
                     pfs=[i],
                     ax=ax[0]
                 )
-                esize=None
+                esize= None
+            else:
+                plot_open_placefields(
+                        place_field_data.place_fields,
+                        pfs=[i],
+                        show_titles=False,
+                        ax=ax[0],
+                    )
+                esize = [(0,200),(0,200)]
+
             plot_spikemat_position_aligned(
                 raw_data.running_spike_info,
                 raw_data.raw_position,

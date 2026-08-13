@@ -1,6 +1,8 @@
 #!/bin/bash
 
+rm ../logs/*.log
+
 #sbatch ./models.sh --run-config ./profiles/ripple_profile.json
-sbatch ./models.sh --run-config ./profiles/theta_profile1.json
-sbatch ./models.sh --run-config ./profiles/theta_profile2.json
-sbatch ./models.sh --run-config ./profiles/theta_profile3.json
+for i in {1..6}; do
+    sbatch ./models.sh --run-config ./profiles/theta_profile${i}.json
+done

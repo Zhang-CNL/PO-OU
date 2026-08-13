@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pynapple as nap
 from collections.abc import Iterable
+from scipy.ndimage import gaussian_filter1d
 
 import hippocampalseq.utils as hseu
 from .core import save_wrapper
@@ -189,4 +190,102 @@ def plot_cell_phase_polar(
 
     plt.tight_layout()
     plt.show()
+    return fig
+
+@save_wrapper
+def plot_across_session_decoding_hist(
+        decoding_distribution: np.ndarray, 
+        foward_window: tuple[int,int] = (260, 60), 
+        reverse_window: tuple[int,int] = (80,230),
+        phase_bin: float = 10, 
+        position_bin: float = 2
+    ):
+    npos = decoding_distribution.shape[0]
+    pbin = int(round(360/phase_bin))
+
+    decoding_distribution = np.concat((decoding_distribution, decoding_distribution), axis=1)
+
+    fwd_start_col = int(round(forward_window[0] / phase_bin))
+    fwd_end_col = int(round(forward_window[1] / phase_bin))
+    if forward_window[1] < forward_window[0]:
+        fwd_end_col += pbin
+
+    rev_start_col = int(round(reverse_window[0] / phase_bin))
+    rev_end_col = int(round(reverse_window[1] / phase_bin))
+    if reverse_window[1] < reverse_window[0]:
+        rev_end_col += pbin
+
+    fwd_argmax = decoding_distribution[:, fwd_start_col:fwd_end_col].argmax(axis=0)
+    rev_argmax = decoding_distribution[:, rev_start_col:rev_end_col].argmax(axis=0)
+    
+    # Fit line to forward and reverse windows
+    fwd_xcols = np.arange(fwd_start_col, fwd_end_col)
+    rev_xcols = np.arange(rev_start_col, rev_end_col)
+    fwd_slopebin,fwd_intercept_bin = np.polyfit(fwd_xcols, fwd_argmax, 1)
+    rev_slopbin,rev_intercept_bin = np.polyfit(rev_xcols, rev_argmax, 1)
+    fwd_line = fwd_slopebin * fwd_xcols + fwd_intercept_bin
+    rev_line = rev_slopbin * rev_xcols + rev_intercept_bin
+
+    fwd_line_deg = fwd_slopebin * position_bin / pbin
+    rev_line_deg = rev_slopbin * position_bin / pbin
+
+    
+    fig,axs = plt.subplots(2,1,
+                figsize=(12,8),
+                sharex=True,
+                gridspec_kw={'height_ratios': [3,1]}
+            )
+
+    mid = npos // 2
+    posextent = (-mid * position_bin, (npos - 1 - mid) * position_bin)
+    phaseextent = (0, decoding_distribution.shape[1] * phase_bin)
+
+    im = axs[0].imshow(
+        decoding_distribution,
+        aspect='auto',
+        origin='lower',
+        cmap='hot',
+        extent=posextent + phaseextent,
+        interpolation='nearest',
+        vmin=0,
+        vmax=decoding_distribution.max()
+    )
+
+    fwd_xdeg = fwd_xcols * pbin + pbin / 2
+    rev_xdeg = rev_xcols * pbin + pbin / 2
+    fwd_fit_cm = (fwd_line - mid) * position_bin
+    rev_fit_cm = (rev_line - mid) * position_bin
+
+    ax[0].plot(fwd_xdeg, fwd_fit_cm, 'c--', linewidth=2.5, 
+                label=fr"Forward sweep: {fwd_line_deg:+.3f} cm/$^\circ$")
+    ax[0].plot(rev_xdeg, rev_fit_cm, 'c--', linewidth=2.5,
+                label=fr"Reverse sweep: {rev_line_deg:+.3f} cm/$^\circ$")
+
+    window_degs = (foward_window[0], reverse_window[0], forward_window[0]+360, reverse_window[0]+360)
+    for deg in window_degs:
+        ax[0].axvline(deg, color='white', linestyle='--', linewidth=1, alpha=.7)
+
+    ax[0].set_ylabel("Decoded position\n relative to rat (cm)", fontsize=11)
+    ax[0].set_xlim(0, decoding_distribution.shape[1] * pbin)
+    ax[0].set_ylim(*posextent)
+    ax[0].legend(loc='upper right', fontsize=9, framealpha=0.85)
+    ax[0].set_title('Linear Track: pooled peak posterior distribution\n'
+                    'Cyan = best-fit sweep direction; White = window boundaries',
+                    fontsize=11)
+    plt.colorbar(im, ax=ax[0], label='Normalized probability', pad=.02)
+
+    # Plot smoothed MAP trace
+    max_p = gaussian_filter2d(decoding_distribution.max(axis=0), sigma=1.0)
+    phase_deg = np.arange(decoding_distribution.shape[1]) * pbin + pbin / 2
+    ax[1].plot(phase_deg, max_p, 'ko-', linewidth=2, markersize=4, markerfacecolor='black')
+    for deg in window_degs:
+        ax[1].axvline(deg, color='gray', linestyle='--', linewidth=1, alpha=.5)
+
+    ax[1].set_xlabel(r'Theta phase ($^\circ$)', fontsize=11)
+    ax[1].set_ylabel("Max\nposterior", fontsize=11)
+    ax[1].set_xlim(0, decoding_distribution.shape[1] * pbin)
+    ax[1].set_xticks(np.arange(0, 721, 90))
+
+    plt.tight_layout()
+
     return fig

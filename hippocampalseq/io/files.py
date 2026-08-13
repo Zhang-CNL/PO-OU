@@ -156,14 +156,15 @@ def _to_mat_dict(obj: object):
         return np.array([_to_mat_dict(v) for v in obj], dtype=object)
 
     if isinstance(obj, dict):
+        values = np.empty(len(obj), dtype=object)
+        for i,v in enumerate(obj.values()):
+            values[i] = _to_mat_dict(v)
         return {
             "type": "dict",
             "keys": np.asarray([
                 k for k in obj.keys()
             ], dtype=object),
-            "values": [
-                _to_mat_dict(v) for v in obj.values()
-            ],
+            "values": values,
         }
 
     if isinstance(obj, pd.DataFrame):
@@ -256,3 +257,54 @@ def load_from_mat(file_path: str):
     }
 
     return _reconstruct_from_mat(mat)
+
+def _py2mat(obj):
+    if isinstance(obj, dict):
+        return {
+            k: _py2mat(v)
+            for k, v in obj.items()
+        }
+    else:
+        data = compress_pickle.dumps(obj, "gzip")
+        return np.frombuffer(data, dtype=np.uint8)
+
+def save_to_mat2(file_path: str, dataclass: dict):
+    """Save a dict to a file. Preserves all type metadata by 
+    compressing everything as a python pickle file.
+    """
+
+    sio.savemat(
+        file_path,
+        _py2mat(dataclass),
+        do_compression=True,
+        long_field_names=True
+    )
+
+def _mat2py(obj):
+    if isinstance(obj, dict):
+        return {
+            k: _mat2py(v)
+            for k, v in obj.items()
+        }
+    else:
+        data = obj.tobytes()
+        return compress_pickle.loads(data, "gzip")
+
+def load_from_mat2(file_path: str):
+    """Load a dict from a file. Uncompresses the python pickle data.
+    Works with files from `save_to_mat2`.
+    """
+    mat = read_mat(
+        file_path,
+    )
+    mat = {
+        k: _mat_to_python(v)
+        for k, v in mat.items()
+        if not k.startswith("__")
+    }
+    mat = {
+        k: _mat2py(v)
+        for k, v in mat.items()
+        if not k.startswith("__")
+    }
+    return mat

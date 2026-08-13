@@ -41,21 +41,21 @@ def save_wrapper(func):
     def wrapper(*args, file_path: str=None, file_name: str|list[str]=None, **kwargs):
         __init_plotting() 
         res = func(*args, **kwargs)
-        if res is not None and not isinstance(res, list):
+        if res is not None and not isinstance(res, (list, tuple)):
             res = [res]
-        if file_name is not None and len(res) > 0:
-            if file_path is None:
-                file_path = "./results/"
-            if not os.path.exists(file_path):
-                os.makedirs(file_path)
-            if ".pdf" in file_name:
-                with PdfPages(os.path.join(file_path, file_name)) as pdf:
-                    for fig in res:
-                        pdf.savefig(fig)
-            else:
-                for i,fig in enumerate(res):
-                    fn = str(i) + file_name if i > 0 else file_name
-                    fig.savefig(os.path.join(file_path, fn))
+            if file_name is not None and len(res) > 0:
+                if file_path is None:
+                    file_path = "./results/"
+                if not os.path.exists(file_path):
+                    os.makedirs(file_path)
+                if ".pdf" in file_name:
+                    with PdfPages(os.path.join(file_path, file_name)) as pdf:
+                        for fig in res:
+                            pdf.savefig(fig)
+                else:
+                    for i,fig in enumerate(res):
+                        fn = str(i) + file_name if i > 0 else file_name
+                        fig.savefig(os.path.join(file_path, fn))
         return res
     return wrapper
 

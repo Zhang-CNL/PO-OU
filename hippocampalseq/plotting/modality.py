@@ -189,6 +189,7 @@ def plot_modality_classification(
     plt.tight_layout()
     return fig
 
+@save_wrapper
 def plot_modality_all_cells(
         firing_rate_per_phase: dict[int,Any], 
         modality_results: dict[int,Any], 
@@ -269,6 +270,7 @@ def plot_modality_all_cells(
 
     return figures
 
+@save_wrapper
 def plot_place_field_comparison(
         unimodal_props: dict[str,list], 
         bimodal_props: dict[str,list], 
@@ -336,6 +338,7 @@ def plot_place_field_comparison(
     return fig
 
 
+@save_wrapper
 def plot_unimodal_bimodal_summary(
         modality_results: dict[int,Any], 
         population_stats: dict[int,Any],

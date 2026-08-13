@@ -296,6 +296,10 @@ def classify_place_cell_modality(
         min_contiguous_bins: int = 20
     ): 
 
+    if place_fields.ndim < 3:
+        place_fields = place_fields[...,np.newaxis]
+    if position_histogram.ndim < 2:
+        position_histogram = position_histogram[:,np.newaxis]
     # 8-connectivity structure like in MATLAB's grayconnected
     eight_conn = np.ones((3,3), dtype=int)
     cell2idx = {cid: k for k,cid in enumerate(place_cell_ids)}

@@ -297,3 +297,85 @@ def rayleightest(X: np.ndarray, axis: int|None = None) -> np.ndarray|float:
 
     pval = np.exp(-z) * tmp
     return pval
+
+def imtranslate(
+        arr: np.ndarray, 
+        shift_y: np.ndarray, 
+        shift_x: np.ndarray,
+        fill_with: float = 0.0
+    ) -> np.ndarray:
+    """Translates decoded position by (x,y). Tries to replicate the 
+    MATLAB version as closely as possible.
+    """
+    ny, nx = arr.shape
+    out = np.zeros_like(arr)
+    if fill_width != 0.0:
+        out[:,:] = fill_with
+
+    # src = source array from decoding
+    # dst = destination after shifting
+    # start indices
+    src_y0 = max(0, -shift_y)
+    dst_y0 = max(0,  shift_y)
+    src_x0 = max(0, -shift_x)
+    dst_x0 = max(0,  shift_x)
+
+    # Height/width of overlapping region
+    h = min(ny - src_y0, ny - dst_y0)
+    w = min(nx - src_x0, nx - dst_x0)
+    if h <= 0 or w <= 0:
+        return out  # everything shifted out of frame
+    out[dst_y0:dst_y0 + h, dst_x0:dst_x0 + w] = arr[src_y0:src_y0 + h, src_x0:src_x0 + w]
+    return out
+
+def resize_axis(arr: np.ndarray, target_size: int, axis: int) -> np.ndarray:
+        current_size = arr.shape[axis]
+        size_diff = target_size - current_size
+        if size_diff == 0:
+            return arr
+        if size_diff > 0:
+            # Pad
+            pre = size_diff // 2
+            post = size_diff - pre
+
+            pad_width = [(0, 0)] * arr.ndim
+            pad_width[axis] = (pre, post)
+
+            return np.pad(
+                arr,
+                pad_width,
+                mode="constant",
+                constant_values=0.0,
+            )
+        # Crop
+        size_diff = -size_diff
+        pre = size_diff // 2
+        post = size_diff - pre
+
+        start = pre
+        end = current_size - post
+        slices = [slice(None)] * arr.ndim
+        slices[axis] = slice(start, end)
+        return arr[tuple(slices)]
+
+def imresize(arr: np.ndarray, decoded_data_size: int|tuple[int,int]) -> np.ndarray:
+    """Resizes a given image. Pads extra edges with 0s. Crops if it's smaller.
+
+    Args:
+        arr (np.ndarray): (N,M) sized image array.
+        decoded_data_size (int|tuple[int,int]): Size to resize the image to.
+
+    Returns:
+        (np.ndarray): Resized new image.
+    """
+    if isinstance(decoded_data_size, int):
+        decoded_data_size = (decoded_data_size,)*2
+    return resize_axis(
+        resize_axis(
+            arr, 
+            decoded_data_size[0], 
+            axis=0
+        ),
+        decoded_data_size[1],
+        axis=1
+    )

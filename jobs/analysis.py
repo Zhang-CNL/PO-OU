@@ -4,6 +4,7 @@ import sys
 import json 
 sys.path.append(os.path.realpath("..")) # Add hippocampalseq to path
 
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -22,10 +23,10 @@ def raw_analysis(results_path, track_type, raw_data):
         track_type,
         results_path
     ) 
-    hsepl.plot_trajectories_with_velocity(
+    hsepl.plot_trajectory_with_velocity(
         raw_data.raw_position[['x','y']].values,
         raw_data.raw_position['Velocity'].values,
-        raw_data.environment_size,
+        raw_data.environment_size if track_type == 'Open' else None,
         file_path=results_path,
         file_name="true_trajectories.pdf"
     )
@@ -36,17 +37,18 @@ def raw_analysis(results_path, track_type, raw_data):
         file_name="lfp_data.pdf"
     )
     
-    hsepl.plot_session_stitching(
-        raw_data.running_position,
-        raw_data.running_spikes,
-        file_path=results_path,
-        file_name="session_stitching.pdf"
-    )
+    if len(raw_data.environment_size) == 1:
+        hsepl.plot_session_stitching(
+            raw_data.running_position,
+            raw_data.running_spikes,
+            file_path=results_path,
+            file_name="session_stitching.pdf"
+        )
 
-def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
+def theta_analysis(results_path, track_type, raw_data, theta_data, model_results, parameters):
     place_field_data = raw_data['place_field_data']
     raw_data = raw_data['raw_data']
-    theta_data = theta_data
+    theta_data = theta_data['theta_data']
 
     total_duration = raw_data.raw_position.time_support.tot_length('s')
     velocity_cutoff = parameters.get('velocity_cutoff', 10.0)
@@ -57,7 +59,7 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         velocity_cutoff
     )
 
-    modality_results = hsea.calculate_modality(
+    modality_results = hsea.classify_theta_modality(
         firing_rate_per_phase,
         theta_data.spikes_with_phase
     )
@@ -108,6 +110,7 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         file_path=results_path,
         file_name="modality_all_cells.pdf"
     )
+    plt.close()
 
     hsepl.plot_place_field_comparison(
         unimodal_cells,
@@ -115,6 +118,7 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         file_path=results_path,
         file_name="place_field_comparison.pdf"
     )
+    plt.close()
 
     hsepl.plot_unimodal_bimodal_summary(
         modality_results,
@@ -126,6 +130,7 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         file_path=results_path,
         file_name="unimodal_bimodal_summary.pdf"
     )
+    plt.close()
 
     hsepl.plot_modality_overlay(
         population_stats, 
@@ -133,12 +138,14 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         file_path=results_path,
         file_name="modality_overlay.pdf"
     )
+    plt.close()
 
     hsepl.plot_modality_pie(
         modality_results,
         file_path=results_path,
         file_name="modality_pie.pdf"
     )
+    plt.close()
 
     hsepl.plot_theta_phase_assignment(
         theta_data.spikes_with_phase,
@@ -149,12 +156,14 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         file_path=results_path,
         file_name="theta_phase_assignment.pdf"
     )
+    plt.close()
 
     hsepl.plot_cell_phase_polar(
         theta_data.spikes_with_phase,
         file_path=results_path,
         file_name="cell_phase_polar.pdf"
     )
+    plt.close()
 
     hsepl.plot_theta_lfp_segment(
         theta_data.lfp_data,
@@ -164,12 +173,88 @@ def theta_analysis(results_path, track_type, raw_data, theta_data, parameters):
         file_path=results_path,
         file_name="theta_lfp_segment.pdf"
     )
+    plt.close()
 
     hsepl.plot_theta_cycle_dist(
         theta_data.lfp_data,
         file_path=results_path,
         file_name="theta_cycle_dist.pdf"
     )
+    plt.close()
+
+    environment_size = raw_data.environment_size
+    map_decoded = model_results['map']
+    momentum_decoded = model_results['momentum']
+    with PdfPages(os.path.join(results_path, "model_results.pdf")) as pdf:
+        for i in range(len(theta_data.ground_truth)):
+            fig = plt.figure(dpi=300)
+            gt = theta_data.ground_truth[i]
+            if track_type == 'Linear' and len(environment_size) == 1:
+                    max_axis = 'x' if (np.max(gt['x']) - np.min(gt['x'])) > (np.max(gt['y']) - np.min(gt['y'])) else 'y'
+                    true_trajectory = gt[max_axis].values
+            else:
+                true_trajectory = gt[['x', 'y']].values
+            
+            plt.subplot(3,2,1)
+            hsepl.plot_trajectories(
+                true_trajectory,
+                environment_size=environment_size
+            )
+            plt.title("True trajectory")
+            plt.subplot(3,2,2)
+            times = gt.index.values
+            sampling = parameters.get('theta_args')['time_window_ms'] / 1000
+            times1 = np.arange(times[0], times[-1]+10*sampling, sampling)[:len(map_decoded['trajectory'][i])]
+            hsepl.plot_trajectories(
+                {
+                    "True trajectory": true_trajectory,
+                    "MAP": map_decoded['trajectory'][i],
+                    "Momentum": momentum_decoded['trajectory'][i]
+                },
+                [
+                    times,
+                    times1,
+                    times1
+                ],
+                environment_size=environment_size
+            )
+            plt.title("All trajectories")
+            plt.subplot(3,2,3)
+            hsepl.plot_trajectories(
+                map_decoded['trajectory'][i],
+                environment_size=environment_size
+            )
+            plt.title("MAP trajectory")
+            plt.subplot(3,2,4)
+            cumprob = map_decoded['cumprob'][i]
+            if cumprob.ndim < 2:
+                cumprob = cumprob[...,None]
+            plt.imshow(
+                cumprob.T,
+                origin='lower',
+                cmap='hot'
+            )
+            plt.title("MAP cumulative probability")
+            plt.subplot(3,2,5)
+            hsepl.plot_trajectories(
+                momentum_decoded['trajectory'][i],
+                environment_size=environment_size
+            )
+            plt.title(f"Momentum trajectory.\nAIC: {momentum_decoded['aic']:.2f}, BIC: {momentum_decoded['bic']:.2f}")
+            plt.subplot(3,2,6)
+            cumprob = momentum_decoded['cumprob'][i]
+            if cumprob.ndim < 2:
+                cumprob = cumprob[...,None]
+            plt.imshow(
+                cumprob.T,
+                origin='lower',
+                cmap='hot'
+            )
+            plt.title("Momentum cumulative probability")
+            plt.tight_layout()
+            pdf.savefig(fig)
+            plt.close(fig)
+
 
 def replay_analysis(results_path, track_type, raw_data, replay_data, parameters):
     pass
@@ -189,6 +274,7 @@ def main(
         parameters = json.loads(f.read())
 
     profile_name = parameters.get("name", profile_name)
+    print(profile_name)
     results_path = os.path.join(results_path, profile_name)
 
     for rat in rats:
@@ -197,30 +283,37 @@ def main(
             results_dir = os.path.join(rat_path, session)
             track_type = session[:-1]
             session_n  = int(session[-1])
+            print(f"Analyzing {rat} {track_type} {session_n}")
 
-            raw_data = hseu.load_from_mat(
+            raw_data = hseio.load_from_mat2(
                 os.path.join(results_dir, 'raw_data.mat')
             )
+
             raw_analysis(
                 results_dir,
                 track_type,
                 raw_data
             )
 
-            theta_path = os.path.join(results_dir, 'model_theta_results.mat')
-            if os.path.exists(theta_path):
-                theta_data = hseu.load_from_mat(theta_path)
+            theta_path = os.path.join(results_dir, 'theta_raw.mat')
+            model_results_path = os.path.join(results_dir, 'model_theta_results.mat')
+            if os.path.exists(model_results_path) and os.path.exists(theta_path):
+                model_results = hseio.load_from_mat2(model_results_path)
+                theta_data = hseio.load_from_mat2(theta_path)
                 theta_analysis(
                     results_dir,
                     track_type,
                     raw_data,
                     theta_data,
+                    model_results,
                     parameters
                 )
 
-            replay_path = os.path.join(results_dir, 'model_swr_results.mat')
-            if os.path.exists(replay_path):
-                replay_data = hseu.load_from_mat(replay_path)
+            replay_path = os.path.join(results_dir, 'replay_data.mat')
+            model_results_path = os.path.join(results_dir, 'model_swr_results.mat')
+            if os.path.exists(model_results_path) and os.path.exists(replay_path):
+                model_results = hseio.load_from_mat2(model_results_path)
+                replay_data = hseio.load_from_mat2(replay_path)
                 replay_analysis(
                     results_dir,
                     track_type,
@@ -229,7 +322,7 @@ def main(
                     parameters
                 )
                 
-
+    print("Job completed")
 
 
 if __name__ == '__main__':

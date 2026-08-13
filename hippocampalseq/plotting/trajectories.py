@@ -7,6 +7,7 @@ from .core import save_wrapper, colored_line
 
 def _plot_trajectories1d(
         trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray,
+        t: np.ndarray|None = None,
         ax=None,
         **plot_kwargs
     ):
@@ -14,17 +15,22 @@ def _plot_trajectories1d(
         trajectories = [trajectories]
     if ax is None:
         ax = plt.gca()
+
+    if t is None:
+        t = [None] * len(trajectories)
     
-    for trajectory in trajectories:
+    for trajectory,time in zip(trajectories, t):
         if isinstance(trajectories, dict):
             label = trajectory
             trajectory = trajectories[label]
         else:
             label = None 
 
-        x = np.arange(len(trajectory))
+        if time is None:
+            time = np.arange(len(trajectory))
         ax.plot(
-            x, trajectory.squeeze(),
+            time, 
+            trajectory.squeeze(),
             '-',
             alpha=.5,
             linewidth=.5,
@@ -75,18 +81,22 @@ def _plot_trajectories2d(
 @save_wrapper
 def plot_trajectories(
         trajectories: list[np.ndarray]|dict[str,np.ndarray]|np.ndarray, 
+        times: List[np.ndarray]|None = None,
         environment_size: tuple[int,...]|None = None,
         ax=None, 
         **plot_kwargs
     ):
-    if isinstance(trajectories, dict):
+    if environment_size is not None:
+        dim = len(environment_size)
+    elif isinstance(trajectories, dict):
         dim = next(iter(trajectories.values())).shape[1]
     elif isinstance(trajectories, list):
         dim = trajectories[0].shape[1]
     else:
         dim = trajectories.shape[-1]
+
     if dim == 1:
-        return _plot_trajectories1d(trajectories, ax=ax, **plot_kwargs)
+        return _plot_trajectories1d(trajectories, t=times, ax=ax, **plot_kwargs)
     elif dim == 2:
         return _plot_trajectories2d(trajectories, environment_size=environment_size, ax=ax, **plot_kwargs)
 
@@ -101,7 +111,10 @@ def plot_trajectory_with_velocity(
         **plot_kwargs
     ):
     if ax is None:
+        fig = plt.figure(dpi=300)
         ax = plt.gca()
+    else:
+        fig = plt.gcf()
     
     dim = trajectory.shape[1]
 
@@ -140,6 +153,7 @@ def plot_trajectory_with_velocity(
         
     if label is not None:
         ax.legend()
+    return fig
 
 @save_wrapper
 def plot_spikemat_position_aligned(
@@ -188,13 +202,14 @@ def plot_spikemat_position_aligned(
                 np.max(position_info['y'])
             )
         ]
-    xax,yax = environment_size
-    ax.set_xlim(xax)
-    ax.set_ylim(yax)
-    ax.set_xticks(xax)
-    ax.set_yticks(yax)
-    ax.set_xticklabels([0,f"{(xax[1]-xax[0])/100}m"])
-    ax.set_yticklabels([0,f"{(yax[1]-yax[0])/100}m"])
+    if environment_size is not None:
+        xax,yax = environment_size
+        ax.set_xlim(xax)
+        ax.set_ylim(yax)
+        ax.set_xticks(xax)
+        ax.set_yticks(yax)
+        ax.set_xticklabels([0,f"{(xax[1]-xax[0])/100}m"])
+        ax.set_yticklabels([0,f"{(yax[1]-yax[0])/100}m"])
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.spines['bottom'].set_visible(False)

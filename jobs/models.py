@@ -22,7 +22,7 @@ def save_raw_data(
         raw_data: hse.RawData,
         place_field_data: hse.PlaceFields,
     ):
-    hseu.save_to_mat(
+    hseio.save_to_mat2(
         save_name,
         {
             'raw_data'         : raw_data,
@@ -68,16 +68,13 @@ def run_models_over_data(
     print(f"Completed momentum decoding. {end-start} seconds")
 
     smoothed_mean = [
-        sm[:,2:].numpy() for sm in momentum_decoded.smoothed_mean
+        sm[:,momentum_model.latent_dim:].numpy() for sm in momentum_decoded.smoothed_mean
     ]
     smoothed_cov = [
-        sc[:,2:,2:].numpy() for sc in momentum_decoded.smoothed_cov
+        sc[:,momentum_model.latent_dim:,momentum_model.latent_dim:].numpy() for sc in momentum_decoded.smoothed_cov
     ]
-    hseu.save_to_mat(save_name,
+    hseio.save_to_mat2(save_name,
         {
-            'dt'               : dt,
-            'environment_size' : environment_size,
-            'bin_size'         : bin_size,
             'map': {
                 'trajectory' : map_decoded.decoded_trajectories,
                 'cumprob'    : map_decoded.cumulative_probabilities,
@@ -119,16 +116,13 @@ def main(
     for rat in rats:
         rat_path = os.path.join(data_path, rat)
         for session in os.listdir(rat_path):
-            # if rat == 'Naga' and session == 'Open1':
-            #     print("Missing LFP data for Naga Open1. Skipping.")
-            #     continue
-            # if rat == 'Ettin':
-            #     print("Skipping Ettin. Too noisy.")
-            #     continue
-
             track_type = session[:-1]
             session_n  = int(session[-1])
             env_size   = None if track_type == 'Linear' else [(0,200),(0,200)]
+
+            if rat == "Janni" and track_type == "Open":
+                print("Skipping Janni Open tracks (broken data)")
+                continue
 
             if track_type not in parameters.get("session_types", ["Linear", "Open"]):
                 continue
@@ -172,9 +166,9 @@ def main(
                         velocity_cutoff = parameters.get('velocity_cutoff', 10.0),
                         theta_kwargs    = parameters.get('theta_args', {})
                     )
-                    hseu.save_to_mat(
+                    hseio.save_to_mat2(
                         os.path.join(results_dir, 'theta_raw.mat'),
-                        theta_data
+                        {"theta_data": theta_data },
                     )
                     run_models_over_data(
                         os.path.join(results_dir, 'model_theta_results.mat'),
@@ -208,6 +202,7 @@ def main(
                 print("-"*100, file=sys.stderr)
                 print(f"\nFailed to decode ripple for {rat} {session}. {e}", file=sys.stderr)
 
+    print("Job completed")
 
 if __name__ == "__main__":
     main()
