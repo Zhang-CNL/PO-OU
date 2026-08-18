@@ -49,20 +49,22 @@ def assign_spikes_theta_phase(
         x_vals    = ts['x'].values
         y_vals    = ts['y'].values
         vel_vals  = ts['Velocity'].values
+        vx_vals   = ts['V_x'].values
+        vy_vals   = ts['V_y'].values
         time_diff = ts['Delta t'].values
         #cell_type_a = ts.values[:, cols.index('cell_type')]  # already an array
 
         out[cell_id] = nap.TsdFrame(
             t=spike_times,
             d=np.c_[
-                x_vals, y_vals, vel_vals, time_diff, #cell_type_a,
-                phase_deg[idx], cycle_dur_s[idx], monotonic[idx],
-                lfp_match_times,
+                x_vals, y_vals, vel_vals, vx_vals, vy_vals,
+                time_diff, phase_deg[idx], cycle_dur_s[idx],
+                monotonic[idx],lfp_match_times,
             ],
             columns=[
-                'x', 'y', 'Velocity', 'Delta t', #'cell_type',
-                'Phase Deg', 'Cycle Duration', 'Monotonic Increasing',
-                'LFP Sample Time',
+                'x', 'y', 'Velocity', 'V_x', 'V_y',
+                'Delta t', 'Phase Deg', 'Cycle Duration', 
+                'Monotonic Increasing', 'LFP Sample Time',
             ],
         )
         all_diffs.append(np.abs(spike_times - lfp_match_times))

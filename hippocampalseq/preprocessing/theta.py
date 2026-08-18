@@ -95,7 +95,7 @@ def extract_theta_segments(
 
         decoding_times = np.arange(
             start + time_window_s / 2,
-            end - time_window_s / 2 + 1e-12,
+            end - time_window_s / 2, #+ 1e-12,
             time_window_advance_s
         )
         if decoding_times.size == 0:
@@ -108,7 +108,8 @@ def extract_theta_segments(
             time_window_s,
             time_window_advance_s
         )
-        spikemat = spikemat[:,place_cell_ids].astype(int)
+        spikemat = spikemat[:len(decoding_times),place_cell_ids]
+        spikemat = spikemat.astype(int)
         
         if spikemat.size == 0 or np.sum(spikemat) == 0:
             continue
@@ -119,7 +120,7 @@ def extract_theta_segments(
         left = pos_idx - 1
         pos_idx -= (
             np.abs(decoding_times - pos_t[left])
-            < np.abs(pos_t[pos_idx] - decoding_times)
+            <= np.abs(pos_t[pos_idx] - decoding_times)
         )
 
         lfp_idx = np.searchsorted(lfp_t, decoding_times)
@@ -127,7 +128,7 @@ def extract_theta_segments(
         left = lfp_idx - 1
         lfp_idx -= (
             np.abs(decoding_times - lfp_t[left])
-            < np.abs(lfp_t[lfp_idx] - decoding_times)
+            <= np.abs(lfp_t[lfp_idx] - decoding_times)
         )
 
         # Number the theta oscillations
@@ -172,14 +173,16 @@ def extract_theta_segments(
                 running_position['y'].values[pos_idx],
                 running_position['Head direction'].values[pos_idx],
                 running_position['Velocity'].values[pos_idx],
+                running_position['V_x'].values[pos_idx],
+                running_position['V_y'].values[pos_idx],
                 phase_segment,
                 power[lfp_idx],
                 osc
             ],
             columns=[
                 'x', 'y', 'Head direction',
-                'Velocity', 'Phase Deg', 'Power', 
-                'Oscillation Number'
+                'Velocity', 'V_x', 'V_y', 
+                'Phase Deg', 'Power', 'Oscillation Number'
             ]
         )
 

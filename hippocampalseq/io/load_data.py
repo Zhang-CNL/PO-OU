@@ -40,8 +40,14 @@ def calc_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> tuple[np.ndarr
     
     distance = np.sqrt(dx_filtered**2 + dy_filtered**2)
     velocity = np.abs(distance / dt_filtered)
-    velocity[velocity < 0] = 0
-    return velocity, dt_filtered
+    vx = np.abs(dx_filtered / dt_filtered)
+    vy = np.abs(dy_filtered / dt_filtered)
+    return (
+        velocity, 
+        dt_filtered,
+        vx,
+        vy
+    )
 
 def align_spikes_to_position(
         spikeframe: nap.TsGroup, 
@@ -89,10 +95,12 @@ def align_spikes_to_position(
                 posframe['x'].values[selectioni],
                 posframe['y'].values[selectioni],
                 posframe['Velocity'].values[selectioni],
+                posframe['V_x'].values[selectioni],
+                posframe['V_y'].values[selectioni],
                 #posframe['delta t'].values[valid], 
                 td[valid]
             ],
-            columns=['x', 'y', 'Velocity', 'Delta t'],
+            columns=['x', 'y', 'Velocity', 'V_x', 'V_y', 'Delta t'],
         )
         st = spike_times[valid]
         spike_times_filt[uid] = nap.Ts(t=st)
@@ -182,17 +190,28 @@ def load_clean_data(
         ripple_type
     )
 
-    v, dt = calc_velocity(x, y, time)
+    (
+        v, 
+        dt,
+        vx,
+        vy
+    ) = calc_velocity(x, y, time)
     dt[dt > 60] = 0
 
     epoch = nap.IntervalSet(start=epoch_starts, end=epoch_ends)
 
     raw_position = nap.TsdFrame(
         t=time,
-        d=np.c_[x, y,
-            hd, v, dt
+        d=np.c_[
+            x, y, hd, 
+            v, vx, vy, 
+            dt,
         ],
-        columns=['x','y','Head direction','Velocity','Delta t']
+        columns=[
+            'x','y','Head direction',
+            'Velocity','V_x','V_y',
+            'Delta t'
+        ]
     )
     running_position = raw_position.restrict(epoch)
     running_spikes   = spike_data.restrict(epoch)

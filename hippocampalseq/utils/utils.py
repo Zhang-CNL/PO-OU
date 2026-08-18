@@ -164,5 +164,12 @@ def atleast_2d(x: NDArray) -> NDArray:
         np.ndarray: Input array with at least 2 dimensions.
     """
     if x.ndim < 2:
-        x = x[:,None]
+        x = x[...,None]
+        return atleast_2d(x)
+    return x
+
+def atleast_3d(x: NDArray) -> NDArray:
+    if x.ndim < 3:
+        x = x[...,None]
+        return atleast_3d(x)
     return x

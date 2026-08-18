@@ -78,7 +78,9 @@ class KalmanFilter(StateSpace):
         if not isinstance(obs, list):
             obs = [obs]
         for i in range(len(obs)):
-            obs[i] = torch.atleast_3d(obs[i])
+            if not torch.is_tensor(obs[i]):
+                obs[i] = torch.from_numpy(obs[i])
+            obs[i] = hseu.atleast_3d(obs[i])
             if obs[i].shape[1] < obs[i].shape[2]:
                 obs[i] = obs[i].mT
         return obs

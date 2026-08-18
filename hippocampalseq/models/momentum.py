@@ -72,13 +72,14 @@ class Momentum(KalmanFilter):
         self.approximate_covariance = []
         for spk in spikemat:
             ep = torch.from_numpy(spk).double()
-            ep = ep[ep.sum(axis=1) > 0]
+            #ep = ep[ep.sum(axis=1) > 0]
             emission_probability = hseu.calc_poisson_emission_probabilities_2d(
                 ep, 
                 place_fields,
                 self.dt
             )
             emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
+            emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
 
             approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
                 self.grid,

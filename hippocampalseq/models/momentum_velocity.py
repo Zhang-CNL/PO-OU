@@ -1,0 +1,235 @@
+import torch
+
+from hippocampalseq.models.statespace import SufficientStatistics
+import hippocampalseq.utils as hseu
+
+from .momentum import *
+from .kalman_filter import *
+
+class MomentumVelocity(Momentum):
+    def __init__(
+            self, 
+            place_fields: hseu.NDArray, 
+            spikemat: list[hseu.NDArray],
+            dt: float, 
+            environment_size: list[tuple[int,...]],
+            bin_size: int, 
+            seed: int|None = 42
+        ):
+        r"""Momentum model but we include an observed velocity variable.
+        The same basic internal momentum is used, however the emission probabilities are different.
+        The emission function is the linear expression:
+        $$\begin{pmatrix} v_{true,t} \\ z_{true,t} \end{pmatrix} = 
+            \begin{bmatrix} I_2 & 0_2 \\ 0_2 & I_2\end{bmatrix}
+            \begin{pmatrix} v_t \\ z_t \end{pmatrix} + 
+            w_t
+        $$
+        where 
+        $$w_t \sim \mathcal{N}\left(0, \begin{pmatrix}
+            K & 0 \\ 0 & \Sigma_t
+        \end{pmatrix}\right)$$
+        In the noise distribution, $\Sigma_t$ is from approximating the emission probabilities as a gaussian,
+        and $K$ is a 2x2 matrix modeling the emission noise for the velocity variable.
+        Velocity is a (T,1,1) variable in this case.
+        """
+        super().__init__(
+            place_fields, 
+            spikemat, 
+            dt, 
+            environment_size, 
+            bin_size, 
+            seed
+        )
+        self.emission_velocity_variance = torch.rand((self.obs_dim, self.obs_dim))
+        self.obs_dim *= 2
+        self.n_parameters += self.emission_velocity_variance.numel()
+
+    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
+        H = torch.eye(self.obs_dim)
+        emv = self.emission_velocity_variance @ self.emission_velocity_variance.T
+        R = []
+        for ac in self.approximate_covariance:
+            emit = torch.zeros((
+                len(ac), self.obs_dim, self.obs_dim
+            ))
+            emit[:,:self.latent_dim,:self.latent_dim] = emv
+            emit[:,self.latent_dim:,self.latent_dim:] = ac
+            R.append(emit)
+
+        return H,R
+
+    def _calc_sufficient_stats(self, values: MomentumResuts) -> KalmanStatistics:
+        r"""Calculate sufficient statistics for the momentum with velocity model.
+        Since our log-likelihood calculation has non-constant emissions,
+        we calculate $\mathbb{E}[v_t v_t^T]$, $\mathbb{E}[v_t \hat{v}_t^T]$, $\mathbb{E}[\hat{v}_tv_t^T]$, and $\mathbb{E}[\hat{v}_t\hat{v}_t^T]$.
+        We store $\mathbb{E}[\hat{v}_t\hat{v}_t^T]$ in KalmanStatistics.Ez1z since it's unused and we 
+        still want to keep stats.Ezz from the momentum model for our latent storage.
+
+        """
+        stats = super()._calc_sufficient_stats(values)
+
+        Exx,Exz,Ezx,Ezz = [],[],[],[]
+        for sm,x in zip(values.smoothed_mean, self.velocity):
+            sm = sm[:,:self.latent_dim]
+            exx = x @ x.mT 
+            exz = x @ sm.mT 
+            ezx = exz.mT
+            ezz = sm @ sm.mT
+
+            Exx.append(exx)
+            Exz.append(exz)
+            Ezx.append(ezx)
+            Ezz.append(ezz)
+
+        stats.Exx = Exx 
+        stats.Ezx = Ezx
+        stats.Exz = Exz
+        stats.Ez1z = Ezz
+        return stats
+
+    def _solve_parameters(
+            self, 
+            values: MomentumResults, 
+            stats: SufficientStatistics, 
+            optimizer: str = "Adam", 
+            lr: float = 0.01, 
+            n_epochs: int = 1000, 
+            gd_tol: float = 0.001
+        ) -> torch.Tensor:
+        r"""Solve for the parameters $\sigma$, $\lambda$ and $\mathbf{K}$. 
+        We solve for the two inner parameters using the same method as the 
+        momentum model, so we copy those equations.
+        However, for the velocity covariance, we have to include the observed velocity.
+        We can decompose our log-gaussian into the velocity and position components
+        since the emission covariance has no connection on the diagonals. In this case,
+        the position component is a constant and the transition matrix is an identity
+        matrix, so we are left with only the velocity component with the form:
+        $$Q(\theta, \hat{\theta}) = -\frac{T}{2} ln |K| 
+            - \frac{1}{2}\mathbb{E}\left[
+                \sum_{t=1}^T (v_t - \hat{v}_t)^T K^{-1}
+                    (v_t - \hat{v}_t)
+            \right]
+        $$
+        """
+
+        decay      = torch.zeros(1, requires_grad=True)
+        diffusion  = torch.zeros(1, requires_grad=True)
+        K          = torch.zeros((self.latent_dim, self.latent_dim), requires_grad=True)
+        with torch.no_grad():
+            decay.copy_(self.decay)
+            diffusion.copy_(self.diffusion)
+            emv = self.emission_velocity_variance
+            K.copy_(emv)
+
+        params = [decay, diffusion, K]
+
+        def loss_closure(
+                params, 
+                n_batches: int, 
+                stats: SufficientStatistics,
+            ):
+            decay,diffusion,K = params
+
+            Ezz = stats.Ezz
+            Ezz1 = stats.Ezz1
+            
+            # 2D for the emission log-likelihood
+            EzzT = stats.Ez1z
+            Ezx = stats.Ezx
+            Exz = stats.Exz
+            Exx = stats.Exx
+
+            lmb = torch.exp(decay)
+            sig = torch.exp(diffusion)
+            M = 1 - lmb * self.dt 
+            sigma = sig**2 * self.dt
+            v0 = sigma / (1 - M**2)
+
+            btrace = torch.vmap(torch.trace)
+
+            total_loss = 0
+            for i in range(n_batches):
+                T = len(Ezz[i])
+                Kt = K @ K.T
+
+                iloss = Ezz[i][0] / v0
+                iloss = self.latent_dim * torch.log(v0) + iloss 
+
+                hloss = Ezz[i][1:] - 2 * M * Ezz1[i] + M**2 * Ezz[i][:-1]
+                hloss = torch.sum(hloss, axis=0) / sigma 
+                hloss = self.latent_dim * (T-1) * torch.log(sigma) + hloss
+
+                eloss = Exx[i] - Ezx[i] - Exz[i] + EzzT[i]
+                eloss = hseu.mulinv(Kt, eloss)
+                eloss = btrace(eloss) 
+                eloss = torch.sum(eloss, axis=0)
+                eloss = T * torch.logdet(Kt) + eloss
+
+                total_loss += (iloss + hloss + eloss) / 2
+
+            return total_loss
+
+        loss,params = hseu.optimize(
+            loss_closure,
+            params,
+            {
+                'n_batches' : len(values.observations),
+                'stats'     : stats,
+            },
+            {
+                'optimizer' : optimizer,
+                'lr'        : lr,
+                'n_epochs'  : n_epochs,
+                'gd_tol'    : gd_tol
+            }
+        )
+
+        self.decay = params[0].detach()
+        self.diffusion = params[1].detach()
+        self.emission_velocity_variance = params[2].detach()
+
+        (
+            self.transition_matrices,
+            self.transition_covariance,
+            self.observation_matrices,
+            self.observation_covariance,
+            self.initial_state_mean,
+            self.initial_state_covariance,
+        ) = self._initialize_parameters()
+
+        return loss
+
+
+    def fit(self, 
+            X, 
+            n_iter: int = 1000, 
+            emtol: float = 1e-3, 
+            **maximization_args
+        ) -> MomentumResults:
+        """Perform EM to fit the parameters.
+
+        Args:
+            X (list[np.ndarray|torch.Tensor]): List of (T,1,1) vectors containing the rat's velocity at each time point.
+            n_iter (int): Maximum number of iterations for which to run EM
+            emtol (float): Minimum change in log-likelihood required for convergence.
+            maximization_args: Passed to `_solve_parameters`
+        
+        Returns:
+            MomentumResults: Fitted model information.
+        """
+        X = self._parse_observations(X)
+        self.velocity = X
+
+        X = [
+            torch.hstack((v,x)) for v,x in zip(
+                X,
+                self.approximate_mean
+            )
+        ]
+        return KalmanFilter.fit(
+            self,
+            X,
+            n_iter,
+            emtol,
+            **maximization_args
+        )
