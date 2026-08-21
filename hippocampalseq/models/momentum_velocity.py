@@ -69,7 +69,8 @@ class MomentumVelocity(Momentum):
             emit[:,self.latent_dim:,self.latent_dim:] = ac
             R.append(emit)
 
-        return H,R
+        d = torch.zeros((self.augmented_dim, 1))
+        return H,R,d
 
     def _calc_sufficient_stats(self, values: MomentumResuts) -> KalmanStatistics:
         r"""Calculate sufficient statistics for the momentum with velocity model.
@@ -204,8 +205,10 @@ class MomentumVelocity(Momentum):
         (
             self.transition_matrices,
             self.transition_covariance,
+            self.transition_bias,
             self.observation_matrices,
             self.observation_covariance,
+            self.observation_bias,
             self.initial_state_mean,
             self.initial_state_covariance,
         ) = self._initialize_parameters()
@@ -241,11 +244,11 @@ class MomentumVelocity(Momentum):
                     (
                         hseu.calculate_velocity_dt(
                             x[:,0].numpy().squeeze(),
-                            self.dt
+                            self.dt.numpy()
                         ),
                         hseu.calculate_velocity_dt(
                             x[:,1].numpy().squeeze(),
-                            self.dt
+                            self.dt.numpy()
                         )
                     )
                     for x in self.approximate_mean
@@ -261,7 +264,7 @@ class MomentumVelocity(Momentum):
                 velocity = [
                     hseu.calculate_velocity_dt(
                         x[:,0].numpy().squeeze(),
-                        self.dt
+                        self.dt.numpy()
                     )
                     for x in self.approximate_mean
                 ]

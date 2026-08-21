@@ -11,7 +11,7 @@
         - [x] Filter out non-monotonic phase cycles
         - [x] Count # spikes occuring in major/minor windows of theta
         - [x] Creates spikemats (T,N)
-    - [ ] Theta sequence decoding error metrics
+    - [x] Theta sequence decoding error metrics
     - [ ] Modality-specific decoding
 - [x] Separate out theta and replay processing 
 - [ ] Write replay processing

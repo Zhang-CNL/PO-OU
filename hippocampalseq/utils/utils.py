@@ -113,6 +113,11 @@ def make_ndgrid(bounds: list[tuple[float,...]], bin_size: int|list[int], indexin
     coords = torch.meshgrid(*edges, indexing=indexing)
     return torch.stack([c.ravel() for c in coords]).T
     
+def atleast_1d(x: NDArray) -> NDArray:
+    if x.ndim < 1:
+        return x[...,None]
+    return x
+    
 def atleast_2d(x: NDArray) -> NDArray:
     """Ensure that the input array has at least 2 dimensions.
     Differs from np.atleast_2d in that it appends the dimension instead of prepending it

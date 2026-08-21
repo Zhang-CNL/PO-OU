@@ -160,7 +160,7 @@ class Momentum(KalmanFilter):
         Gamma = torch.cat((top, bottom), dim=0)
         return Gamma
 
-    def _init_priors(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _init_priors(self) -> tuple[torch.Tensor,...]:
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
@@ -195,7 +195,7 @@ class Momentum(KalmanFilter):
 
         return init_mean, init_cov
 
-    def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _init_transition_matrices(self) -> tuple[torch.Tensor,...]:
         r"""Construct transition matrices for momentum SSM.
 
         Returns:
@@ -207,7 +207,7 @@ class Momentum(KalmanFilter):
         b = torch.zeros(self.augmented_dim, 1)
         return A,Q,b
 
-    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _init_observation_matrices(self) -> tuple[torch.Tensor,...]:
         r"""Build the observation transition matrix and noise matrix.
         The noise is computed analytically from the data, while the transition
         matrix has the form $$\begin{bmatrix}0_2 & I_2\end{bmatrix}$$
