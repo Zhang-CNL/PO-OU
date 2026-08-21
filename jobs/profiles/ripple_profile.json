@@ -1,14 +1,11 @@
 {
     "name": "3ms_ripple",
     "ignore_theta" : true,
-    "theta_args" : {
-        "time_window_ms": 250
-    },
     "placefield_args" : {
         "place_field_posterior": false
     },
     "ripple_args": {
-        "time_window_ms": 3
+        "time_window_s": 0.003
     },
     "ignore_ripples" : false
 }

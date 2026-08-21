@@ -14,6 +14,7 @@ class MomentumVelocity(Momentum):
             dt: float, 
             environment_size: list[tuple[int,...]],
             bin_size: int, 
+            velocity_type: str ='true',
             seed: int|None = 42
         ):
         r"""Momentum model but we include an observed velocity variable.
@@ -31,6 +32,17 @@ class MomentumVelocity(Momentum):
         In the noise distribution, $\Sigma_t$ is from approximating the emission probabilities as a gaussian,
         and $K$ is a 2x2 matrix modeling the emission noise for the velocity variable.
         Velocity is a (T,1,1) variable in this case.
+
+        Args:
+            place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
+            spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
+            dt (float): Time step for the transition matrix.
+            environment_size (list[tuple[int,...]]): List of coordinates corresponding to the bounds of the environment.
+            bin_size (int): Size of individual bins in cm.
+            velocity_type (str): Type of velocity to use. 
+                'observed' to calculate it from the place-fields. 'true' to use the true velocity.
+                Defaults to 'true'.
+            seed: (int|None): Seed for the random number generator
         """
         super().__init__(
             place_fields, 
@@ -40,6 +52,7 @@ class MomentumVelocity(Momentum):
             bin_size, 
             seed
         )
+        self.velocity_type = velocity_type
         self.emission_velocity_variance = torch.rand((self.obs_dim, self.obs_dim))
         self.obs_dim *= 2
         self.n_parameters += self.emission_velocity_variance.numel()
@@ -144,13 +157,13 @@ class MomentumVelocity(Momentum):
             M = 1 - lmb * self.dt 
             sigma = sig**2 * self.dt
             v0 = sigma / (1 - M**2)
+            Kt = K @ K.T
 
             btrace = torch.vmap(torch.trace)
 
             total_loss = 0
             for i in range(n_batches):
                 T = len(Ezz[i])
-                Kt = K @ K.T
 
                 iloss = Ezz[i][0] / v0
                 iloss = self.latent_dim * torch.log(v0) + iloss 
@@ -201,7 +214,7 @@ class MomentumVelocity(Momentum):
 
 
     def fit(self, 
-            X, 
+            X: list[np.ndarray|torch.Tensor]|None = None, 
             n_iter: int = 1000, 
             emtol: float = 1e-3, 
             **maximization_args
@@ -209,7 +222,8 @@ class MomentumVelocity(Momentum):
         """Perform EM to fit the parameters.
 
         Args:
-            X (list[np.ndarray|torch.Tensor]): List of (T,1,1) vectors containing the rat's velocity at each time point.
+            X (list[np.ndarray|torch.Tensor]): If using 'observed' velocity, set this to None.
+                If using 'true' velocity, a list of (T,ndims,1) arrays containing the velocity at each point.
             n_iter (int): Maximum number of iterations for which to run EM
             emtol (float): Minimum change in log-likelihood required for convergence.
             maximization_args: Passed to `_solve_parameters`
@@ -217,12 +231,52 @@ class MomentumVelocity(Momentum):
         Returns:
             MomentumResults: Fitted model information.
         """
-        X = self._parse_observations(X)
-        self.velocity = X
+
+        if self.velocity_type == 'true':
+            X = self._parse_observations(X)
+            self.velocity = X
+        elif self.velocity_type == 'observed':
+            if self.obs_dim == 4:
+                velocity = [
+                    (
+                        hseu.calculate_velocity_dt(
+                            x[:,0].numpy().squeeze(),
+                            self.dt
+                        ),
+                        hseu.calculate_velocity_dt(
+                            x[:,1].numpy().squeeze(),
+                            self.dt
+                        )
+                    )
+                    for x in self.approximate_mean
+                ]
+                self.velocity = [
+                    torch.hstack((
+                        torch.from_numpy(v[0][:,None]), 
+                        torch.from_numpy(v[1][:,None])
+                    ))[...,None]
+                    for v in velocity
+                ]
+            else:
+                velocity = [
+                    hseu.calculate_velocity_dt(
+                        x[:,0].numpy().squeeze(),
+                        self.dt
+                    )
+                    for x in self.approximate_mean
+                ]
+                self.velocity = [
+                    torch.from_numpy(v)[...,None]
+                    for v in velocity
+                ]
+        else:
+            raise ValueError(
+                f'Unknown velocity type: {self.velocity_type}'
+            )
 
         X = [
             torch.hstack((v,x)) for v,x in zip(
-                X,
+                self.velocity,
                 self.approximate_mean
             )
         ]

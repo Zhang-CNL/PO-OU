@@ -6,6 +6,7 @@ import json
 import click
 import traceback
 sys.path.append(os.path.realpath(".."))
+sys.path.append(os.path.realpath("."))
 
 import numpy as np
 from dataclasses import asdict
@@ -17,77 +18,118 @@ import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsepp
 import hippocampalseq.models as hsem
 
-def save_raw_data(
-        save_name: str,
-        raw_data: hse.RawData,
-        place_field_data: hse.PlaceFields,
+import analyze
+
+def run_model(
+        model_name: str,
+        model_kwargs: dict[str, Any],
+        model_fit_kwargs: dict[str, Any] = {},
     ):
-    hseio.save_to_mat2(
-        save_name,
-        {
-            'raw_data'         : raw_data,
-            'place_field_data' : place_field_data
-        }
-    )
+
+    models = {
+        'MAP'             : hsem.BayesianMAP,
+        'Momentum'        : hsem.Momentum,
+        'MomentumVelocity': hsem.MomentumVelocity,
+    }
+    model = models[model_name](**model_kwargs)
+    return model.fit(**model_fit_kwargs)
 
 def run_models_over_data(
         save_name: str,
         parameters: dict[str, Any],
         place_fields: np.ndarray,
-        spikes: np.ndarray,
+        raw_data: hse.RawData,
+        dataset: hse.Theta|hse.Replay,
         dt: float,
-        bin_size: int,
-        environment_size: list[tuple[int,...]],
     ):
+    bin_size = parameters.get('bin_size', 2.0)
     start = time.time()
-    map_model = hsem.BayesianMAP(
-        place_fields,
-        dt,
-        bin_size
+    map_decoded = run_model('MAP',
+        {
+            'place_fields': place_fields, 
+            'dt': dt, 
+            'bin_size': bin_size
+        },
+        {'X': spikes}
     )
-    map_decoded = map_model.fit(spikes)
     end = time.time()
     print(f"Completed MAP decoding. {end-start} seconds")
 
+    save_dict = {
+        'map': asdict(map_decoded)
+    }
+
+    momentum_kwargs = {
+        'place_fields'     : place_fields, 
+        'spikes'           : spikes,
+        'dt'               : dt, 
+        'environment_size' : raw_data.environment_size,
+        'bin_size'         : bin_size,
+        'seed'             : parameters.get('seed', 42)
+    }
+
     start = time.time()
-    momentum_model = hsem.Momentum(
-        place_fields,
-        spikes,
-        dt,
-        environment_size,
-        parameters.get('bin_size', 2.0),
-        parameters.get('seed', 42)
-    )
-    momentum_decoded = momentum_model.fit(
-        None,
-        n_iter    = parameters.get('n_iter', 10000),
-        optimizer = parameters.get('optimizer', 'Adam'),
-        lr        = parameters.get('lr', .01),
+    momentum_decoded = run_model('Momentum',
+        momentum_kwargs,
+        {
+        }
     )
     end = time.time()
     print(f"Completed momentum decoding. {end-start} seconds")
 
-    smoothed_mean = [
-        sm[:,momentum_model.latent_dim:].numpy() for sm in momentum_decoded.smoothed_mean
-    ]
-    smoothed_cov = [
-        sc[:,momentum_model.latent_dim:,momentum_model.latent_dim:].numpy() for sc in momentum_decoded.smoothed_cov
-    ]
-    hseio.save_to_mat2(save_name,
-        {
-            'map': {
-                'trajectory' : map_decoded.decoded_trajectories,
-                'cumprob'    : map_decoded.cumulative_probabilities,
-            },
-            'momentum': {
-                'trajectory' : smoothed_mean,
-                'cov'        : smoothed_cov,
-                'cumprob'    : momentum_decoded.cumulative_probabilities,
-                'loglike'    : momentum_decoded.loglike_full,
-                'aic'        : momentum_decoded.aic,
-                'bic'        : momentum_decoded.bic
+    save_dict['momentum'] = {
+        'decoded_trajectories' : momentum_decoded.smoothed_mean,
+        'cov'             : momentum_decoded.smoothed_cov,
+        'cumulative_probabilities': momentum_decoded.cumulative_probabilities,
+        'loglike' : momentum_decoded.loglike_full,
+        'aic'     : momentum_decoded.aic,
+        'bic'     : momentum_decoded.bic
+    }
+
+    if isinstance(dataset, hse.Theta):
+        start = time.time()
+        if len(raw_data.environment_size) == 1:
+            max_axis = analyze.get_major_axis(raw_data.raw_position)
+            true_velocity = [v[f'V_{max_axis}'].values for v in theta_data.ground_truth]
+        else:
+            true_velocity = [v[['V_x', 'V_y']].values for v in theta_data.ground_truth]
+
+        momentum_v_true_decoded = run_model('MomentumVelocity',
+            momentum_kwargs | {'velocity_type': 'true'},
+            {
+                'X': true_velocity
             }
+        )
+        end = time.time()
+        print(f"Completed momentum velocity decoding. {end-start} seconds")
+
+        save_dict['momentum_v_true'] = {
+            'decoded_trajectories' : momentum_v_true_decoded.smoothed_mean,
+            'cov'             : momentum_v_true_decoded.smoothed_cov,
+            'cumulative_probabilities': momentum_v_true_decoded.cumulative_probabilities,
+            'loglike' : momentum_v_true_decoded.loglike_full,
+            'aic'     : momentum_v_true_decoded.aic,
+            'bic'     : momentum_v_true_decoded.bic
         }
+
+        start = time.time()
+        momentum_v_pred_decoded = run_model('MomentumVelocity',
+            momentum_kwargs | {'velocity_type': 'observed'},
+        )
+        end = time.time()
+        print(f"Completed momentum velocity decoding. {end-start} seconds")
+
+        save_dict['momentum_v_pred'] = {
+            'decoded_trajectories' : momentum_v_pred_decoded.smoothed_mean,
+            'cov'             : momentum_v_pred_decoded.smoothed_cov,
+            'cumulative_probabilities': momentum_v_pred_decoded.cumulative_probabilities,
+            'loglike' : momentum_v_pred_decoded.loglike_full,
+            'aic'     : momentum_v_pred_decoded.aic,
+            'bic'     : momentum_v_pred_decoded.bic
+        }
+
+    hseio.save_to_mat2(save_name,
+        save_dict
     )
 
 @click.command()
@@ -145,10 +187,12 @@ def main(
                 placefield_kwargs = parameters.get('placefield_args', {})
             )
 
-            save_raw_data(
+            hseio.save_to_mat2(
                 os.path.join(results_dir, 'raw_data.mat'),
-                raw_data,
-                place_field_data,
+                {
+                    'raw_data'         : raw_data,
+                    'place_field_data' : place_field_data
+                }
             )
 
             print(f"Finished loading {rat} {session}")
@@ -175,7 +219,7 @@ def main(
                         parameters,
                         place_fields,
                         theta_data.spikes,
-                        parameters.get('theta_time_window_ms', 60.0) / 1000,
+                        parameters.get('theta_time_window_s', 60.0/1000),
                         int(parameters.get('bin_size_cm', 2)),
                         raw_data.environment_size
                     )
@@ -193,7 +237,7 @@ def main(
                         parameters,
                         place_fields,
                         ripple_data.spikes,
-                        parameters.get('ripple_time_window_ms', 5.0)/1000,
+                        parameters.get('ripple_time_window_s', 5.0/1000),
                         int(parameters.get('bin_size_cm', 2)),
                         raw_data.environment_size
                     )

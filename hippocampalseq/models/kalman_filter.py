@@ -35,14 +35,14 @@ class KalmanResults:
 
 @dataclass
 class KalmanStatistics:
-    Cov  : list[torch.Tensor] # $\hat{V}_tJ_{t-1}$
-    Ez   : list[torch.Tensor] # $\mathbb{E}[z^T]$
-    Ezz  : list[torch.Tensor] # $\mathbb{E}[zz^T]$
-    Ezz1 : list[torch.Tensor] # $\mathbb{E}[z_{t}z_{t-1}^T]$
-    Ez1z : list[torch.Tensor] # $\mathbb{E}[z_{t-1}z_t^T]$
-    Exx  : list[torch.Tensor] # $\mathbb{E}[xx^T]  $
-    Exz  : list[torch.Tensor] # $\mathbb{E}[xz^T]  $
-    Ezx  : list[torch.Tensor] # $\mathbb{E}[zx^T]$
+    Cov  : list[torch.Tensor] = field(default_factory=list) # $\hat{V}_tJ_{t-1}$
+    Ez   : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[z^T]$
+    Ezz  : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[zz^T]$
+    Ezz1 : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[z_{t}z_{t-1}^T]$
+    Ez1z : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[z_{t-1}z_t^T]$
+    Exx  : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[xx^T]  $
+    Exz  : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[xz^T]  $
+    Ezx  : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[zx^T]$
 
 class KalmanFilter(StateSpace):
     """Base state space modeling class that implements a kalman filter"""
@@ -63,13 +63,17 @@ class KalmanFilter(StateSpace):
         self.n_parameters = 3*(self.augmented_dim**2) \
             + self.augmented_dim \
             + self.obs_dim * self.augmented_dim \
-            + self.obs_dim**2 
+            + self.obs_dim**2 \
+            + self.augmented_dim \
+            + self.obs_dim
         # Transition matrix -> nxn
         # Transition noise -> nxn
         # Initial matrix -> nx1
         # Initial variance -> nxn
         # Observation matrix -> nxm
         # Observation noise -> mxm
+        # Transition bias -> nx1
+        # Observation bias -> mx1
 
     def _parse_observations(self, obs: torch.Tensor|list[torch.Tensor]|None) -> list[torch.Tensor]|None:
         """Safely convert observations to their expected format."""
@@ -89,12 +93,13 @@ class KalmanFilter(StateSpace):
         """Initialize the filter for the first observation."""
         P0Ct = self.initial_state_covariance @ self.observation_matrices.T 
         K1 = hseu.invmul(P0Ct, self.observation_matrices @ P0Ct + self.observation_covariance) 
-        mu1 = self.initial_state_mean + K1 @ (values.observations[batch][0] - self.observation_matrices @ self.initial_state_mean)
+        innovation = values.observations[batch][0] - self.observation_matrices @ self.initial_state_mean - self.observation_bias
+        mu1 = self.initial_state_mean + K1 @ innovation
         v1 = (torch.eye(self.augmented_dim) - K1 @ self.observation_matrices) @ self.initial_state_covariance
 
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = v1
-        values.predicted_mean[batch][0] = self.transition_matrices @ mu1
+        values.predicted_mean[batch][0] = self.transition_matrices @ mu1 + self.transition_bias
         values.predicted_cov[batch][0]  = self.transition_matrices @ v1 @ self.transition_matrices.T + self.transition_covariance
         return values
 
@@ -107,10 +112,11 @@ class KalmanFilter(StateSpace):
         Pct = Pn1 @ self.observation_matrices.T
         K = hseu.invmul(Pct, self.observation_matrices @ Pct + self.observation_covariance)
 
-        mut = Am1 + K @ (values.observations[batch][t] - self.observation_matrices @ Am1)
+        innovation = values.observations[batch][t] - self.observation_matrices @ Am1 - self.observation_bias
+        mut = Am1 + K @ innovation
         vt  = (torch.eye(self.augmented_dim) - K @ self.observation_matrices) @ Pn1
 
-        Am = self.transition_matrices @ mut
+        Am = self.transition_matrices @ mut + self.transition_bias
         Pn = self.transition_matrices @ vt @ self.transition_matrices.T + self.transition_covariance
 
         values.filtered_mean[batch][t]  = mut
@@ -163,25 +169,36 @@ class KalmanFilter(StateSpace):
         n = torch.eye(self.augmented_dim)
         return m,n
 
-    def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         F = torch.rand(self.augmented_dim, self.augmented_dim)
         F = F / F.sum(axis=1, keepdim=True)
         Q = torch.randn(self.augmented_dim, self.augmented_dim)
         Q = Q @ Q.T 
-        return F,Q
+        b = torch.rand(self.augmented_dim, 1)
+        return F, Q, b
 
-    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         H = torch.rand(self.augmented_dim, self.obs_dim)
         H = H / H.sum(axis=1, keepdim=True)
         R = torch.randn(self.obs_dim, self.obs_dim)
         R = R @ R.T
-        return H, R
+        d = torch.rand(self.obs_dim, 1)
+        return H, R, d
 
     def _initialize_parameters(self) -> tuple[torch.Tensor,...]:
         initial_mean, initial_cov = self._init_priors()
-        trans_mat, trans_cov      = self._init_transition_matrices()
-        obs_mat, obs_cov          = self._init_observation_matrices()
-        return trans_mat, trans_cov, obs_mat, obs_cov, initial_mean, initial_cov
+        trans_mat, trans_cov, trans_bias = self._init_transition_matrices()
+        obs_mat, obs_cov, obs_bias = self._init_observation_matrices()
+        return (
+            trans_mat, 
+            trans_cov, 
+            trans_bias, 
+            obs_mat, 
+            obs_cov, 
+            obs_bias, 
+            initial_mean, 
+            initial_cov
+        )
 
     def _initialize(self, X: list[torch.Tensor]) -> KalmanResults:
         tf_base  = [torch.zeros_like(x) for x in X]
@@ -209,17 +226,33 @@ class KalmanFilter(StateSpace):
         Returns:
             KalmanStatistics: The sufficient statistics of the model.
         """
-        Cov  = [sc[1:] @ sg[:-1].mT for sc,sg in zip(values.smoothed_cov, values.smoothed_gain)]
-        Ez   = values.smoothed_mean
-        Ezz  = [sc + sm @ sm.mT for sc,sm in zip(values.smoothed_cov, values.smoothed_mean)]
-        Ezz1 = [sm[1:] @ sm[:-1].mT + c for sm,c in zip(values.smoothed_mean, Cov)]
-        Ez1z = [ez.mT for ez in Ezz1]
-        Exx  = [obs @ obs.mT for obs in values.observations]
-        Exz  = [obs @ sm.mT for obs,sm in zip(values.observations, values.smoothed_mean)]
-        Ezx  = [ex.mT for ex in Exz]
-        return KalmanStatistics(
-            Cov, Ez, Ezz, Ezz1, Ez1z, Exx, Exz, Ezx
-        )
+        stats = KalmanStatistics()
+        for i in range(len(values.smoothed_mean)):
+            sm  = values.smoothed_mean[i]
+            sc  = values.smoothed_cov[i]
+            sg  = values.smoothed_gain[i]
+            obs = values.observations[i]
+
+            cov  = sc[1:] @ sg[:-1].mT
+            ez   = sm
+            ezz  = sm @ sm.mT + sc
+            ezz1 = sm[1:] @ sm[:-1].mT + cov
+            ez1z = ez.mT
+            exx  = obs @ obs.mT
+            exz  = obs @ sm.mT
+            ezx  = exz.mT
+
+            stats.Cov.append(cov)
+            stats.Ez.append(ez)
+            stats.Ezz.append(ezz)
+            stats.Ezz1.append(ezz1)
+            stats.Ez1z.append(ez1z)
+            stats.Exx.append(exx)
+            stats.Exz.append(exz)
+            stats.Ezx.append(ezx)
+
+        return stats
+        
 
     def _observed_loglikelihood(self, values: KalmanResults) -> torch.Tensor:
         r"""Calculates the observed log-likelihood of the data in the Kalman filter.
@@ -238,7 +271,7 @@ class KalmanFilter(StateSpace):
 
         for b in range(len(values.observations)):
             T = values.observations[b].shape[0]
-            innovation = values.observations[b] - self.observation_matrices @ values.predicted_mean[b]
+            innovation = values.observations[b] - self.observation_matrices @ values.predicted_mean[b] - self.observation_bias
             innovation_cov = self.observation_matrices @ values.predicted_cov[b] @ self.observation_matrices.mT + self.observation_covariance
 
             L = torch.linalg.cholesky(innovation_cov)
@@ -278,20 +311,38 @@ class KalmanFilter(StateSpace):
             ill = torch.trace(ill) / 2
             _ll += ill
 
+            # Base term 
             tp1 = stats.Ezz[b][1:]
             tp2 = stats.Ezz1[b] @ self.transition_matrices.mT
             tp3 = tp2.mT 
             tp4 = self.transition_matrices @ stats.Ezz[b][:-1] @ self.transition_matrices.mT
-            tll = torch.sum(tp1 - tp2 - tp3 + tp4, axis=0) 
+            tp  = tp1 - tp2 - tp3 + tp4
+            # Bias terms
+            tpb1 = stats.Ez[b][1:] @ self.transition_matrices.mT
+            tpb2 = self.transition_matrices @ stats.Ez[b][:-1] @ self.transition_matrices.mT
+            tpb3 = self.transition_bias @ self.transition_bias.mT
+            tpb  = -tpb1 - tpb1.mT + tpb2 + tpb2.mT + tpb3
+
+            # Final transition loglike
+            tll = torch.sum(tp + tpb, axis=0) 
             tll = hseu.mulinv(self.transition_covariance, tll)
             tll = torch.trace(tll) / 2
             _ll += tll
 
+            # Base observation term
             ep1 = stats.Exx[b]
             ep2 = self.observation_matrices @ stats.Ezx[b]
             ep3 = ep2.mT
             ep4 = self.observation_matrices @ stats.Ezz[b] @ self.observation_matrices.mT
-            ell = torch.sum(ep1 - ep2 - ep3 + ep4, axis=0)
+            ep  = ep1 - ep2 - ep3 + ep4
+            # Observation bias terms
+            epb1 = values.observations[b] @ self.observation_matrices.mT
+            epb2 = self.observation_matrices @ stats.Ez[b] @ self.observation_matrices.mT
+            epb3 = self.observation_bias @ self.observation_bias.mT
+            epb  = -epb1 - epb1.mT + epb2 + epb2.mT + epb3
+
+            # Final observation loglike
+            ell = torch.sum(ep + epb, axis=0)
             ell = hseu.mulinv(self.observation_covariance, ell)
             ell = torch.trace(ell) / 2
             _ll += ell
@@ -301,7 +352,7 @@ class KalmanFilter(StateSpace):
         return -ll / 2
 
     def _initial_mean_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
-        return torch.atleast_2d(torch.mean(torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean]), axis=0))
+        return hseu.atleast_2d(torch.mean(torch.cat([sm[0].unsqueeze(0) for sm in values.smoothed_mean]), axis=0))
     
     def _initial_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         """
@@ -315,13 +366,13 @@ class KalmanFilter(StateSpace):
         """ 
         P1 = torch.cat([ezz[0].unsqueeze(0) for ezz in stats.Ezz])
         P2 = torch.cat([(ez[0] @ ez[0].mT).unsqueeze(0) for ez in stats.Ez])
-        return torch.atleast_2d(torch.mean(P1 - P2, axis=0))
+        return hseu.atleast_2d(torch.mean(P1 - P2, axis=0))
 
     def _transition_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         Numer = torch.cat([torch.sum(ezz1, axis=0, keepdim=True) for ezz1 in stats.Ezz1])
         Denom = torch.cat([torch.sum(ezz, axis=0, keepdim=True) for ezz in stats.Ezz])
         A = hseu.invmul(Numer, Denom)
-        return torch.atleast_2d(torch.mean(A, axis=0))
+        return hseu.atleast_2d(torch.mean(A, axis=0))
 
     def _transition_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         P1 = [ezz[1:] for ezz in stats.Ezz]
@@ -329,13 +380,13 @@ class KalmanFilter(StateSpace):
         P3 = [p2.mT for p2 in P2]
         P4 = [self.transition_matrices @ ezz[:-1] @ self.transition_matrices.T for ezz in stats.Ezz]
         Gamma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True) / len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
-        return torch.atleast_2d(torch.mean(Gamma, axis=0))
+        return hseu.atleast_2d(torch.mean(Gamma, axis=0))
 
     def _observation_matrix_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         Numer = torch.cat([torch.sum(exz, axis=0, keepdim=True) for exz in stats.Exz])
         Denom = torch.cat([torch.sum(ezz, axis=0, keepdim=True) for ezz in stats.Ezz])
         C = hseu.invmul(Numer, Denom)
-        return torch.atleast_2d(torch.mean(C, axis=0))
+        return hseu.atleast_2d(torch.mean(C, axis=0))
 
     def _observation_covariance_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
         P1 = stats.Exx
@@ -343,13 +394,42 @@ class KalmanFilter(StateSpace):
         P3 = [p2.mT for p2 in P2]
         P4 = [self.observation_matrices @ ezz @ self.observation_matrices.T for ezz in stats.Ezz]
         Sigma = torch.cat([torch.sum(p1-p2-p3+p4, axis=0, keepdim=True)/len(p1) for p1,p2,p3,p4 in zip(P1, P2, P3, P4)])
-        return torch.atleast_2d(torch.mean(Sigma, axis=0))
+        return hseu.atleast_2d(torch.mean(Sigma, axis=0))
+
+    def _transition_bias_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
+        r"""Transition bias MLE.
+
+        $b = \frac{1}{T-1}\sum_{t=2}^T \mathbb{E}[z_t] - A \mathbb{E}[z_{t-1}]$
+
+        """
+
+        offset = torch.cat([
+            (ez[1:] - self.observation_matrices @ ez[:-1])/(len(ez) - 1) for ez in stats.Ez
+        ])
+        offset = torch.mean(offset, axis=0)
+        return hseu.atleast_2d(offset)
+
+
+    def _observation_bias_mle(self, values: KalmanResults, stats: KalmanStatistics) -> torch.Tensor:
+        r"""Observation bias MLE.
+
+        $d = \frac{1}{T}\sum_{t=1}^T \mathbb{E}[x_t] - C \mathbb{E}[z_t]$
+        """
+
+        offset = torch.cat([
+            (obs - self.observation_matrices @ sm) / len(obs)
+            for obs, sm in zip(values.observations, values.smoothed_mean)
+        ])
+        offset = torch.mean(offset, axis=0)
+        return hseu.atleast_2d(offset)
 
     def _solve_parameters(self, values: KalmanResults, stats: KalmanStatistics, **_) -> torch.Tensor:
         with torch.no_grad():
             self.transition_matrices      = self._transition_matrix_mle(values, stats)
+            self.transition_bias          = self._transition_bias_mle(values, stats)
             self.transition_covariance    = self._transition_covariance_mle(values, stats)
             self.observation_matrices     = self._observation_matrix_mle(values, stats)
+            self.observation_bias         = self._observation_bias_mle(values, stats)
             self.observation_covariance   = self._observation_covariance_mle(values, stats)
             self.initial_state_mean       = self._initial_mean_mle(values, stats)
             self.initial_state_covariance = self._initial_covariance_mle(values, stats)
@@ -431,8 +511,10 @@ class KalmanFilter(StateSpace):
         (
             self.transition_matrices,
             self.transition_covariance,
+            self.transition_bias,
             self.observation_matrices,
             self.observation_covariance,
+            self.observation_bias,
             self.initial_state_mean,
             self.initial_state_covariance,
         ) = self._initialize_parameters()

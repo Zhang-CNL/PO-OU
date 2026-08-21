@@ -204,8 +204,8 @@ class Momentum(KalmanFilter):
         """
         A = self._construct_transition_mat(torch.exp(self.decay))
         Q = self._construct_transition_cov(torch.exp(self.diffusion)) 
-
-        return A,Q
+        b = torch.zeros(self.augmented_dim, 1)
+        return A,Q,b
 
     def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Build the observation transition matrix and noise matrix.
@@ -216,7 +216,8 @@ class Momentum(KalmanFilter):
         Z = torch.zeros(self.obs_dim, self.latent_dim)
         H = torch.hstack((Z, I))
         R = self.approximate_covariance
-        return H,R
+        d = torch.zeros(self.obs_dim, 1)
+        return H,R,d
 
     @wraps(KalmanFilter.filter)
     def filter(self, values: MomentumResults) -> MomentumResults:
@@ -442,8 +443,10 @@ class Momentum(KalmanFilter):
         (
             self.transition_matrices,
             self.transition_covariance,
+            self.transition_bias,
             self.observation_matrices,
             self.observation_covariance,
+            self.observation_bias,
             self.initial_state_mean,
             self.initial_state_covariance,
         ) = self._initialize_parameters()

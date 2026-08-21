@@ -1,53 +1,14 @@
 import os
 import numpy as np
 import pynapple as nap 
-from scipy.signal import butter, filtfilt
 from typing import Any
 
+import hippocampalseq.utils as hseu
 from .metadata import *
 from .lfp import * 
 from .spikes import *
 
 
-def calc_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Calculate velocity from position and time data.
-
-    Args:
-        x (np.ndarray): x position data.
-        y (np.ndarray): y position data.
-        t (np.ndarray): time data.
-
-    Returns:
-        (np.ndarray): velocity data.
-        (np.ndarray): time data.
-    """
-    dt = np.diff(t)
-    dx = np.diff(x)
-    dy = np.diff(y)
-    dt = np.concatenate([dt, [dt[-1]]]) 
-    dx = np.concatenate([dx, [dx[-1]]])
-    dy = np.concatenate([dy, [dy[-1]]])
-    
-    median_dt = np.median(dt)
-    dt[dt > 10 * median_dt] = median_dt
-    b, a = butter(2, 0.02)
-    dt_filtered = filtfilt(b, a, dt)
-    dt_filtered[dt_filtered <= 0] = np.min(dt_filtered[dt_filtered > 0]) / 10
-    
-    b, a = butter(2, 0.2)
-    dx_filtered = filtfilt(b, a, dx)
-    dy_filtered = filtfilt(b, a, dy)
-    
-    distance = np.sqrt(dx_filtered**2 + dy_filtered**2)
-    velocity = np.abs(distance / dt_filtered)
-    vx = np.abs(dx_filtered / dt_filtered)
-    vy = np.abs(dy_filtered / dt_filtered)
-    return (
-        velocity, 
-        dt_filtered,
-        vx,
-        vy
-    )
 
 def align_spikes_to_position(
         spikeframe: nap.TsGroup, 
@@ -195,7 +156,7 @@ def load_clean_data(
         dt,
         vx,
         vy
-    ) = calc_velocity(x, y, time)
+    ) = hseu.calculate_velocity(x, y, time)
     dt[dt > 60] = 0
 
     epoch = nap.IntervalSet(start=epoch_starts, end=epoch_ends)

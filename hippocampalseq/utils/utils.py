@@ -3,6 +3,7 @@ import pynapple as nap
 import torch
 from typing import Any 
 from collections.abc import Callable, Iterable
+from scipy.signal import butter, filtfilt
 
 type NDArray = np.ndarray|torch.Tensor
 
@@ -40,50 +41,9 @@ def changeover_functions(_type: type, *args: Iterable[str]) -> Callable[...,Any]
         return attrs[0]
     return attrs
 
-def create_interval_mask(length: int, starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
-    """Helper to create a boolean mask from start/end indices."""
-    mask = np.zeros(length + 1, dtype=int)
-    np.add.at(mask, starts, 1)
-    np.add.at(mask, ends, -1)
-    return np.cumsum(mask)[:-1] > 0
-
-
-def extract_times_from_boolean(mask: np.ndarray, run_times: np.ndarray):
-    b = np.asarray(mask, dtype=bool)
-    run_times = np.asarray(run_times)
-
-    if b.size == 0:
-        return np.array([]), np.array([])
-
-    # +1 where False->True (rising edge), -1 where True->False (falling edge)
-    edges = np.diff(b.astype(np.int8))
-    rising_idx  = np.flatnonzero(edges == 1) + 1
-    falling_idx = np.flatnonzero(edges == -1) + 1
-
-    start_times = run_times[rising_idx]
-    end_times   = run_times[falling_idx]
-
-    if b[0]:
-        start_times = np.concatenate(([run_times[0]], start_times))
-    if b[-1]:
-        end_times = np.concatenate((end_times, [run_times[-1]]))
-
-    return start_times, end_times
-
-def restrict_indices(t_array: np.ndarray, start: float, end: float) -> slice:
-    start_ind = int(np.searchsorted(t_array, start, side='left'))
-    end_ind   = int(np.searchsorted(t_array, end, side='right'))
-    return slice(start_ind, end_ind)
-
-def times_to_bool(data_times, start_time, end_time):
-    times_after_start = data_times >= start_time
-    times_before_end = data_times <= end_time
-    window_ind = times_after_start & times_before_end
-    return window_ind
 
 def cm_to_bins(array_in_cm: float|np.ndarray, bin_size_cm: int = 2):
     return np.floor(array_in_cm / bin_size_cm)  # cm to bins
-
 
 def extract_spikemat(
         spiking_data: nap.TsGroup,
@@ -173,3 +133,50 @@ def atleast_3d(x: NDArray) -> NDArray:
         x = x[...,None]
         return atleast_3d(x)
     return x
+
+def calculate_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate velocity from position and time data.
+
+    Args:
+        x (np.ndarray): x position data.
+        y (np.ndarray): y position data.
+        t (np.ndarray): time data.
+
+    Returns:
+        (np.ndarray): velocity data.
+        (np.ndarray): time data.
+    """
+    dt = np.diff(t)
+    dx = np.diff(x)
+    dy = np.diff(y)
+    dt = np.concatenate([dt, [dt[-1]]]) 
+    dx = np.concatenate([dx, [dx[-1]]])
+    dy = np.concatenate([dy, [dy[-1]]])
+    
+    median_dt = np.median(dt)
+    dt[dt > 10 * median_dt] = median_dt
+    b, a = butter(2, 0.02)
+    dt_filtered = filtfilt(b, a, dt)
+    dt_filtered[dt_filtered <= 0] = np.min(dt_filtered[dt_filtered > 0]) / 10
+    
+    b, a = butter(2, 0.2)
+    dx_filtered = filtfilt(b, a, dx)
+    dy_filtered = filtfilt(b, a, dy)
+    
+    distance = np.sqrt(dx_filtered**2 + dy_filtered**2)
+    velocity = np.abs(distance / dt_filtered)
+    vx = np.abs(dx_filtered / dt_filtered)
+    vy = np.abs(dy_filtered / dt_filtered)
+    return (
+        velocity, 
+        dt_filtered,
+        vx,
+        vy
+    )
+
+def calculate_velocity_dt(x: np.ndarray, dt: float|np.ndarray):
+    dx = np.diff(x)
+    dx = np.concatenate([dx, [dx[-1]]])
+    b,a = butter(2, .2)
+    dx = filtfilt(b,a,dx)
+    return np.abs(dx / dt)

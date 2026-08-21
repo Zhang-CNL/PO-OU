@@ -138,8 +138,8 @@ def process_theta(
         placefield_data: PlaceFields,
         velocity_cutoff: float = 10.0,
         theta_kwargs: dict[str, Any] = {
-            'time_window_ms': 60,
-            'time_window_advance_ms': None,
+            'time_window_s': 60,
+            'time_window_advance_s': None,
             'theta_length_s': (0.08, 0.16),
             'max_cycle_duration_s': 1.0,
             'run_period_threshold': 2.0
@@ -173,7 +173,7 @@ def process_theta(
         raw_data.running_spikes,
         theta_lfp_data,
         placefield_data.place_cell_ids,
-        time_window_s         = theta_kwargs.get('time_window_ms', 60) / 1000,
+        time_window_s         = theta_kwargs.get('time_window_s', 60 / 1000),
         time_window_advance_s = theta_kwargs.get('time_window_advance_s', None),
         velocity_cutoff       = velocity_cutoff,
         run_period_threshold  = theta_kwargs.get('run_period_threshold', 2.0)
