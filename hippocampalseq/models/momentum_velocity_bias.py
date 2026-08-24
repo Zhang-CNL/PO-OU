@@ -6,19 +6,19 @@ import hippocampalseq.utils as hseu
 from .momentum import Momentum
 
 class MomentumVelocityBias(Momentum):
-    f"""Momentum subclass that adds an additive bias to the hidden velocity.
+    r"""Momentum subclass that adds an additive bias to the hidden velocity.
     The bias is $F(\hat{v})$ where $\hat{v}$ is the true velocity provided to the
     function.
     """
 
     def __init__(
             self, 
-            velocity: list[np.ndarray],
+            velocity: list[np.ndarray|torch.Tensor],
             bias_fn: tuple[Callable[[Any], Any],list[torch.Tensor]]|str = 'linear', 
             *args, 
             **kwargs
         ):
-        f"""Create the MomentumVelocityBias model.
+        r"""Create the MomentumVelocityBias model.
         Same as the momentum model, only the velocity dynamics have 
         a bias function applied:
         $$\dot{v}_t = -\lambda v_t + F(v_{true,t}) + \sigma \xi_t$$
@@ -40,7 +40,7 @@ class MomentumVelocityBias(Momentum):
                     torch.rand(self.latent_dim, self.latent_dim),
                     torch.rand(self.latent_dim, 1)
                 ]
-            elif bias_fn == 'glm':
+            elif bias_fn == 'exp':
                 self.bias_fn = lambda A,b,v: torch.exp(A @ v + b)
                 self.bias_params = [
                     torch.rand(self.latent_dim, self.latent_dim),
@@ -54,7 +54,8 @@ class MomentumVelocityBias(Momentum):
         else:
             raise TypeError("bias_fn must be a string or a tuple of a function and a list of parameters to optimize.")
 
-        self.n_parameters += np.prod([ p.numel() for p in self.bias_params ])
+        self.n_parameters += sum(p.numel() for p in self.bias_params)
+        self.velocity = self._initialize_observations(velocity)
 
     def _construct_transition_bias(self):
         bias = []
@@ -68,8 +69,9 @@ class MomentumVelocityBias(Momentum):
 
     def build_batch_parameters(self, batch: int) -> LDSParameters:
         params = super().build_batch_parameters(batch)
-        params.transition_bias = self.transition_bias[batch]
+        params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
+
 
     def _solve_parameters(
             self, 
@@ -92,10 +94,47 @@ class MomentumVelocityBias(Momentum):
 
         params = [decay, diffusion] + bias_params
 
-        def loss_closure(params, n_batches: int, stats: SufficientStatistics):
+        def loss_closure(
+                params, 
+                n_batches: int, 
+                stats: SufficientStatistics,
+                velocity: list[torch.Tensor]
+            ):
             decay, diffusion = params[:2]
             bias_params = params[2:]
-            return 0.0
+
+            Ez   = stats.Ez
+            Ezz  = stats.Ezz
+            Ezz1 = stats.Ezz1
+
+            lmb = torch.exp(decay)
+            sig = torch.exp(diffusion)
+            M = 1 - lmb * self.dt
+            sigma = sig**2 * self.dt
+            v0 = sigma / (1 - M**2)
+
+            total_loss = 0.0
+            for b in range(n_batches):
+                T = len(Ezz[b])
+                bias = self.bias_fn(*bias_params, velocity[b])
+
+                iloss = Ezz[b][0] / v0
+                iloss = self.latent_dim * torch.log(v0) + iloss
+
+                loss = Ezz[b][1:] - 2 * M * Ezz1[b] + M**2 * Ezz[b][:-1]
+                loss = torch.sum(loss, axis=0) / sigma
+                loss = self.latent_dim * (T-1) * torch.log(sigma) + loss
+
+                ibloss = bias[0].mT @ bias[0] / v0
+
+                bloss = 2 * M * bias[1:].mT @ Ez[b][1:]
+                bloss = bloss - (2 * bias[1:].mT @ Ez[b][:-1]) 
+                bloss = bloss + (bias[1:].mT @ bias[1:]) 
+                bloss = torch.sum(bloss, axis=0) / sigma
+
+                total_loss += (iloss + loss + ibloss + bloss) / 2
+
+            return total_loss
 
         loss,params = hseu.optimize(
             loss_closure, 
@@ -103,6 +142,7 @@ class MomentumVelocityBias(Momentum):
             {
                 'n_batches' : len(values.observations), 
                 'stats'     : stats,
+                'velocity'  : self.velocity
             },
             {
                 'optimizer' : optimizer,

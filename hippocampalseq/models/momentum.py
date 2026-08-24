@@ -123,9 +123,6 @@ class Momentum(LinearGaussianSystem):
 
         $$\begin{pmatrix}-\lambda\Delta t + 1& 0 \\ \Delta t &1\end{pmatrix}$$
 
-        Args:
-            decay (torch.Tensor): Decay parameter
-        
         Returns:
             torch.Tensor: Transition matrix
         """
@@ -144,9 +141,6 @@ class Momentum(LinearGaussianSystem):
 
         $$\begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & 0\end{pmatrix}$$
 
-        Args:
-            diffusion (torch.Tensor): Diffusion parameter
-        
         Returns:
             torch.Tensor: Transition covariance
         """
@@ -345,7 +339,7 @@ class Momentum(LinearGaussianSystem):
             n_epochs: int = 1000, 
             gd_tol: float = 1e-3, 
         ) -> torch.Tensor:
-        """Perform maximum likelihood estimation of all relevant parameters for the momentum SSM using autograd.
+        """Estimate all relevant parameters for the momentum SSM using autograd.
 
         Args:
             values (MomentumResults): Momentum filtering pass results.
@@ -358,8 +352,8 @@ class Momentum(LinearGaussianSystem):
         Returns:
             torch.Tensor: The final negative log likelihood.
         """
-        decay             = torch.zeros(1, requires_grad=True)
-        diffusion         = torch.zeros(1, requires_grad=True)
+        decay     = torch.zeros(1, requires_grad=True)
+        diffusion = torch.zeros(1, requires_grad=True)
         with torch.no_grad():
             decay.copy_(self.decay)
             diffusion.copy_(self.diffusion)
@@ -371,6 +365,7 @@ class Momentum(LinearGaussianSystem):
 
             Ezz  = stats.Ezz
             Ezz1 = stats.Ezz1
+            Ez   = stats.Ez
             
             lmb   = torch.exp(decay)
             sig   = torch.exp(diffusion)
@@ -383,6 +378,7 @@ class Momentum(LinearGaussianSystem):
                 T = len(Ezz[i])
 
                 iloss = Ezz[i][0] / v0
+                iloss = self.latent_dim * torch.log(v0) + iloss
                 iloss = self.latent_dim * torch.log(v0) + iloss
 
                 loss = Ezz[i][1:] - 2 * M * Ezz1[i] + M**2 * Ezz[i][:-1]
