@@ -11,7 +11,8 @@ class MomentumVelocityBias(Momentum):
     function.
     """
 
-    def __init__(self, 
+    def __init__(
+            self, 
             velocity: list[np.ndarray],
             bias_fn: tuple[Callable[[Any], Any],list[torch.Tensor]]|str = 'linear', 
             *args, 
@@ -53,7 +54,7 @@ class MomentumVelocityBias(Momentum):
         else:
             raise TypeError("bias_fn must be a string or a tuple of a function and a list of parameters to optimize.")
 
-        self.n_parameters += np.prod([ p.numel() for p in self.bias_params])
+        self.n_parameters += np.prod([ p.numel() for p in self.bias_params ])
 
     def _construct_transition_bias(self):
         bias = []
@@ -65,29 +66,10 @@ class MomentumVelocityBias(Momentum):
             )
         return bias
 
-    def _init_transition_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
-        A = self._construct_transition_mat(torch.exp(self.decay))
-        Q = self._construct_transition_cov(torch.exp(self.diffusion))
-        b = self._construct_transition_bias()
-        return A,Q,b
-
-    @wraps(KalmanFilter.filter)
-    def filter(self, values: MomentumResults) -> MomentumResults:
-        obs_cov = self.observation_covariance
-        tbias = self.transition_bias
-        for batch in range(len(values.observations)):
-            self.observation_covariance = obs_cov[batch][0]
-            self.transition_bias = tbias[batch][0]
-            values = self._filter_init(values, batch)
-
-            for t in range(1, len(values.observations[batch])):
-                self.observation_covariance = obs_cov[batch][t]
-                self.transition_bias = tbias[batch][t]
-                values = self._filter(values, batch, t)
-
-        self.observation_covariance = obs_cov
-        self.transition_bias = tbias
-        return values
+    def build_batch_parameters(self, batch: int) -> LDSParameters:
+        params = super().build_batch_parameters(batch)
+        params.transition_bias = self.transition_bias[batch]
+        return params
 
     def _solve_parameters(
             self, 
@@ -134,15 +116,6 @@ class MomentumVelocityBias(Momentum):
         self.diffusion = params[1].detach()
         self.bias_params = [p.detach() for p in params[2:]]
 
-        (
-            self.transition_matrices,
-            self.transition_covariance,
-            self.transition_bias,
-            self.observation_matrices,
-            self.observation_covariance,
-            self.observation_bias,
-            self.initial_state_mean,
-            self.initial_state_covariance,
-        ) = self._initialize_parameters()
+        self._initialize_globals()
 
         return loss

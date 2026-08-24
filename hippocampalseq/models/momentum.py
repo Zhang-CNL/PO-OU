@@ -1,25 +1,23 @@
 import numpy as np
-import pynapple as nap
-import torch
+import torch 
 from dataclasses import dataclass, field
 from functools import wraps
 
 import hippocampalseq.utils as hseu
-
-from .kalman_filter import *
+from .linear_gaussian_system import *
 
 __all__ = [
     'Momentum',
     'MomentumResults'
 ]
 
-@dataclass
-class MomentumResults(KalmanResults):
+@dataclass 
+class MomentumResults(LDSResults):
     emission_probabilities : list[torch.Tensor] = field(default_factory=list)
     approximate_mean       : list[torch.Tensor] = field(default_factory=list)
     approximate_covariance : list[torch.Tensor] = field(default_factory=list)
 
-class Momentum(KalmanFilter):
+class Momentum(LinearGaussianSystem):
     """State-space model that includes momentum as a parameters.
     Essentially, this collapses down to a second-order markov chain, so we can use kalman filtering.
     We have a uniform prior and our observation covariance shifts over time, so we take that into account here as well.
@@ -53,11 +51,15 @@ class Momentum(KalmanFilter):
             n_zdim = 1
         else:
             n_zdim = 2
-        super().__init__(n_zdim, n_zdim, 2)
+        super().__init__(
+            n_zdim, 
+            n_zdim, 
+            2,
+            environment_size=environment_size,
+            bin_size=bin_size
+        )
 
-        self.dt            = torch.tensor(dt)
-        self.environment_size = environment_size
-        self.bin_size = bin_size
+        self.dt   = torch.tensor(dt)
         self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
 
         if seed is not None:
@@ -98,28 +100,25 @@ class Momentum(KalmanFilter):
         self.diffusion    = torch.rand(1)
         self.n_parameters = 2
 
-    @wraps(KalmanFilter._initialize)
-    def _initialize(self, X: torch.Tensor) -> MomentumResults:
-        tf_base = [torch.ones((x.shape[0], self.augmented_dim, 1)) for x in X]
-        cov_base = [torch.ones((x.shape[0], self.augmented_dim, self.augmented_dim)) for x in X]
-        def _copy(x):
-            return [i.clone() for i in x]
-        res = MomentumResults(
-            observations   = X,
-            predicted_mean = _copy(tf_base),
-            predicted_cov  = _copy(cov_base),
-            filtered_mean  = _copy(tf_base),
-            filtered_cov   = _copy(cov_base),
-            smoothed_gain  = _copy(cov_base),
-            smoothed_mean  = _copy(tf_base),
-            smoothed_cov   = _copy(cov_base),
+    @wraps(LinearGaussianSystem._initialize_values)
+    def _initialize_values(self, X: list[torch.Tensor]) -> MomentumResults:
+        meanbase = lambda: [torch.zeros((len(x), self.augmented_dim, 1)) for x in X]
+        covbase = lambda: [torch.zeros((len(x), self.augmented_dim, self.augmented_dim)) for x in X]
+        return MomentumResults(
+            observations           = X,
+            predicted_mean         = meanbase(), 
+            predicted_cov          = covbase(),
+            filtered_mean          = meanbase(),
+            filtered_cov           = covbase(),
+            smoothed_gain          = covbase(),
+            smoothed_mean          = meanbase(),
+            smoothed_cov           = covbase(),
             emission_probabilities = self.emission_probabilities,
             approximate_mean       = self.approximate_mean,
             approximate_covariance = self.approximate_covariance
         )
-        return res
 
-    def _construct_transition_mat(self, decay: torch.Tensor) -> torch.Tensor:
+    def _construct_transition_matrix(self) -> torch.Tensor:
         r"""Construct the transition matrix in the form
 
         $$\begin{pmatrix}-\lambda\Delta t + 1& 0 \\ \Delta t &1\end{pmatrix}$$
@@ -134,13 +133,13 @@ class Momentum(KalmanFilter):
         Z  = torch.zeros(self.latent_dim, self.latent_dim)
         If = torch.eye(self.augmented_dim)
 
-        M1 = -decay * I
-        top = torch.cat((M1, Z), dim=1)
+        M1     = -torch.exp(self.decay) * I
+        top    = torch.cat((M1, Z), dim=1)
         bottom = torch.cat((I , Z), dim=1)
         A = torch.cat((top, bottom), dim=0) * self.dt + If
         return A
 
-    def _construct_transition_cov(self, diffusion: torch.Tensor) -> torch.Tensor:
+    def _construct_transition_covariance(self) -> torch.Tensor:
         r"""Construct the transition covariance matrix in the form
 
         $$\begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & 0\end{pmatrix}$$
@@ -154,13 +153,22 @@ class Momentum(KalmanFilter):
         I = torch.eye(self.latent_dim)
         Z = torch.zeros((self.latent_dim, self.latent_dim))
 
-        sigma_m = diffusion**2 * self.dt * I
-        top = torch.cat((sigma_m, Z), dim=1)
-        bottom = torch.cat((Z, Z), dim=1)
-        Gamma = torch.cat((top, bottom), dim=0)
+        sigma_m = torch.exp(self.diffusion)**2 * self.dt * I
+        top     = torch.cat((sigma_m, Z), dim=1)
+        bottom  = torch.cat((Z, Z), dim=1)
+        Gamma   = torch.cat((top, bottom), dim=0)
         return Gamma
 
-    def _init_priors(self) -> tuple[torch.Tensor,...]:
+    def _construct_emission_matrix(self) -> torch.Tensor:
+        return torch.hstack((
+            torch.zeros(self.emission_dim, self.latent_dim),
+            torch.eye(self.emission_dim), 
+        ))
+
+    def _construct_emission_covariance(self):
+        return self.approximate_covariance
+
+    def _construct_initial_mean(self) -> torch.Tensor:
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
@@ -177,125 +185,44 @@ class Momentum(KalmanFilter):
         """
         diffs = torch.tensor([es[1] + es[0] for es in self.environment_size])
         starts = torch.tensor([es[0] for es in self.environment_size])
-        init_mean_z = (diffs / 2 + starts)[:,None]
-        init_cov_z = torch.diag(diffs)**2 / 12
+        zmean = (diffs / 2 + starts)[:,None]
+        vmean  = torch.zeros((self.latent_dim, 1))
+        return torch.cat((
+            vmean, zmean
+        ), dim=0)
+
+    def _construct_initial_covariance(self) -> torch.Tensor:
+        diffs = torch.tensor([es[1] + es[0] for es in self.environment_size])
+        zcov = torch.diag(diffs)**2 / 12
 
         sigma = torch.exp(self.diffusion)
         lmb   = torch.exp(self.decay)
-        init_cov_v = torch.eye(self.latent_dim) * (sigma**2 * self.dt / (1 - (1 - lmb*self.dt)**2))
-        init_mean_v = torch.zeros((self.latent_dim, 1))
-
+        vcov = torch.eye(self.latent_dim) * (sigma**2 * self.dt / (1 - (1 - lmb*self.dt)**2))
         Z = torch.zeros(self.latent_dim, self.latent_dim)
-
-        init_mean = torch.cat((init_mean_v, init_mean_z), dim=0)
-        init_cov = torch.cat((
-            torch.cat((init_cov_v, Z), dim=1),
-            torch.cat((Z, init_cov_z), dim=1)
+        return torch.cat((
+            torch.cat((vcov, Z), dim=1),
+            torch.cat((Z, zcov), dim=1)
         ), dim=0)
 
-        return init_mean, init_cov
 
-    def _init_transition_matrices(self) -> tuple[torch.Tensor,...]:
-        r"""Construct transition matrices for momentum SSM.
+    def _construct_transition_bias(self):
+        return torch.zeros((self.augmented_dim, 1))
+    def _construct_emission_bias(self):
+        return torch.zeros((self.emission_dim, 1))
 
-        Returns:
-            (torch.Tensor): transition matrix for augmented state $(v_t \;  z_t)^T$
-            (torch.Tensor): process noise covariance for augmented state
-        """
-        A = self._construct_transition_mat(torch.exp(self.decay))
-        Q = self._construct_transition_cov(torch.exp(self.diffusion)) 
-        b = torch.zeros(self.augmented_dim, 1)
-        return A,Q,b
-
-    def _init_observation_matrices(self) -> tuple[torch.Tensor,...]:
-        r"""Build the observation transition matrix and noise matrix.
-        The noise is computed analytically from the data, while the transition
-        matrix has the form $$\begin{bmatrix}0_2 & I_2\end{bmatrix}$$
-        """
-        I = torch.eye(self.obs_dim)
-        Z = torch.zeros(self.obs_dim, self.latent_dim)
-        H = torch.hstack((Z, I))
-        R = self.approximate_covariance
-        d = torch.zeros(self.obs_dim, 1)
-        return H,R,d
-
-    @wraps(KalmanFilter.filter)
-    def filter(self, values: MomentumResults) -> MomentumResults:
-        obs_cov = self.observation_covariance
-        for batch in range(len(values.observations)):
-            self.observation_covariance = obs_cov[batch][0]
-            values = self._filter_init(values, batch)
-            for t in range(1, len(values.observations[batch])):
-                self.observation_covariance = obs_cov[batch][t]
-                values = self._filter(values, batch, t)
-        self.observation_covariance = obs_cov
-        return values
-
-    def _calc_sufficient_stats(self, values: MomentumResults) -> KalmanStatistics:
-        """
-        Calculate sufficient statistics for performing maximization given the filtered
-        and smoothed values of the model.
-        Avoids calculating various unused values from the Kalman filtering version.
-
-        Args:
-            values (MomentumResults): The filtered and smoothed values of the model.
-
-        Returns:
-            KalmanStatistics: The sufficient statistics of the model.
-        """
-        N = self.latent_dim
-        btrace = torch.vmap(torch.trace)
-        Cov,Ez,Ezz,Ezz1 = [],[],[],[]
-        for sm,sc,sg in zip(values.smoothed_mean, values.smoothed_cov, values.smoothed_gain):
-            muvv = sm[:,:N]
-            v_vv = sc[:,:N,:N]
-            g_vv = sg[:,:N,:N]
-            # $$Cov[z_t,z_{t-1}] = \hat{V}_t J_{t-1}$$
-            cov = btrace(v_vv[1:] @ g_vv[:-1].mT).squeeze() # tr(2,2) -> (1,1)
-            # $$E[z_t] = \hat{\mu}_t$$
-            ez = muvv # (2,1)
-            # $$E[z_t^T z_t] = \hat{\mu}_t^T \hat{\mu}_t + tr(\hat{V}_t)$$
-            ezz = (muvv.mT @ muvv).squeeze() + btrace(v_vv).squeeze() # (1,2)(2,1) + (1,1) -> (1,1)
-            # $$E[z_t^T z_{t-1}] = tr(Cov[z_t,z_{t-1}]) + \hat{\mu}_t^T \hat{\mu}_{t-1}$$
-            ezz1 = cov.squeeze() + (muvv[1:].mT @ muvv[:-1]).squeeze() # (1,1) + (1,2)(2,1) -> (1,1)
-
-            Cov.append(cov)
-            Ez.append(ez)
-            Ezz.append(ezz)
-            Ezz1.append(ezz1)
-
-        return KalmanStatistics(
-            Cov=Cov,
-            Ez=Ez,
-            Ezz=Ezz,
-            Ezz1=Ezz1,
-            Ez1z=None,
-            Exx=None,
-            Exz=None,
-            Ezx=None
+    def build_batch_parameters(self, batch: int) -> LDSParameters:
+        return LDSParameters(
+            transition_matrix     = self.global_parameters.transition_matrix,
+            transition_covariance = self.global_parameters.transition_covariance,
+            transition_bias       = self.global_parameters.transition_bias,
+            emission_matrix       = self.global_parameters.emission_matrix,
+            emission_covariance   = self.global_parameters.emission_covariance[batch],
+            emission_bias         = self.global_parameters.emission_bias,
+            initial_mean          = self.global_parameters.initial_mean,
+            initial_covariance    = self.global_parameters.initial_covariance
         )
 
-    @wraps(KalmanFilter._observed_loglikelihood)
-    def _observed_loglikelihood(self, values: KalmanResults) -> torch.Tensor:
-        log2pi = torch.log(2*PI)
-        rank = self.augmented_dim
-        loglike = 0
-
-        for b in range(len(values.observations)):
-            T = values.observations[b].shape[0]
-            innovation = values.observations[b] - self.observation_matrices @ values.predicted_mean[b]
-            innovation_cov = self.observation_matrices @ values.predicted_cov[b] @ self.observation_matrices.mT + self.observation_covariance[b]
-
-            L = torch.linalg.cholesky(innovation_cov)
-            alpha = torch.cholesky_solve(innovation, L)
-
-            loglike += T * rank * log2pi \
-                + 2 * torch.sum(torch.log(torch.diagonal(L, dim1=-2, dim2=-1))) \
-                + torch.sum(innovation.mT @ alpha, axis=0)
-
-        return -0.5 * loglike.squeeze()
-
-    def _loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
         r"""Calculate the full-data log-likelihood for the model given the current state.
 
         Args:
@@ -310,12 +237,12 @@ class Momentum(KalmanFilter):
         log2pi = torch.log(2*PI)
         rank   = self.latent_dim
 
-        mu0 = self.initial_state_mean
-        A   = self.transition_matrices
-        C   = self.observation_matrices
-        V0     = self.initial_state_covariance
-        Sigma  = self.observation_covariance
-        Gamma  = self.transition_covariance
+        mu0 = self.global_parameters.initial_mean
+        A   = self.global_parameters.transition_matrix
+        C   = self.global_parameters.emission_matrix
+        V0     = self.global_parameters.initial_covariance
+        Sigma  = self.global_parameters.emission_covariance
+        Gamma  = self.global_parameters.transition_covariance
 
         GammaS = torch.linalg.svd(Gamma)[1]
         GPi = torch.diag(1 / GammaS[:rank])
@@ -364,6 +291,50 @@ class Momentum(KalmanFilter):
 
             loglike += _loglike
         return -loglike / 2.0
+
+    def _calculate_sufficient_statistics(self, values: MomentumResults) -> KalmanStatistics:
+        """
+        Calculate sufficient statistics for performing maximization given the filtered
+        and smoothed values of the model.
+        Avoids calculating various unused values from the Kalman filtering version.
+
+        Args:
+            values (MomentumResults): The filtered and smoothed values of the model.
+
+        Returns:
+            KalmanStatistics: The sufficient statistics of the model.
+        """
+        N = self.latent_dim
+        btrace = torch.vmap(torch.trace)
+        Cov,Ez,Ezz,Ezz1 = [],[],[],[]
+        for sm,sc,sg in zip(values.smoothed_mean, values.smoothed_cov, values.smoothed_gain):
+            muvv = sm[:,:N]
+            v_vv = sc[:,:N,:N]
+            g_vv = sg[:,:N,:N]
+            # $$Cov[z_t,z_{t-1}] = \hat{V}_t J_{t-1}$$
+            cov = btrace(v_vv[1:] @ g_vv[:-1].mT).squeeze() # tr(2,2) -> (1,1)
+            # $$E[z_t] = \hat{\mu}_t$$
+            ez = muvv # (2,1)
+            # $$E[z_t^T z_t] = \hat{\mu}_t^T \hat{\mu}_t + tr(\hat{V}_t)$$
+            ezz = (muvv.mT @ muvv).squeeze() + btrace(v_vv).squeeze() # (1,2)(2,1) + (1,1) -> (1,1)
+            # $$E[z_t^T z_{t-1}] = tr(Cov[z_t,z_{t-1}]) + \hat{\mu}_t^T \hat{\mu}_{t-1}$$
+            ezz1 = cov.squeeze() + (muvv[1:].mT @ muvv[:-1]).squeeze() # (1,1) + (1,2)(2,1) -> (1,1)
+
+            Cov.append(cov)
+            Ez.append(ez)
+            Ezz.append(ezz)
+            Ezz1.append(ezz1)
+
+        return LDSStatistics(
+            Cov=Cov,
+            Ez=Ez,
+            Ezz=Ezz,
+            Ezz1=Ezz1,
+            Ez1z=None,
+            Exx=None,
+            Exz=None,
+            Ezx=None
+        )
 
     def _solve_parameters(
             self, 
@@ -440,20 +411,12 @@ class Momentum(KalmanFilter):
         self.decay     = params[0].detach()
         self.diffusion = params[1].detach()
 
-        (
-            self.transition_matrices,
-            self.transition_covariance,
-            self.transition_bias,
-            self.observation_matrices,
-            self.observation_covariance,
-            self.observation_bias,
-            self.initial_state_mean,
-            self.initial_state_covariance,
-        ) = self._initialize_parameters()
+        self._initialize_globals()
 
         return loss
 
-    def fit(self, 
+    def fit(
+            self, 
             X=None, 
             n_iter: int = 1000, 
             emtol: float = 1e-3, 

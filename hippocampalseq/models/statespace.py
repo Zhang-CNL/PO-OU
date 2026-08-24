@@ -1,9 +1,8 @@
 import torch
 import numpy as np
-import numpy.typing as npt
 from typing import (
     Protocol,
-    runtime_checkable,
+    runtime_checkable
 )
 
 __all__ = [
@@ -22,7 +21,7 @@ class StateSpaceResults(Protocol):
 
 class StateSpace:
     def filter(self, values: StateSpaceResults) -> StateSpaceResults:
-        raise NotImplementedError
+        raise NotImplementedErrpr
 
     def smooth(self, values: StateSpaceResults) -> StateSpaceResults:
         raise NotImplementedError
@@ -36,7 +35,7 @@ class StateSpace:
         return 2*(self.n_parameters - max_loglikelihood)
 
     def fit(self,
-            X: np.ndarray,
+            X: list[np.ndarray|torch.Tensor],
             *_: tuple,
         ) -> StateSpaceResults:
         raise NotImplementedError

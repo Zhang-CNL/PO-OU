@@ -1,10 +1,8 @@
 import torch
 
-from hippocampalseq.models.statespace import SufficientStatistics
 import hippocampalseq.utils as hseu
-
+from .linear_gaussian_system import *
 from .momentum import *
-from .kalman_filter import *
 
 class MomentumVelocity(Momentum):
     def __init__(
@@ -53,26 +51,31 @@ class MomentumVelocity(Momentum):
             seed
         )
         self.velocity_type = velocity_type
-        self.emission_velocity_variance = torch.rand((self.obs_dim, self.obs_dim))
-        self.obs_dim *= 2
+        self.emission_velocity_variance = torch.rand((self.emission_dim, self.emission_dim))
+        self.emission_dim *= 2
         self.n_parameters += self.emission_velocity_variance.numel()
 
-    def _init_observation_matrices(self) -> tuple[torch.Tensor, torch.Tensor]:
-        H = torch.eye(self.obs_dim)
+    def _construct_emission_matrix(self):
+        return torch.eye(self.emission_dim)
+
+    def _construct_emission_covariance(self):
         emv = self.emission_velocity_variance @ self.emission_velocity_variance.T
         R = []
         for ac in self.approximate_covariance:
             emit = torch.zeros((
-                len(ac), self.obs_dim, self.obs_dim
+                len(ac), self.emission_dim, self.emission_dim
             ))
             emit[:,:self.latent_dim,:self.latent_dim] = emv
             emit[:,self.latent_dim:,self.latent_dim:] = ac
             R.append(emit)
+        return R
 
-        d = torch.zeros((self.augmented_dim, 1))
-        return H,R,d
+    def build_batch_parameters(self, batch: int) -> LDSParameters:
+        params = super().build_batch_parameters(batch)
+        params.emission_covariance = self.global_parameters.emission_covariance[batch]
+        return params
 
-    def _calc_sufficient_stats(self, values: MomentumResuts) -> KalmanStatistics:
+    def _calculate_sufficient_statistics(self, values: MomentumResuts) -> KalmanStatistics:
         r"""Calculate sufficient statistics for the momentum with velocity model.
         Since our log-likelihood calculation has non-constant emissions,
         we calculate $\mathbb{E}[v_t v_t^T]$, $\mathbb{E}[v_t \hat{v}_t^T]$, $\mathbb{E}[\hat{v}_tv_t^T]$, and $\mathbb{E}[\hat{v}_t\hat{v}_t^T]$.
@@ -80,7 +83,7 @@ class MomentumVelocity(Momentum):
         still want to keep stats.Ezz from the momentum model for our latent storage.
 
         """
-        stats = super()._calc_sufficient_stats(values)
+        stats = super()._calculate_sufficient_statistics(values)
 
         Exx,Exz,Ezx,Ezz = [],[],[],[]
         for sm,x in zip(values.smoothed_mean, self.velocity):
@@ -202,19 +205,8 @@ class MomentumVelocity(Momentum):
         self.diffusion = params[1].detach()
         self.emission_velocity_variance = params[2].detach()
 
-        (
-            self.transition_matrices,
-            self.transition_covariance,
-            self.transition_bias,
-            self.observation_matrices,
-            self.observation_covariance,
-            self.observation_bias,
-            self.initial_state_mean,
-            self.initial_state_covariance,
-        ) = self._initialize_parameters()
-
+        self._initialize_globals()
         return loss
-
 
     def fit(self, 
             X: list[np.ndarray|torch.Tensor]|None = None, 
@@ -236,10 +228,10 @@ class MomentumVelocity(Momentum):
         """
 
         if self.velocity_type == 'true':
-            X = self._parse_observations(X)
+            X = self._initialize_observations(X)
             self.velocity = X
         elif self.velocity_type == 'observed':
-            if self.obs_dim == 4:
+            if self.emission_dim == 4:
                 velocity = [
                     (
                         hseu.calculate_velocity_dt(
@@ -283,7 +275,7 @@ class MomentumVelocity(Momentum):
                 self.approximate_mean
             )
         ]
-        return KalmanFilter.fit(
+        return LinearGaussianSystem.fit(
             self,
             X,
             n_iter,

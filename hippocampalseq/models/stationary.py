@@ -10,18 +10,19 @@ class StationaryResults:
     model_evidence: list[float]
     cumulative_probabilities: np.ndarray
 
-class Stationary(Statespace):
+class Stationary(StateSpace):
     def __init__(self, place_fields: np.ndarray, dt: float):
         super().__init__()
 
         self.place_fields = place_fields
         self.dt = dt
 
-    def fit(self,
-        X: list[np.ndarray],
-        *_: tuple,
-        **__: dict
-    ):
+    def fit(
+            self,
+            X: list[np.ndarray],
+            *_: tuple,
+            **__: dict
+        ):
         cumulative_probabilities = np.zeros_like((len(X),)+self.place_fields.shape[1:])
         model_evidence = []
         for t,spike in enumerate(X):

@@ -139,6 +139,17 @@ def atleast_3d(x: NDArray) -> NDArray:
         return atleast_3d(x)
     return x
 
+def extract_last_dims(x: NDAarray|Callable[[int],NDArray], t: int) -> NDArray:
+    if callable(x):
+        return x(t)
+    if x.ndim == 2:
+        return x
+    if x.ndim == 3:
+        return atleast_2d(x[t])
+    raise ValueError(
+        f"Expected x to have shape (T,N,M) or (N,M). Got {tuple(x.shape)}"
+    )
+
 def calculate_velocity(x: np.ndarray, y: np.ndarray, t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Calculate velocity from position and time data.
 
