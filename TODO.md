@@ -15,7 +15,7 @@
     - [ ] Modality-specific decoding
 - [x] Separate out theta and replay processing 
 - [ ] Write replay processing
-- [ ] 1D linear decoding checks
+- [x] 1D linear decoding checks
 - [ ] Clean up plotting code
 - [ ] Pipeline plotting and analysis code
 - [ ] Document various preprocessing functions
@@ -32,3 +32,9 @@
 - [ ] Finish testing the $$\dot{z} = v_t + u(x_t - z_t) + \sigma \xi_t$$ model
     - $x_t$ is the true position here
 - [ ] Incorporate LFP data
+
+## Modeling tasks
+- [ ] Try 2D synaptic input in CANNDynamics
+- [ ] Use emission convariance multiplied by a constant in the CANNDynamics model
+- [ ] Use likelihood position as feedforward input in CANNDynamics
+- [ ] Use likelihood position's velocity as input into MomentumVelocityBias

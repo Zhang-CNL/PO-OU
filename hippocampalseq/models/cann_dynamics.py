@@ -28,10 +28,10 @@ class CANNDynamics(Momentum):
             for tp in true_position
         ]
 
-        self.syn_input    = torch.rand(1) # U
+        self.syn_input    = torch.rand(self.latent_dim) # U
         self.pos_variance = torch.rand(1) # sigma_z
 
-        self.n_parameters  += 2
+        self.n_parameters  += self.latent_dim + 1
 
     def _construct_transition_matrix(self) -> torch.Tensor:
         r"""Construct the transition matrix:
@@ -45,7 +45,7 @@ class CANNDynamics(Momentum):
 
         M1 = -torch.exp(self.decay) * I
         top = torch.cat((M1, Z), dim=1)
-        M4 = -torch.exp(self.syn_input) * I
+        M4 = -torch.diag(torch.exp(self.syn_input))
         bottom = torch.cat((I, M4), dim=1)
         F = torch.cat((top, bottom), dim=0) * self.dt + If
         return F
@@ -77,7 +77,7 @@ class CANNDynamics(Momentum):
             b.append(
                 torch.cat((
                     torch.zeros_like(tp), 
-                    self.dt * torch.exp(self.syn_input) * tp
+                    (self.dt * torch.diag(torch.exp(self.syn_input))) @ tp
                 ), dim=1)
             )
         return b
@@ -124,7 +124,7 @@ class CANNDynamics(Momentum):
             
             lmb   = torch.exp(decay)
             sigv  = torch.exp(diffusion)
-            U     = torch.exp(syn_input)
+            U     = torch.diag(torch.exp(syn_input))
             sigz  = torch.exp(pos_variance)
 
             F1 = -lmb * self.dt + 1
@@ -134,7 +134,7 @@ class CANNDynamics(Momentum):
             F = torch.cat(
                 (
                     torch.cat((F1 * I, Z), dim=1),
-                    torch.cat((self.dt * I, (-U * self.dt + 1) * I), dim=1)
+                    torch.cat((self.dt * I, (-U * self.dt) + I), dim=1)
                 ),
                 dim=0
             )
@@ -145,17 +145,6 @@ class CANNDynamics(Momentum):
                 ),
                 dim=0
             )
-            b = []
-            for tp in self.true_position:
-                b.append(
-                    torch.cat(
-                        (
-                            torch.zeros_like(tp),
-                            self.dt * U * tp
-                        ),
-                        dim=1
-                    )
-                )
 
             v0 = sigmav / (1 - F1**2)
             ic = torch.linalg.inv(
@@ -167,16 +156,23 @@ class CANNDynamics(Momentum):
             for i in range(n_batches):
                 T = len(stats.Ez[i])
 
+                b = torch.cat((
+                        torch.zeros_like(self.true_position[i]),
+                        self.dt * U @ self.true_position[i]
+                    ),
+                    dim=1
+                )
+
                 # $2ln\ |V_0| + \mathbb{E}\left[z_1^T z_1\right] / V_0$
                 ivloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
                 ivloss = self.latent_dim * torch.log(v0) + ivloss / v0
 
                 # $\mathbb{E}\left[(z_1 - \mu_0 - b_1)^T \hat{V}_0^{-1} (z_1 - \mu_0 - b_1)\right]$
-                izloss = Ez[i][0,self.latent_dim:].mT @ ic @ (-b[i][0,self.latent_dim:]) \
-                    + im.mT @ ic @ b[i][0,self.latent_dim:] \
-                    - b[i][0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
-                    + b[i][0,self.latent_dim:].mT @ ic @ im \
-                    + b[i][0,self.latent_dim:].mT @ ic @ b[i][0,self.latent_dim:]
+                izloss = Ez[i][0,self.latent_dim:].mT @ ic @ (-b[0,self.latent_dim:]) \
+                    + im.mT @ ic @ b[0,self.latent_dim:] \
+                    - b[0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
+                    + b[0,self.latent_dim:].mT @ ic @ im \
+                    + b[0,self.latent_dim:].mT @ ic @ b[0,self.latent_dim:]
                 
                 iloss = ivloss + izloss
 
@@ -187,9 +183,9 @@ class CANNDynamics(Momentum):
                 tl3 = F @ torch.sum(Ezz[i][:-1], axis=0) @ F.mT 
                 tloss = tl1 - tl2 - tl2.mT + tl3
 
-                bl1 = torch.sum(Ez[i][1:] @ b[i][1:].mT, axis=0)
-                bl2 = F @ torch.sum(Ez[i][:-1] @ b[i][1:].mT, axis=0)
-                bl3 = torch.sum(b[i][1:] @ b[i][1:].mT, axis=0)
+                bl1 = torch.sum(Ez[i][1:] @ b[1:].mT, axis=0)
+                bl2 = F @ torch.sum(Ez[i][:-1] @ b[1:].mT, axis=0)
+                bl3 = torch.sum(b[1:] @ b[1:].mT, axis=0)
                 bloss = bl3 + bl2 + bl2.mT - bl1 - bl1.mT 
 
                 loss = hseu.mulinv(R, tloss + bloss)

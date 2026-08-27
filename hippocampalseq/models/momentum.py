@@ -11,8 +11,6 @@ __all__ = [
     'MomentumResults'
 ]
 
-analytical_approximation = torch.compile(hseu.analytical_gaussian_approximation)
-
 @dataclass 
 class MomentumResults(LDSResults):
     emission_probabilities : list[torch.Tensor] = field(default_factory=list)
@@ -84,7 +82,7 @@ class Momentum(LinearGaussianSystem):
             emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
             emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
 
-            approx_mean, approx_cov = analytical_approximation(
+            approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
                 self.grid,
                 emission_probability,
                 'weighted',

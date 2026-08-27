@@ -311,8 +311,6 @@ class LinearGaussianSystem(StateSpace):
             params = self.build_batch_parameters(b)
             T = len(values.observations[b])
             t = np.arange(T)
-            print(t.shape)
-            print(params.transition_matrix.shape)
             tmat = hseu.extract_last_dims(params.transition_matrix, t[1:])
             tcov = hseu.extract_last_dims(params.transition_covariance, t[1:])
             emat = hseu.extract_last_dims(params.emission_matrix, t)
@@ -590,7 +588,7 @@ class LinearGaussianSystem(StateSpace):
                 print(f"Converged after {i} epochs, exiting")
                 break
 
-            if i % 50 == 0:
+            if i % 20 == 0:
                 print(f"Iteration {i}: {ll.item()}")
 
         if i == n_iter - 1:
