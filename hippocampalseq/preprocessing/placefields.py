@@ -1,9 +1,21 @@
 import numpy as np
 import pynapple as nap
 from scipy.ndimage import gaussian_filter, gaussian_filter1d
-from typing import Optional
+from typing import NamedTuple
 
 import hippocampalseq.utils as hseu
+
+class EnvironmentSize(NamedTuple):
+    x: tuple[int,...]|None = None
+    y: tuple[int,...]|None = None
+    
+    def axes(self):
+        axis = []
+        if self.x:
+            axis.append('x')
+        if self.y:
+            axis.append('y')
+        return axis
 
 def calculate_one_placefield(
         position_hist: np.ndarray,
@@ -78,7 +90,7 @@ def calculate_placefields(
         run_position_data: nap.TsdFrame,
         run_spike_info: dict[int, nap.TsdFrame],
         excitatory_neurons: np.ndarray,
-        environment_size: Optional[list[tuple[int,...]]] = [(0,200),(0,200)],
+        environment_size: EnvironmentSize|None = EnvironmentSize((0,200),(0,200)),
         track_type = 'Linear',
         bin_size_cm: int = 2,
         place_field_gaussian_sd_cm: float = 4.0,
@@ -88,7 +100,7 @@ def calculate_placefields(
         min_spike_rate: float = 1.0,
         velocity_cutoff: float = 5.0,
         flatten_linear: bool = False
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[tuple[int,...]]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, EnvironmentSize]:
     """Calculate place fields from position and spike data.
     We want to use the 'ij' indexing convention for the place field data, meaning that
     if we want to plot the place field using imshow, we must transpose it first.
@@ -114,7 +126,7 @@ def calculate_placefields(
         (np.ndarray): Place fields.
         (np.ndarray): Place cell ids.
         (np.ndarray): Number of times the rat was in a specific position.
-        (list[tuple[int,...]]): Size of the environment. Useful if we learn it from the data.
+        (EnvironmentSize): Size of the environment. Useful if we learn it from the data.
     """
     assert track_type in ['Open', 'Linear']
     prior_alpha_s = prior_beta_s * prior_mean_rat_sps + 1
@@ -127,10 +139,10 @@ def calculate_placefields(
     ncells = len(run_spike_info)
 
     if environment_size is None:
-        environment_size = [
+        environment_size = EnvironmentSize(
             (np.min(x),np.max(x)),
             (np.min(y),np.max(y))
-        ]
+        )
 
     xbounds,ybounds = environment_size
     nbx = int((xbounds[1] - xbounds[0]) / bin_size_cm)
@@ -165,14 +177,16 @@ def calculate_placefields(
         yspan = y.max() - y.min()
         if xspan >= yspan:
             axis = 2
-            environment_size = [
+            environment_size = EnvironmentSize(
                 (0, (len(xedges) - 1) * bin_size_cm),
-            ]
+                None
+            )
         else:
             axis = 1
-            environment_size = [
+            environment_size = EnvironmentSize(
+                None,
                 (0, (len(yedges) - 1) * bin_size_cm)
-            ]
+            )
 
         linear_spike_hist = np.sum(spike_hists, axis=axis)
         position_hist = np.sum(position_hist, axis=axis-1)
@@ -189,10 +203,11 @@ def calculate_placefields(
         place_fields = place_fields[...,None]
     else:
         if track_type == 'Linear':
-            environment_size = [
+            environment_size = EnvironmentSize(
                 (0, (len(xedges) - 1) * bin_size_cm),
                 (0, (len(yedges) - 1) * bin_size_cm),
-            ]
+            )
+                
         place_fields = np.zeros((ncells, nbx, nby))
         for cell_id in range(ncells):
             place_fields[cell_id] = calculate_one_placefield(

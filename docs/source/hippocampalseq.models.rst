@@ -4,6 +4,14 @@ hippocampalseq.models package
 Submodules
 ----------
 
+hippocampalseq.models.bayesian\_map module
+------------------------------------------
+
+.. automodule:: hippocampalseq.models.bayesian_map
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 hippocampalseq.models.cann\_dynamics module
 -------------------------------------------
 
@@ -12,18 +20,18 @@ hippocampalseq.models.cann\_dynamics module
    :show-inheritance:
    :undoc-members:
 
-hippocampalseq.models.kalman\_filter module
--------------------------------------------
+hippocampalseq.models.cann\_dynamics\_spikes module
+---------------------------------------------------
 
-.. automodule:: hippocampalseq.models.kalman_filter
+.. automodule:: hippocampalseq.models.cann_dynamics_spikes
    :members:
    :show-inheritance:
    :undoc-members:
 
-hippocampalseq.models.map module
---------------------------------
+hippocampalseq.models.linear\_gaussian\_system module
+-----------------------------------------------------
 
-.. automodule:: hippocampalseq.models.map
+.. automodule:: hippocampalseq.models.linear_gaussian_system
    :members:
    :show-inheritance:
    :undoc-members:
@@ -44,10 +52,18 @@ hippocampalseq.models.momentum module
    :show-inheritance:
    :undoc-members:
 
-hippocampalseq.models.momentum\_o2 module
------------------------------------------
+hippocampalseq.models.momentum\_velocity module
+-----------------------------------------------
 
-.. automodule:: hippocampalseq.models.momentum_o2
+.. automodule:: hippocampalseq.models.momentum_velocity
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
+hippocampalseq.models.momentum\_velocity\_bias module
+-----------------------------------------------------
+
+.. automodule:: hippocampalseq.models.momentum_velocity_bias
    :members:
    :show-inheritance:
    :undoc-members:

@@ -24,6 +24,9 @@ def spike_info_to_tsg(spike_info: dict[int, nap.TsdFrame]) -> nap.TsGroup:
         cell: nap.Ts(t=spike_info[cell].index.values) for cell in spike_info
     })
 
+def grad_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    return tensor.detach().clone().requires_grad_(True)
+
 def changeover_functions(_type: type, *args: Iterable[str]) -> Callable[...,Any]|list[Callable[...,Any]]:
     """Given a type of an array, return an arbritrary list of functions from the proper module
     (torch or numpy) corresponding to the arguments.

@@ -128,16 +128,9 @@ class MomentumVelocity(Momentum):
             \right]
         $$
         """
-
-        decay      = torch.zeros(1, requires_grad=True)
-        diffusion  = torch.zeros(1, requires_grad=True)
-        K          = torch.zeros((self.latent_dim, self.latent_dim), requires_grad=True)
-        with torch.no_grad():
-            decay.copy_(self.decay)
-            diffusion.copy_(self.diffusion)
-            emv = self.emission_velocity_variance
-            K.copy_(emv)
-
+        decay = hseu.grad_tensor(self.decay)
+        diffusion = hseu.grad_tensor(self.diffusion)
+        K = hseu.grad_tensor(self.emission_velocity_variance)
         params = [decay, diffusion, K]
 
         def loss_closure(

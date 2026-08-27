@@ -88,10 +88,11 @@ class LinearGaussianSystem(StateSpace):
 
     def _initialize_observations(self, X: torch.Tensor|list[torch.Tensor]|None):
         if X is None:
-            return X 
+            raise ValueError("Observation data cannot be None")
         if not isinstance(X, list):
             X = [X]
         for i in range(len(X)):
+            assert X[i] is not None, f"Observation {i} is None"
             if not torch.is_tensor(X[i]):
                 X[i] = torch.from_numpy(X[i])
             X[i] = hseu.atleast_3d(X[i])
@@ -309,63 +310,87 @@ class LinearGaussianSystem(StateSpace):
         for b in range(len(values.observations)):
             params = self.build_batch_parameters(b)
             T = len(values.observations[b])
+            t = np.arange(T)
+            print(t.shape)
+            print(params.transition_matrix.shape)
+            tmat = hseu.extract_last_dims(params.transition_matrix, t[1:])
+            tcov = hseu.extract_last_dims(params.transition_covariance, t[1:])
+            emat = hseu.extract_last_dims(params.emission_matrix, t)
+            ecov = hseu.extract_last_dims(params.emission_covariance, t)
+            tbias = hseu.extract_last_dims(params.transition_bias, t)
+            ebias = hseu.extract_last_dims(params.emission_bias, t)
 
             iloglike = 0
             
             # Log-determinant of the Gaussian portions
             ilogd = torch.logdet(params.initial_covariance)
-            tlogd = torch.logdet(params.transition_covariance)
-            if params.transition_covariance.ndim == 2:
+            tlogd = torch.logdet(tcov)
+            if tcov.ndim == 2:
                 tlogd *= (T - 1)
-            elogd = torch.logdet(params.emission_covariance)
-            if params.emission_covariance.ndim == 2:
+            else:
+                tlogd = torch.sum(tlogd, axis=0)
+            elogd = torch.logdet(ecov)
+            if ecov.ndim == 2:
                 elogd *= T 
+            else:
+                elogd = torch.sum(elogd, axis=0)
             iloglike += ilogd + tlogd + elogd
 
             # Initial state 
             ip1 = stats.Ezz[b][0]
             ip2 = params.initial_mean @ values.smoothed_mean[b][0].mT 
             ip3 = params.initial_mean @ params.initial_mean.mT 
-            ip  = ip1 - ip2 - ip2.mT + ip3 
-            ill = hseu.invmul(params.initial_covariance, ip)
-            ill = torch.trace(ill)
-            iloglike += ill
+            ip  = ip1 - ip2 - ip2.mT + ip3
+            # Initial state bias term
+            tbias0 = tbias[0] if tbias.ndim == 3 else tbias
+            ipb1 = stats.Ez[b][0] @ tbias0.mT
+            ipb2 = params.initial_mean @ tbias0.mT
+            ipb3 = tbias0 @ tbias0.mT
+            ipb = ipb3 + ipb2 + ipb2.mT - ipb1 - ipb1.mT
+            # Initial loglike
+            ill = hseu.invmul(params.initial_covariance, ip + ipb)
+            iloglike += torch.trace(ill)
 
             # Base transition term 
             tp1 = stats.Ezz[b][1:]
-            tp2 = stats.Ezz1[b] @ params.transition_matrix.mT 
-            tp3 = params.transition_matrix @ stats.Ezz[b][:-1] @ params.transition_matrix.mT 
+            tp2 = stats.Ezz1[b] @ tmat.mT 
+            tp3 = tmat @ stats.Ezz[b][:-1] @ tmat.mT 
             tp  = tp1 - tp2 - tp2.mT + tp3
             # Transition bias term 
-            tpb1 = stats.Ez[b][1:] @ params.transition_bias.mT 
-            tpb2 = params.transition_matrix @ stats.Ez[b][:-1] @ params.transition_bias.mT 
-            tpb3 = params.transition_bias @ params.transition_bias.mT 
+            bias = tbias[1:] if tbias.ndim == 3 else tbias
+            tpb1 = stats.Ez[b][1:] @ bias.mT 
+            tpb2 = tmat @ stats.Ez[b][:-1] @ bias.mT 
+            tpb3 = bias @ bias.mT 
             tpb  = tpb3 + tpb2 + tpb2.mT - tpb1 - tpb1.mT 
             # Transition loglike
-            tll = hseu.mulinv(params.transition_covariance, tp + tpb)
-            tll = torch.sum(tll, axis=0)
-            tll = torch.trace(tll)
-            iloglike += tll
+            if tcov.ndim == 2:
+                tll = hseu.mulinv(tcov, torch.sum(tp + tpb, axis=0))
+            else:
+                tll = hseu.mulinv(tcov, tp + tpb)
+                tll = torch.sum(tll, axis=0)
+            iloglike += torch.trace(tll)
 
             # Base emission term
             ep1 = stats.Exx[b]
-            ep2 = stats.Exz[b] @ params.emission_matrix.mT 
-            ep3 = params.emission_matrix @ stats.Ezz[b] @ params.emission_matrix.mT 
+            ep2 = stats.Exz[b] @ emat.mT 
+            ep3 = emat @ stats.Ezz[b] @ emat.mT 
             ep  = ep1 - ep2 - ep2.mT + ep3
             # Emission bias term 
-            epb1 = values.observations[b] @ params.emission_bias.mT 
-            epb2 = params.emission_matrix @ stats.Ez[b] @ params.emission_bias.mT 
-            epb3 = params.emission_bias @ params.emission_bias.mT 
+            epb1 = values.observations[b] @ ebias.mT 
+            epb2 = emat @ stats.Ez[b] @ ebias.mT 
+            epb3 = ebias @ ebias.mT 
             epb  = epb3 + epb2 + epb2.mT - epb1 - epb1.mT 
             # Emission loglike
-            ell = hseu.mulinv(params.emission_covariance, ep + epb)
-            ell = torch.sum(ell, axis=0)
-            ell = torch.trace(ell)
-            iloglike += ell 
+            if ecov.ndim == 2:
+                ell = hseu.mulinv(ecov, torch.sum(ep + epb, axis=0))
+            else:
+                ell = hseu.mulinv(ecov, ep + epb)
+                ell = torch.sum(ell, axis=0)
+            iloglike += torch.trace(ell)
 
             loglike += iloglike + T * rank * log2pi
 
-        return -0.5 * loglike
+        return -0.5 * loglike.squeeze()
 
     def _calculate_sufficient_statistics(self, values: LDSResults) -> LDSStatistics:
         """Calculate sufficient statistics for performing maximization given the filtered

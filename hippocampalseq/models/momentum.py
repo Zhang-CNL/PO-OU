@@ -11,6 +11,8 @@ __all__ = [
     'MomentumResults'
 ]
 
+analytical_approximation = torch.compile(hseu.analytical_gaussian_approximation)
+
 @dataclass 
 class MomentumResults(LDSResults):
     emission_probabilities : list[torch.Tensor] = field(default_factory=list)
@@ -68,7 +70,6 @@ class Momentum(LinearGaussianSystem):
         if isinstance(place_fields, np.ndarray):
             place_fields = torch.from_numpy(place_fields)
 
-
         self.emission_probabilities = []
         self.approximate_mean       = []
         self.approximate_covariance = []
@@ -83,7 +84,7 @@ class Momentum(LinearGaussianSystem):
             emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
             emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
 
-            approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
+            approx_mean, approx_cov = analytical_approximation(
                 self.grid,
                 emission_probability,
                 'weighted',
@@ -352,11 +353,8 @@ class Momentum(LinearGaussianSystem):
         Returns:
             torch.Tensor: The final negative log likelihood.
         """
-        decay     = torch.zeros(1, requires_grad=True)
-        diffusion = torch.zeros(1, requires_grad=True)
-        with torch.no_grad():
-            decay.copy_(self.decay)
-            diffusion.copy_(self.diffusion)
+        decay     = hseu.grad_tensor(self.decay)
+        diffusion = hseu.grad_tensor(self.diffusion)
 
         params = [decay, diffusion]
 
@@ -365,7 +363,6 @@ class Momentum(LinearGaussianSystem):
 
             Ezz  = stats.Ezz
             Ezz1 = stats.Ezz1
-            Ez   = stats.Ez
             
             lmb   = torch.exp(decay)
             sig   = torch.exp(diffusion)
@@ -381,7 +378,9 @@ class Momentum(LinearGaussianSystem):
                 iloss = self.latent_dim * torch.log(v0) + iloss
                 iloss = self.latent_dim * torch.log(v0) + iloss
 
-                loss = Ezz[i][1:] - 2 * M * Ezz1[i] + M**2 * Ezz[i][:-1]
+                loss = Ezz[i][1:] \
+                    - 2 * M * Ezz1[i] \
+                    + M**2 * Ezz[i][:-1]
                 loss = torch.sum(loss, axis=0) / sigma
                 loss = self.latent_dim * (T-1) * torch.log(sigma) + loss
 

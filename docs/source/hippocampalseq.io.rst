@@ -4,6 +4,14 @@ hippocampalseq.io package
 Submodules
 ----------
 
+hippocampalseq.io.files module
+------------------------------
+
+.. automodule:: hippocampalseq.io.files
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 hippocampalseq.io.lfp module
 ----------------------------
 

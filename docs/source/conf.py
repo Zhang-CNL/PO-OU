@@ -7,7 +7,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'hippocampalseq'
-copyright = '2026, Armand Rathgeb'
+copyright = '2026, Computational Neuroscience Lab, UT Southwestern'
 author = 'Armand Rathgeb'
 release = '0.1'
 

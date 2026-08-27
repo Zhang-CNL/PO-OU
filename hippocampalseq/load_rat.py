@@ -20,7 +20,7 @@ class RawData:
     excitatory_neurons : np.ndarray
     inhibitory_neurons : np.ndarray
     lfp_data           : nap.TsdFrame
-    environment_size   : list[tuple[int,...]]
+    environment_size   : hsep.EnvironmentSize
 
 @hseio.register_type
 @dataclass 

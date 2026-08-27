@@ -13,8 +13,8 @@ class MomentumVelocityBias(Momentum):
 
     def __init__(
             self, 
-            velocity: list[np.ndarray|torch.Tensor],
-            bias_fn: tuple[Callable[[Any], Any],list[torch.Tensor]]|str = 'linear', 
+            velocity: list[hseu.NDArray],
+            bias_fn: tuple[Callable[[torch.Tensor], torch.Tensor],list[torch.Tensor]]|str = 'linear', 
             *args, 
             **kwargs
         ):
@@ -48,7 +48,10 @@ class MomentumVelocityBias(Momentum):
                 ]
             else:
                 raise ValueError(f"Unknown bias function: {bias_fn}")
-        elif isinstance(bias_fn, (tuple,list)) and callable(bias_fn[0]):
+        elif isinstance(bias_fn, (tuple,list)) \
+            and len(bias_fn) == 2 \
+            and callable(bias_fn[0]) \
+            and isinstance(bias_fn[1], (list, tuple)):
             self.bias_fn = bias_fn[0]
             self.bias_params = bias_fn[1]
         else:
@@ -82,16 +85,11 @@ class MomentumVelocityBias(Momentum):
             n_epochs: int = 1000, 
             gd_tol: float = 0.001
         ) -> torch.Tensor:
-        
-        decay = torch.zeros(1,requires_grad=True)
-        diffusion = torch.zeros(1, requires_grad=True)
-        bias_params = [torch.zeros_like(p, requires_grad=True) for p in self.bias_params]
-        with torch.no_grad():
-            decay.copy_(self.decay)
-            diffusion.copy_(self.diffusion)
-            for bp,p in zip(bias_params, self.bias_params):
-                bp.copy_(p)
-
+        decay = hseu.grad_tensor(self.decay)
+        diffusion = hseu.grad_tensor(self.diffusion) 
+        bias_params = [
+            hseu.grad_tensor(p) for p in self.bias_params
+        ]
         params = [decay, diffusion] + bias_params
 
         def loss_closure(

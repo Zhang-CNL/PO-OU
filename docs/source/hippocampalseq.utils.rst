@@ -4,6 +4,14 @@ hippocampalseq.utils package
 Submodules
 ----------
 
+hippocampalseq.utils.intervals module
+-------------------------------------
+
+.. automodule:: hippocampalseq.utils.intervals
+   :members:
+   :show-inheritance:
+   :undoc-members:
+
 hippocampalseq.utils.math module
 --------------------------------
 
