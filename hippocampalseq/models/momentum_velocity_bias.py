@@ -5,15 +5,21 @@ from typing import Callable, Any
 import hippocampalseq.utils as hseu
 from .momentum import Momentum
 
+def _linear(A,b,v):
+    return A @ v + b
+
+def _exp(A,b,v):
+    return torch.exp(A @ v + b)
+
 class MomentumVelocityBias(Momentum):
     r"""Momentum subclass that adds an additive bias to the hidden velocity.
     The bias is $F(\hat{v})$ where $\hat{v}$ is the true velocity provided to the
     function.
     """
 
-    def __init__(
-            self, 
-            velocity: list[hseu.NDArray],
+    def __init__(self, 
+            velocity_train: list[hseu.NDArray],
+            velocity_valid: list[hseu.NDArray]|None = None,
             bias_fn: tuple[Callable[[torch.Tensor], torch.Tensor],list[torch.Tensor]]|str = 'linear', 
             *args, 
             **kwargs
@@ -24,7 +30,8 @@ class MomentumVelocityBias(Momentum):
         $$\dot{v}_t = -\lambda v_t + F(v_{true,t}) + \sigma \xi_t$$
 
         Args:
-            velocity (list[np.ndarray]): True animal velocity for each session.
+            velocity_train (list[hseu.NDArray]): True animal velocity for each session for the training set.
+            velocity_valid (list[hseu.NDArray]|None): True animal velocity for validation. Defaults to None.
             bias_fn (tuple[Optional[Callable[[Any], Any]],list[torch.Tensor]]|str, optional): 
                 The bias function to use. Must be differentiable if you want to solve for the parameters.
                 Can be a string, or a tuple of a function and a list of parameters 
@@ -35,13 +42,13 @@ class MomentumVelocityBias(Momentum):
 
         if isinstance(bias_fn, str):
             if bias_fn == 'linear':
-                self.bias_fn = lambda A,b,v: A @ v + b
+                self.bias_fn = _linear
                 self.bias_params = [
                     torch.rand(self.latent_dim, self.latent_dim),
                     torch.rand(self.latent_dim, 1)
                 ]
             elif bias_fn == 'exp':
-                self.bias_fn = lambda A,b,v: torch.exp(A @ v + b)
+                self.bias_fn = _exp
                 self.bias_params = [
                     torch.rand(self.latent_dim, self.latent_dim),
                     torch.rand(self.latent_dim, 1)
@@ -58,11 +65,24 @@ class MomentumVelocityBias(Momentum):
             raise TypeError("bias_fn must be a string or a tuple of a function and a list of parameters to optimize.")
 
         self.n_parameters += sum(p.numel() for p in self.bias_params)
-        self.velocity = self._initialize_observations(velocity)
+        self.velocity_train = self._initialize_observations(velocity_train)
+        if velocity_valid:
+            self.velocity_valid = self._initialize_observations(velocity_valid)
 
-    def _construct_transition_bias(self):
+    def name(self):
+        return "Momentum + External Velocity Bias"
+
+    def _construct_transition_bias(self, mode: str = "train"):
+        if mode == "train":
+            velocity = self.velocity_train
+        elif mode == "valid":
+            velocity = self.velocity_valid
+        elif mode == "test":
+            velocity = self.velocity_test
+        else:
+            raise ValueError(f"Mode {mode} not recognized")
         bias = []
-        for v in self.velocity:
+        for v in velocity:
             bias_top = hseu.atleast_2d(self.bias_fn(*self.bias_params, v))
             bias_bottom = torch.zeros_like(bias_top)
             bias.append(
@@ -70,14 +90,12 @@ class MomentumVelocityBias(Momentum):
             )
         return bias
 
-    def build_batch_parameters(self, batch: int) -> LDSParameters:
-        params = super().build_batch_parameters(batch)
+    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
+        params = super().build_batch_parameters(batch, mode)
         params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
 
-
-    def _solve_parameters(
-            self, 
+    def _solve_parameters(self, 
             values: MomentumResults, 
             stats: SufficientStatistics, 
             optimizer: str = "Adam", 
@@ -140,7 +158,7 @@ class MomentumVelocityBias(Momentum):
             {
                 'n_batches' : len(values.observations), 
                 'stats'     : stats,
-                'velocity'  : self.velocity
+                'velocity'  : self.velocity_train
             },
             {
                 'optimizer' : optimizer,
@@ -157,3 +175,7 @@ class MomentumVelocityBias(Momentum):
         self._initialize_globals()
 
         return loss
+
+    def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
+        self.velocity_test = self._initialize_observations(Xtest)
+        return super().transform(spikemats)

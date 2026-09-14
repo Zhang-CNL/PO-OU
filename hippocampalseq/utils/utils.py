@@ -199,3 +199,34 @@ def calculate_velocity_dt(x: np.ndarray, dt: float|np.ndarray):
     b,a = butter(2, .2)
     dx = filtfilt(b,a,dx)
     return np.abs(dx / dt)
+
+def train_test_valid_split(data_length: int, percent_train: float, percent_valid: float):
+    """Data train-test split.
+    Args:
+        data_length (int): How many data points do you have.
+        percent_train (float): What percent of the data do you want to use for training. The rest goes to the test set.
+        percent_valid (float): What percent of the training data do you want to use for validation.
+    
+    Returns:
+        (np.ndarray): Train indices
+        (np.ndarray): Validation indices
+        (np.ndarray): Test indices
+    """
+    train_length = int(data_length * percent_train)
+    percent_valid = int(data_length * percent_valid)
+    assert train_length + percent_valid <= data_length, "Percentage must add up to 100%."
+    trainvalid_idx = np.random.choice(data_length, train_length + percent_valid, replace=False)
+    train_idx = np.random.choice(trainvalid_idx, train_length, replace=False)
+    valid_idx = np.setdiff1d(trainvalid_idx, train_idx)
+    test_idx = np.setdiff1d(np.arange(data_length), trainvalid_idx)
+    return train_idx, valid_idx, test_idx
+
+def ensure_numpy(x: hseu.NDArray) -> np.ndarray:
+    if torch.is_tensor(x):
+        return x.detach().cpu().numpy()
+    return x
+
+def ensure_torch(x: hseu.NDArray) -> torch.Tensor:
+    if not torch.is_tensor(x):
+        return torch.from_numpy(x)
+    return x

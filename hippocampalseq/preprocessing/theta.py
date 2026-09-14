@@ -48,7 +48,8 @@ def extract_theta_segments(
         bimodal_windows: BimodalPhaseWindows = BimodalPhaseWindows(),
         theta_length_s: tuple[float,float] = (0.08, 0.16),
         velocity_cutoff: float = 5.0,
-        run_period_threshold: float = 2.0
+        run_period_threshold: float = 2.0,
+        start_phase_deg: float = 0.0,
     ) -> tuple[list[nap.TsdFrame], list[np.ndarray]]:
     """Align theta segments to the LFP data and phase. 
     Numbers the oscillations, extracts trajectories for runs, and spikemats.
@@ -149,25 +150,15 @@ def extract_theta_segments(
         osc[last:] = oscillation_number
         oscillation_number += 1
 
-        # Check monotonicity of the phase segment
-        # last = 0
-        # monotonic = True
-        # for c in crossing_idx:
-        #     segment = phase_segment[last:c]
-        #     segment[segment <= theta_starting_phase] += 360
-        #     monotonic = np.all(np.diff(segment) >= 0)
-        #     if not monotonic:
-        #         break
-        #     last = c
-        
-        #phase_segment[phase_segment <= theta_starting_phase] += 360
-        #monotonic = np.all(np.diff(phase_segment) >= 0)
-
-        #if not monotonic:
-        #    continue
+        # phase_start = np.flatnonzero((phase_segment % 360 // 10).astype(int) == start_phase_deg)
+        # if len(phase_start) == 0:
+        #     continue
+        # phase_start = phase_start[0]
+        #lfp_idx = lfp_idx[phase_start:]
+        #pos_idx = pos_idx[phase_start:]
 
         df = nap.TsdFrame(
-            t=decoding_times,
+            t=decoding_times,#[phase_start:],
             d=np.c_[
                 running_position['x'].values[pos_idx],
                 running_position['y'].values[pos_idx],
@@ -175,9 +166,9 @@ def extract_theta_segments(
                 running_position['Velocity'].values[pos_idx],
                 running_position['V_x'].values[pos_idx],
                 running_position['V_y'].values[pos_idx],
-                phase_segment,
+                phase_segment,#[phase_start:],
                 power[lfp_idx],
-                osc
+                osc,#[phase_start:]
             ],
             columns=[
                 'x', 'y', 'Head direction',
@@ -187,6 +178,7 @@ def extract_theta_segments(
         )
 
         tsdframes.append(df)
+        #spikemats.append(spikemat[phase_start:])
         spikemats.append(spikemat)
 
     return tsdframes, spikemats  

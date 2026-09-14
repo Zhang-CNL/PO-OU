@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import copy
+import warnings
 from dataclasses import dataclass, field
 from torch.distributions import MultivariateNormal
 
@@ -86,6 +87,9 @@ class LinearGaussianSystem(StateSpace):
         self.environment_size = environment_size
         self.bin_size = bin_size
 
+    def name(self):
+        return "Linear Gaussian Dynamic System"
+        
     def _initialize_observations(self, X: torch.Tensor|list[torch.Tensor]|None):
         if X is None:
             raise ValueError("Observation data cannot be None")
@@ -93,64 +97,64 @@ class LinearGaussianSystem(StateSpace):
             X = [X]
         for i in range(len(X)):
             assert X[i] is not None, f"Observation {i} is None"
-            if not torch.is_tensor(X[i]):
-                X[i] = torch.from_numpy(X[i])
-            X[i] = hseu.atleast_3d(X[i])
+            X[i] = hseu.ensure_torch(hseu.atleast_3d(X[i]))
         return X
 
-    def _construct_transition_matrix(self):
+    def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         F = torch.rand(self.augmented_dim, self.augmented_dim)
         return F / F.sum(axis=1, keepdim=True)
     
-    def _construct_transition_covariance(self):
+    def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
         Q = torch.randn(self.augmented_dim, self.augmented_dim)
         return Q @ Q.T 
     
-    def _construct_transition_bias(self):
+    def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         return torch.rand(self.augmented_dim, 1)
 
-    def _construct_emission_matrix(self):
-        return self._construct_transition_matrix()
+    def _construct_emission_matrix(self, mode: str = "train") -> torch.Tensor:
+        H = torch.rand(self.emission_dim, self.augmented_dim)
+        return H / H.sum(axis=1, keepdim=True)
     
-    def _construct_emission_covariance(self):
-        return self._construct_transition_covariance()
+    def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
+        R = torch.randn(self.emission_dim, self.emission_dim)
+        return R @ R.T
     
-    def _construct_emission_bias(self):
-        return self._construct_transition_bias()
+    def _construct_emission_bias(self, mode: str = "train") -> torch.Tensor:
+        return torch.rand(self.emission_dim, 1)
     
-    def _construct_initial_mean(self):
+    def _construct_initial_mean(self, mode: str = "train") -> torch.Tensor:
         return torch.randn(self.augmented_dim, 1)
     
-    def _construct_initial_covariance(self):
+    def _construct_initial_covariance(self, mode: str = "train") -> torch.Tensor:
         return torch.eye(self.augmented_dim)
 
-    def _initialize_globals(self):
+    def _initialize_globals(self, mode: str = "train"):
         default = lambda name, value: self.default_parameters.get(name, value)
 
         params = LDSParameters(
             transition_matrix = default("transition_matrix", 
-                self._construct_transition_matrix()
+                self._construct_transition_matrix(mode)
             ),
             transition_covariance = default("transition_covariance",
-                    self._construct_transition_covariance()    
+                    self._construct_transition_covariance(mode)
             ),
             transition_bias = default("transition_bias",
-                self._construct_transition_bias()
+                self._construct_transition_bias(mode)
             ),
             emission_matrix = default("emission_matrix",
-                self._construct_emission_matrix()
+                self._construct_emission_matrix(mode)
             ),
             emission_covariance = default("emission_covariance",
-                self._construct_emission_covariance(),
+                self._construct_emission_covariance(mode),
             ),
             emission_bias = default("emission_bias",
-                self._construct_emission_bias()
+                self._construct_emission_bias(mode)
             ),
             initial_mean = default("initial_mean", 
-                self._construct_initial_mean()
+                self._construct_initial_mean(mode)
             ),
             initial_covariance = default("initial_covariance",
-                self._construct_initial_covariance()
+                self._construct_initial_covariance(mode)
             )
         )
         self.global_parameters = params
@@ -169,22 +173,42 @@ class LinearGaussianSystem(StateSpace):
             smoothed_cov   = covbase()
         )
 
-    def build_batch_parameters(self, batch: int) -> LDSParameters:
+    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
+        """Build parameters for a specific batch.
+        
+        Args:
+            batch: Batch index
+            mode (str): Either "train", "valid", or "test" to differentiate training, validation, and testing data.
+            
+        Returns:
+            (LDSParameters): Parameters for this batch
+        """
+        assert mode in ["train", "valid", "test"], "Mode must be train, valid, or test"
         return self.global_parameters
 
-    def filter(self, values: LDSResults) -> LDSResults:
-        """Run the Kalman Filter."""
+    def filter(self, values: LDSResults, mode: str = "train") -> LDSResults:
+        """Run the Kalman Filter.
+        
+        Args:
+            values: LDSResults with observations
+            mode (str): Either "train", "valid", or "test".
+        """
         for batch in range(len(values.observations)):
-            batch_params = self.build_batch_parameters(batch)
+            batch_params = self.build_batch_parameters(batch, mode=mode)
             values = self._filter_init(values, batch_params, batch)
             for t in range(1, len(values.observations[batch])):
                 values = self._filter(values, batch_params, batch, t)
         return values
 
-    def smooth(self, values: LDSResults) -> LDSResults:
-        """Run the RTS smoother."""
+    def smooth(self, values: LDSResults, mode: str = "train") -> LDSResults:
+        """Run the RTS smoother.
+        
+        Args:
+            values: LDSResults with filtered values
+            mode (str): Either "train", "valid", or "test".
+        """
         for batch in range(len(values.observations)):
-            batch_params = self.build_batch_parameters(batch)
+            batch_params = self.build_batch_parameters(batch, mode=mode)
             values = self._smooth_init(values, batch_params, batch)
             for t in reversed(range(len(values.observations[batch]) - 1)):
                 values = self._smooth(values, batch_params, batch, t)
@@ -194,9 +218,6 @@ class LinearGaussianSystem(StateSpace):
         H = hseu.extract_last_dims(batch_params.emission_matrix, 0)
         R = hseu.extract_last_dims(batch_params.emission_covariance, 0)
         d = hseu.extract_last_dims(batch_params.emission_bias, 0)
-        F = hseu.extract_last_dims(batch_params.transition_matrix, 0)
-        Q = hseu.extract_last_dims(batch_params.transition_covariance, 0)
-        b = hseu.extract_last_dims(batch_params.transition_bias, 0)
         x0 = hseu.extract_last_dims(values.observations[batch], 0)
         
         P0Ct = batch_params.initial_covariance @ H.T
@@ -207,50 +228,57 @@ class LinearGaussianSystem(StateSpace):
 
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = v1
-        values.predicted_mean[batch][0] = F @ mu1 + b
-        values.predicted_cov[batch][0]  = F @ v1 @ F.T + Q
         return values
 
     def _filter(self, values: LDSResults, batch_params: LDSParameters, batch: int, t: int) -> LDSResults:
-        H = hseu.extract_last_dims(batch_params.emission_matrix, t)
-        R = hseu.extract_last_dims(batch_params.emission_covariance, t)
-        d = hseu.extract_last_dims(batch_params.emission_bias, t)
-        F = hseu.extract_last_dims(batch_params.transition_matrix, t)
-        Q = hseu.extract_last_dims(batch_params.transition_covariance, t)
-        b = hseu.extract_last_dims(batch_params.transition_bias, t)
-        xt = hseu.extract_last_dims(values.observations[batch], t)
+        H    = hseu.extract_last_dims(batch_params.emission_matrix, t)
+        R    = hseu.extract_last_dims(batch_params.emission_covariance, t)
+        d    = hseu.extract_last_dims(batch_params.emission_bias, t)
+        F    = hseu.extract_last_dims(batch_params.transition_matrix, t)
+        Q    = hseu.extract_last_dims(batch_params.transition_covariance, t)
+        b    = hseu.extract_last_dims(batch_params.transition_bias, t)
+        xt   = hseu.extract_last_dims(values.observations[batch], t)
+        mut1 = values.filtered_mean[batch][t-1]
+        vt1  = values.filtered_cov[batch][t-1]
 
-        Am1 = values.predicted_mean[batch][t-1]
-        Pn1 = values.predicted_cov[batch][t-1]
+        # $\mu_{t|t-1} = F \mu_{t-1|t-1} + b$
+        # $$P_{t|t-1} = F P_{t-1|t-1} F^T + Q$$
+        Am1 = F @ mut1 + b
+        Pn1 = F @ vt1 @ F.T + Q
 
+        # $K = P_{t|t-1} H^T (H P_{t|t-1} H^T + R)^{-1}$
         Pct = Pn1 @ H.T
         K = hseu.invmul(Pct, H @ Pct + R)
+        # $\mu_{t|t} = \mu_{t|t-1} + K (x_t - H \mu_{t|t-1} - d)$
+        # $$P_{t|t} = (I - K H) P_{t|t-1}$$
         innovation = xt - H @ Am1 - d
         mut = Am1 + K @ innovation 
         vt  = (torch.eye(self.augmented_dim) - K @ H) @ Pn1
 
-        Am = F @ mut + b
-        Pn = F @ vt @ F.T + Q 
-
-        values.filtered_mean[batch][t]  = mut
-        values.filtered_cov[batch][t]   = vt 
-        values.predicted_mean[batch][t] = Am
-        values.predicted_cov[batch][t]  = Pn
+        values.filtered_mean[batch][t]    = mut # $\mu_{t|t}$
+        values.filtered_cov[batch][t]     = vt  # $P_{t|t}$
+        values.predicted_mean[batch][t-1] = Am1 # $\mu_{t|t-1}$
+        values.predicted_cov[batch][t-1]  = Pn1 # $P_{t|t-1}$
         return values
 
     def _smooth_init(self, values: LDSResults, _: LDSParameters, batch: int) -> LDSResults:
+        # $\hat{\mu}_T = \mu_{T|T}$
+        # $\hat{P}_T = P_{T|T}$
         values.smoothed_mean[batch][-1] = values.filtered_mean[batch][-1]
         values.smoothed_cov[batch][-1]  = values.filtered_cov[batch][-1]
         return values
 
     def _smooth(self, values: LDSResults, batch_params: LDSParameters, batch: int, t: int) -> LDSResults:
         F = hseu.extract_last_dims(batch_params.transition_matrix, t)
-        Amt = values.predicted_mean[batch][t]
-        Pt  = values.predicted_cov[batch][t]
-        mt  = values.filtered_mean[batch][t]
-        vt  = values.filtered_cov[batch][t]
+        Amt = values.predicted_mean[batch][t] # $\mu_{t|t-1}$
+        Pt  = values.predicted_cov[batch][t]  # $P_{t|t-1}$
+        mt  = values.filtered_mean[batch][t]  # $\mu_{t|t}$
+        vt  = values.filtered_cov[batch][t]   # $P_{t|t}$
 
+        # $J_t = P_{t|t}F^T P_{t+1|t}^{-1}$
         J = hseu.invmul(vt @ F.T, Pt)
+        # $\hat{\mu}_t = \mu_{t|t} + J_t ( \hat{\mu}_{t+1} - \mu_{t+1|t} )$
+        # $$\hat{P}_t = P_{t|t} + J_t ( \hat{P}_{t+1} - P_{t+1|t} ) J_t^T$$
         muht = mt + J @ (values.smoothed_mean[batch][t+1] - Amt)
         vht  = vt + J @ (values.smoothed_cov[batch][t+1] - Pt) @ J.mT
 
@@ -259,7 +287,7 @@ class LinearGaussianSystem(StateSpace):
         values.smoothed_cov[batch][t]  = vht
         return values
         
-    def _observed_loglikelihood(self, values: LDSResults) -> torch.Tensor:
+    def _observed_loglikelihood(self, values: LDSResults, mode: str = "train") -> torch.Tensor:
         r"""Calculates the observed log-likelihood of the data in the Kalman filter.
         Use this when checking for EM convergence.
         The formula is:
@@ -272,10 +300,10 @@ class LinearGaussianSystem(StateSpace):
         """
         log2pi = torch.log(2 * PI)
         rank = self.augmented_dim 
-        loglike = 0
+        loglike = torch.tensor([[0.0]])
 
         for b in range(len(values.observations)):
-            params = self.build_batch_parameters(b)
+            params = self.build_batch_parameters(b, mode=mode)
             T = len(values.observations[b])
             innovation = values.observations[b] \
                 - params.emission_matrix @ values.predicted_mean[b] \
@@ -292,23 +320,24 @@ class LinearGaussianSystem(StateSpace):
 
         return -0.5 * loglike.squeeze()
 
-    def _complete_loglikelihood(self, values: LDSResults, stats: LDSStatistics) -> torch.Tensor:
+    def _complete_loglikelihood(self, values: LDSResults, stats: LDSStatistics, mode: str = "train") -> torch.Tensor:
         """Calculate the complete data log likelihood of the model given the sufficient statistics and current 
         parameters.
 
         Args:
             values (LDSResults): The filtered and smoothed values of the model.
             stats (LDSStatistics): The sufficient statistics of the model.
+            mode (str): Either "train", "valid", or "test"
 
         Returns:
             torch.Tensor: The log likelihood of the model.
         """
         log2pi = torch.log(2 * PI)
         rank = self.augmented_dim
-        loglike = 0
+        loglike = torch.tensor([[0.0]])
 
         for b in range(len(values.observations)):
-            params = self.build_batch_parameters(b)
+            params = self.build_batch_parameters(b, mode=mode)
             T = len(values.observations[b])
             t = np.arange(T)
             tmat = hseu.extract_last_dims(params.transition_matrix, t[1:])
@@ -513,12 +542,12 @@ class LinearGaussianSystem(StateSpace):
             if "initial_cov" not in self.no_em_vars:
                 self.global_parameters.initial_covariance = self._initial_cov_mle(stats)
 
-    def _calculate_marginals(self, environment_size, bin_size, values: KalmanResults) -> torch.Tensor:
+    def _calculate_marginals(self, environment_size: list[tuple[int,...]], bin_size: int, values: KalmanResults) -> torch.Tensor:
         r"""Calculates the marginal probabilities for each bin in the environment.
         What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
 
         Args:
-            environment_size (tuple): Size of the environment. (xmin, ymin, xmax, ymax)
+            environment_size (list[tuple[int,...]]): List of tuples of size (min,max) for each axis.
             bin_size (int): Size of individual bins in cm.
             values (KalmanResults): Kalman filter results.
 
@@ -551,11 +580,21 @@ class LinearGaussianSystem(StateSpace):
 
         return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
 
-    def e_step(self, values: LDSResults) -> tuple[LDSResults, torch.Tensor]:
+    def e_step(self, values: LDSResults, mode: str = "train") -> tuple[LDSResults, torch.Tensor]:
+        """E-step: filter and smooth, then compute log-likelihood.
+        
+        Args:
+            values (LDSResults): LDSResults with observations
+            mode (str): Either "train", "valid", or "test".
+            
+        Returns:
+            (LDSResults): Filtered and smoothed values from the model.
+            (torch.Tensor): Observed log-likelihood calculated from the filtered values.
+        """
         with torch.no_grad():
-            values = self.filter(values)
-            values = self.smooth(values)
-            ll = self._observed_loglikelihood(values)
+            values = self.filter(values, mode=mode)
+            values = self.smooth(values, mode=mode)
+            ll = self._observed_loglikelihood(values, mode=mode)
         return (values, ll)
 
     def m_step(self, values: KalmanResults, **kwargs) -> torch.Tensor:
@@ -563,41 +602,95 @@ class LinearGaussianSystem(StateSpace):
             stats = self._calculate_sufficient_statistics(values)
         return self._solve_parameters(values, stats, **kwargs)
 
-    def fit(
-            self,
-            X: list[torch.Tensor|np.ndarray],
+    def fit(self,
+            Xtrain: list[hseu.NDArray],
+            Xvalid: list[hseu.NDArray]|None=None,
             n_iter: int = 1000,
             emtol: float = 1e-3,
+            patience: int = 5,
+            val_freq: int = 10,
             **maximization_args
         ) -> LDSResults:
-        X = self._initialize_observations(X)
-        self._initialize_globals()
-        values = self._initialize_values(X)
+        """Fit the model with optional early stopping.
+        
+        Args:
+            Xtrain (list[hseu.NDArray]): Training observations
+            Xvalid (list[hseu.NDArray]|None): Validation observations (optional). If provided, enables early stopping. Defaults to None.
+            n_iter (int): Maximum number of EM iterations. Defaults to 1000.
+            emtol (float): Tolerance for convergence on training log-likelihood. Defaults to 1e-3.
+            patience (int): Number of validation iterations without improvement before stopping. Only used if Xvalid is provided. Defaults to 5.
+            val_freq (int): Frequency of validation checks (every val_freq iterations). Only used if Xvalid is provided. Defaults to 10.
+            **maximization_args: Additional arguments for m_step
+            
+        Returns:
+            LDSResults: Fitted results on training data
+        """
+        Xtrain = self._initialize_observations(Xtrain)
+        self._initialize_globals("train")
+        values = self._initialize_values(Xtrain)
+        
+        best_params = None
+        best_valid_ll = -np.inf
+        patience_counter = 0
+        
+        if Xvalid is not None:
+            Xvalid = self._initialize_observations(Xvalid)
+            valid_values = self._initialize_values(Xvalid)
 
         for i in range(n_iter):
-            values,ll = self.e_step(values)
+            # E-step and M-step on training data
+            values, ll = self.e_step(values, mode="train")
             self.m_step(values, **maximization_args)
-
             values.loglike.append(ll)
 
             if not torch.isfinite(values.loglike[-1]):
                 print(f"Log-likelihood is NaN or Inf, stopping EM at iter {i}")
                 break
 
+            # Convergence check on training data
             if i > 0 and abs((values.loglike[-1] - values.loglike[-2]) / values.loglike[-2]) < emtol:
-                print(f"Converged after {i} epochs, exiting")
+                print(f"Training converged after {i} epochs, exiting")
                 break
 
             if i % 20 == 0:
-                print(f"Iteration {i}: {ll.item()}")
+                print(f"Iteration {i}: Training loglike={ll.item():.4f}")
 
+            # Validation step with early stopping
+            if Xvalid is not None and i % val_freq == 0:
+                self._initialize_globals("valid")
+                valid_values, valid_ll = self.e_step(valid_values, mode="valid")
+                self._initialize_globals("train")
+                valid_values.loglike.append(valid_ll)
+                
+                if not torch.isfinite(valid_ll):
+                    print(f" | Validation LL is NaN/Inf, stopping at iter {i}")
+                    break
+                print(f" | Validation loglike={valid_ll.item():.4f}")
+                
+                if valid_ll > best_valid_ll:
+                    best_valid_ll = valid_ll
+                    patience_counter = 0
+                    best_params = copy.deepcopy(self.global_parameters)
+                else:
+                    patience_counter += 1
+                    print(f" [patience {patience_counter}/{patience}]")
+                    if patience_counter >= patience:
+                        print(f"\nEarly stopping: validation LL did not improve for {patience} checks")
+                        if best_params is not None:
+                            self.global_parameters = best_params
+                        break
+            
         if i == n_iter - 1:
             warnings.warn(f"Failed to converge after {i} epochs, exiting")
 
-        values = self.e_step(values)[0]
+        if best_params is not None:
+            self.global_parameters = best_params
+
+        values = self.e_step(values, mode="train")[0]
         values.loglike_full = self._complete_loglikelihood(
             values,
-            self._calculate_sufficient_statistics(values)
+            self._calculate_sufficient_statistics(values),
+            mode="train"
         )
         values.aic = self.aic(values.loglike_full)
         values.bic = self.bic(
@@ -612,4 +705,38 @@ class LinearGaussianSystem(StateSpace):
                 values
             )
 
+        if Xvalid is None:
+            return values
+
+        self._initialize_globals("valid")
+        valid_values = self.e_step(valid_values, mode="valid")[0]
+        if self.environment_size is not None and self.bin_size is not None:
+            valid_values.cumulative_probabilities = self._calculate_marginals(
+                self.environment_size,
+                self.bin_size,
+                valid_values
+            )
+        return values, valid_values
+
+    def transform(
+            self,
+            X: list[hseu.NDArray]
+        ) -> LDSResults:
+        """Apply the learned parameters to unseen observations.
+        Args:
+            X (list[hseu.NDArray]): Observed values to run the filtering and smoothing steps over.
+
+        Results:
+            (LDSResults): Filtered and smoothed values.
+        """
+        X = self._initialize_observations(X)
+        self._initialize_globals("test")
+        values = self._initialize_values(X)
+        values = self.e_step(values, mode="test")[0]
+        if self.environment_size is not None and self.bin_size is not None:
+            values.cumulative_probabilities = self._calculate_marginals(
+                self.environment_size, 
+                self.bin_size, 
+                values    
+            )
         return values

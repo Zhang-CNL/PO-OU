@@ -5,13 +5,13 @@ from .linear_gaussian_system import *
 from .momentum import *
 
 class MomentumVelocity(Momentum):
-    def __init__(
-            self, 
-            place_fields: hseu.NDArray, 
-            spikemat: list[hseu.NDArray],
+    def __init__(self, 
             dt: float, 
             environment_size: list[tuple[int,...]],
             bin_size: int, 
+            place_fields: hseu.NDArray, 
+            spikemat_train: list[hseu.NDArray],
+            spikemat_valid: list[hseu.NDArray]|None=None,
             velocity_type: str ='true',
             seed: int|None = 42
         ):
@@ -43,25 +43,36 @@ class MomentumVelocity(Momentum):
             seed: (int|None): Seed for the random number generator
         """
         super().__init__(
-            place_fields, 
-            spikemat, 
-            dt, 
-            environment_size, 
-            bin_size, 
-            seed
+            dt=dt, 
+            environment_size=environment_size, 
+            bin_size=bin_size, 
+            seed=seed,
+            place_fields=place_fields,
+            spikemat_train=spikemat_train,
+            spikemat_valid=spikemat_valid
         )
         self.velocity_type = velocity_type
         self.emission_velocity_variance = torch.rand((self.emission_dim, self.emission_dim))
         self.emission_dim *= 2
         self.n_parameters += self.emission_velocity_variance.numel()
 
-    def _construct_emission_matrix(self):
+    def name(self):
+        return "Momentum + Velocity Emissions"
+
+    def _construct_emission_matrix(self, mode: str = "train") -> torch.Tensor:
         return torch.eye(self.emission_dim)
 
-    def _construct_emission_covariance(self):
+    def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
         emv = self.emission_velocity_variance @ self.emission_velocity_variance.T
         R = []
-        for ac in self.approximate_covariance:
+        if mode == "train":
+            acov = self.approximate_covariance
+        elif mode == "valid":
+            acov = self.validation_approximate_covariance
+        elif mode == "test":
+            acov = self.testing_approximate_covariance
+
+        for ac in acov:
             emit = torch.zeros((
                 len(ac), self.emission_dim, self.emission_dim
             ))
@@ -70,8 +81,8 @@ class MomentumVelocity(Momentum):
             R.append(emit)
         return R
 
-    def build_batch_parameters(self, batch: int) -> LDSParameters:
-        params = super().build_batch_parameters(batch)
+    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
+        params = super().build_batch_parameters(batch, mode)
         params.emission_covariance = self.global_parameters.emission_covariance[batch]
         return params
 
@@ -86,7 +97,7 @@ class MomentumVelocity(Momentum):
         stats = super()._calculate_sufficient_statistics(values)
 
         Exx,Exz,Ezx,Ezz = [],[],[],[]
-        for sm,x in zip(values.smoothed_mean, self.velocity):
+        for sm,x in zip(values.smoothed_mean, self.velocity_train):
             sm = sm[:,:self.latent_dim]
             exx = x @ x.mT 
             exz = x @ sm.mT 
@@ -201,10 +212,63 @@ class MomentumVelocity(Momentum):
         self._initialize_globals()
         return loss
 
+    def calculate_velocity(self, X: list[np.ndarray|torch.Tensor], mode: str) -> list[torch.Tensor]:
+        if self.velocity_type == 'true':
+            return self._initialize_observations(X)
+        elif self.velocity_type == 'observed':
+            if mode == "train":
+                X = self.approximate_mean
+            elif mode == "test":
+                X = self.testing_approximate_mean
+            else:
+                X = self.validation_approximate_mean
+            if self.emission_dim == 4:
+                velocity = [
+                    (
+                        hseu.calculate_velocity_dt(
+                            x[:,0].numpy().squeeze(),
+                            self.dt.numpy()
+                        ),
+                        hseu.calculate_velocity_dt(
+                            x[:,1].numpy().squeeze(),
+                            self.dt.numpy()
+                        )
+                    )
+                    for x in X
+                ]
+                return [
+                    torch.hstack((
+                        torch.from_numpy(v[0][:,None]), 
+                        torch.from_numpy(v[1][:,None])
+                    ))[...,None]
+                    for v in velocity
+                ]
+            else:
+                velocity = [
+                    hseu.calculate_velocity_dt(
+                        x[:,0].numpy().squeeze(),
+                        self.dt.numpy()
+                    )
+                    for x in X
+                ]
+                return [
+                    torch.from_numpy(v)[...,None]
+                    for v in velocity
+                ]
+        else:
+            raise ValueError(
+                f'Unknown velocity type: {self.velocity_type}'
+            )
+
+        
+
     def fit(self, 
-            X: list[np.ndarray|torch.Tensor]|None = None, 
+            Xtrain: list[np.ndarray|torch.Tensor]|None = None, 
+            Xvalid: list[np.ndarray|torch.Tensor]|None = None,
             n_iter: int = 1000, 
             emtol: float = 1e-3, 
+            patience: int = 5,
+            val_freq: int = 10,
             **maximization_args
         ) -> MomentumResults:
         """Perform EM to fit the parameters.
@@ -220,58 +284,54 @@ class MomentumVelocity(Momentum):
             MomentumResults: Fitted model information.
         """
 
-        if self.velocity_type == 'true':
-            X = self._initialize_observations(X)
-            self.velocity = X
-        elif self.velocity_type == 'observed':
-            if self.emission_dim == 4:
-                velocity = [
-                    (
-                        hseu.calculate_velocity_dt(
-                            x[:,0].numpy().squeeze(),
-                            self.dt.numpy()
-                        ),
-                        hseu.calculate_velocity_dt(
-                            x[:,1].numpy().squeeze(),
-                            self.dt.numpy()
-                        )
-                    )
-                    for x in self.approximate_mean
-                ]
-                self.velocity = [
-                    torch.hstack((
-                        torch.from_numpy(v[0][:,None]), 
-                        torch.from_numpy(v[1][:,None])
-                    ))[...,None]
-                    for v in velocity
-                ]
-            else:
-                velocity = [
-                    hseu.calculate_velocity_dt(
-                        x[:,0].numpy().squeeze(),
-                        self.dt.numpy()
-                    )
-                    for x in self.approximate_mean
-                ]
-                self.velocity = [
-                    torch.from_numpy(v)[...,None]
-                    for v in velocity
-                ]
-        else:
-            raise ValueError(
-                f'Unknown velocity type: {self.velocity_type}'
-            )
-
-        X = [
+        self.velocity_train = self.calculate_velocity(Xtrain, "train")
+        Xtrain = [
             torch.hstack((v,x)) for v,x in zip(
-                self.velocity,
+                self.velocity_train,
                 self.approximate_mean
             )
         ]
-        return LinearGaussianSystem.fit(
-            self,
-            X,
+        if self.validation_approximate_mean is not None:
+            self.velocity_valid = self.calculate_velocity(Xvalid, "valid")
+            Xvalid = [
+                torch.hstack((v,x)) for v,x in zip(
+                    self.velocity_valid,
+                    self.validation_approximate_mean
+                )
+            ]
+        return super().fit(
+            Xtrain,
+            Xvalid,
             n_iter,
             emtol,
+            patience,
+            val_freq,
             **maximization_args
+        )
+
+    def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]|None=None):
+        self.testing_emission_probability   = []
+        self.testing_approximate_mean       = []
+        self.testing_approximate_covariance = []
+        for spk in spikemats:
+            (
+                emission_probability,
+                approximate_mean,
+                approximate_cov
+            ) = self.spike_to_gaussian(spk)
+            self.testing_emission_probability.append(emission_probability)
+            self.testing_approximate_mean.append(approximate_mean)
+            self.testing_approximate_covariance.append(approximate_cov)
+
+        self.velocity_test = self.calculate_velocity(Xtest, "test")
+        Xtest = [
+            torch.hstack((v,x)) for v,x in zip(
+                self.velocity_test,
+                self.testing_approximate_mean
+            )
+        ]
+
+        return LinearGaussianSystem.transform(
+            self,
+            Xtest
         )

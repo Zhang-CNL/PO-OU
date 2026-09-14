@@ -9,7 +9,15 @@ class EnvironmentSize(NamedTuple):
     x: tuple[int,...]|None = None
     y: tuple[int,...]|None = None
     
-    def axes(self):
+    def __len__(self) -> int:
+        return len(self.axes())
+
+    def __iter__(self): 
+        axes = [self.x, self.y]
+        for axis in [a for a in axes if a is not None]:
+            yield axis
+    
+    def axes(self) -> list[str]:
         axis = []
         if self.x:
             axis.append('x')

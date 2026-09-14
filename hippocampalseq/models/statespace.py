@@ -20,6 +20,9 @@ class StateSpaceResults(Protocol):
     pass
 
 class StateSpace:
+    def name(self):
+        return "StateSpace"
+
     def filter(self, values: StateSpaceResults) -> StateSpaceResults:
         raise NotImplementedErrpr
 

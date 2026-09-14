@@ -1,6 +1,6 @@
 import numpy as np
 import torch 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from functools import wraps
 
 import hippocampalseq.utils as hseu
@@ -10,6 +10,11 @@ __all__ = [
     'Momentum',
     'MomentumResults'
 ]
+
+@dataclass
+class MomentumParameters(LDSParameters):
+    decay     : torch.Tensor
+    diffusion : torch.Tensor
 
 @dataclass 
 class MomentumResults(LDSResults):
@@ -22,13 +27,13 @@ class Momentum(LinearGaussianSystem):
     Essentially, this collapses down to a second-order markov chain, so we can use kalman filtering.
     We have a uniform prior and our observation covariance shifts over time, so we take that into account here as well.
     """
-    def __init__(
-            self,
-            place_fields: hseu.NDArray, 
-            spikemat: list[hseu.NDArray],
+    def __init__(self,
             dt: float, 
             environment_size: list[tuple[int,...]],
             bin_size: int, 
+            place_fields: hseu.NDArray, 
+            spikemat_train: list[hseu.NDArray],
+            spikemat_valid: list[hseu.NDArray]|None=None,
             seed: int|None = 42
         ):
         r"""Initialize the momentum SSM.
@@ -65,39 +70,63 @@ class Momentum(LinearGaussianSystem):
         if seed is not None:
             torch.random.manual_seed(seed)
 
-        if isinstance(place_fields, np.ndarray):
-            place_fields = torch.from_numpy(place_fields)
+        self.place_fields = hseu.ensure_torch(place_fields)
 
         self.emission_probabilities = []
         self.approximate_mean       = []
         self.approximate_covariance = []
-        for spk in spikemat:
-            ep = torch.from_numpy(spk).double()
-            #ep = ep[ep.sum(axis=1) > 0]
-            emission_probability = hseu.calc_poisson_emission_probabilities_2d(
-                ep, 
-                place_fields,
-                self.dt
-            )
-            emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
-            emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
-
-            approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
-                self.grid,
-                emission_probability,
-                'weighted',
-            )
+        for spk in spikemat_train:
+            (
+                emission_probability, 
+                approx_mean, 
+                approx_cov
+            ) = self.spike_to_gaussian(spk)
             
             self.emission_probabilities.append(emission_probability)
             self.approximate_mean.append(approx_mean)
             self.approximate_covariance.append(approx_cov)
 
+        self.validation_emission_probabilities = []
+        self.validation_approximate_mean       = []
+        self.validation_approximate_covariance = []
+        if spikemat_valid is not None:
+            for spk in spikemat_valid:
+                (
+                    emission_probability, 
+                    approx_mean, 
+                    approx_cov
+                ) = self.spike_to_gaussian(spk)
+                
+                self.validation_emission_probabilities.append(emission_probability)
+                self.validation_approximate_mean.append(approx_mean)
+                self.validation_approximate_covariance.append(approx_cov)
 
         # Random initialization of parameters
         # Scale of ln(10) meters
-        self.decay        = torch.rand(1)
-        self.diffusion    = torch.rand(1)
+        self.decay     = torch.rand(1)
+        self.diffusion = torch.rand(1)
         self.n_parameters = 2
+
+    def name(self):
+        return "Momentum"
+
+    def spike_to_gaussian(self, spikemat: hseu.NDArray):
+        spikemat = hseu.ensure_torch(spikemat).double()
+
+        emission_probability = hseu.calc_poisson_emission_probabilities_2d(
+            spikemat, 
+            self.place_fields,
+            self.dt
+        )
+        emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
+        emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
+
+        approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
+            self.grid,
+            emission_probability,
+            'weighted',
+        )
+        return emission_probability, approx_mean, approx_cov
 
     @wraps(LinearGaussianSystem._initialize_values)
     def _initialize_values(self, X: list[torch.Tensor]) -> MomentumResults:
@@ -117,7 +146,15 @@ class Momentum(LinearGaussianSystem):
             approximate_covariance = self.approximate_covariance
         )
 
-    def _construct_transition_matrix(self) -> torch.Tensor:
+    def _initialize_globals(self, mode: str = "train"): 
+        super()._initialize_globals(mode)
+        self.global_parameters = MomentumParameters(
+            decay     = self.decay,
+            diffusion = self.diffusion,
+            **asdict(self.global_parameters),
+        )
+
+    def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""Construct the transition matrix in the form
 
         $$\begin{pmatrix}-\lambda\Delta t + 1& 0 \\ \Delta t &1\end{pmatrix}$$
@@ -135,7 +172,7 @@ class Momentum(LinearGaussianSystem):
         A = torch.cat((top, bottom), dim=0) * self.dt + If
         return A
 
-    def _construct_transition_covariance(self) -> torch.Tensor:
+    def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
         r"""Construct the transition covariance matrix in the form
 
         $$\begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & 0\end{pmatrix}$$
@@ -152,16 +189,23 @@ class Momentum(LinearGaussianSystem):
         Gamma   = torch.cat((top, bottom), dim=0)
         return Gamma
 
-    def _construct_emission_matrix(self) -> torch.Tensor:
+    def _construct_emission_matrix(self, mode: str = "train") -> torch.Tensor:
         return torch.hstack((
             torch.zeros(self.emission_dim, self.latent_dim),
             torch.eye(self.emission_dim), 
         ))
 
-    def _construct_emission_covariance(self):
-        return self.approximate_covariance
+    def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
+        if mode == "train":
+            return self.approximate_covariance
+        elif mode == "valid":
+            return self.validation_approximate_covariance
+        elif mode == "test":
+            return self.testing_approximate_covariance
+        else:
+            raise ValueError("Mode must be train, valid, or test")
 
-    def _construct_initial_mean(self) -> torch.Tensor:
+    def _construct_initial_mean(self, mode: str = "train") -> torch.Tensor:
         r"""Construct prior for momentum SSM.
         We want $P(z_1|z_0)$ to be a uniform distribution $U(K) = 1/K$, so we approximate this using
         a wide gaussian (large variance) since it approaches uniform.
@@ -184,7 +228,7 @@ class Momentum(LinearGaussianSystem):
             vmean, zmean
         ), dim=0)
 
-    def _construct_initial_covariance(self) -> torch.Tensor:
+    def _construct_initial_covariance(self, mode: str = "train") -> torch.Tensor:
         diffs = torch.tensor([es[1] + es[0] for es in self.environment_size])
         zcov = torch.diag(diffs)**2 / 12
 
@@ -197,13 +241,13 @@ class Momentum(LinearGaussianSystem):
             torch.cat((Z, zcov), dim=1)
         ), dim=0)
 
-
-    def _construct_transition_bias(self):
+    def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         return torch.zeros((self.augmented_dim, 1))
-    def _construct_emission_bias(self):
+
+    def _construct_emission_bias(self, mode: str = "train") -> torch.Tensor:
         return torch.zeros((self.emission_dim, 1))
 
-    def build_batch_parameters(self, batch: int) -> LDSParameters:
+    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
         return LDSParameters(
             transition_matrix     = self.global_parameters.transition_matrix,
             transition_covariance = self.global_parameters.transition_covariance,
@@ -215,11 +259,12 @@ class Momentum(LinearGaussianSystem):
             initial_covariance    = self.global_parameters.initial_covariance
         )
 
-    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
+    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics, mode: str = "train") -> torch.Tensor:
         r"""Calculate the full-data log-likelihood for the model given the current state.
 
         Args:
             values (MomentumResults): The current decoded values for hidden states.
+            mode (str): Either "train", "valid" or "test".
             _ (KalmanStatistics): Ignored for this model.
 
         Returns:
@@ -230,6 +275,7 @@ class Momentum(LinearGaussianSystem):
         log2pi = torch.log(2*PI)
         rank   = self.latent_dim
 
+        self._initialize_globals(mode)
         mu0 = self.global_parameters.initial_mean
         A   = self.global_parameters.transition_matrix
         C   = self.global_parameters.emission_matrix
@@ -343,10 +389,10 @@ class Momentum(LinearGaussianSystem):
         Args:
             values (MomentumResults): Momentum filtering pass results.
             stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
-            optimizer (str): The optimizer to use.
-            lr (float): Learning rate for the optimizer.
-            n_epochs (int): Number of epochs for SGD.
-            gd_tol (float): Tolerance for SGD.
+            optimizer (str): The optimizer to use. Defaults to "Adam".
+            lr (float): Learning rate for the optimizer. Defaults to 0.01.
+            n_epochs (int): Number of epochs for SGD. Defaults to 1000.
+            gd_tol (float): Tolerance for SGD. Defaults to 1e-03.
 
         Returns:
             torch.Tensor: The final negative log likelihood.
@@ -408,27 +454,62 @@ class Momentum(LinearGaussianSystem):
 
         return loss
 
-    def fit(
-            self, 
-            X=None, 
+    def fit(self, 
+            Xtrain: list[hseu.NDArray]|None=None, 
+            Xvalid: list[hseu.NDArray]|None=None,
             n_iter: int = 1000, 
             emtol: float = 1e-3, 
+            patience: int = 5,
+            val_freq: int = 10,
             **maximization_args
         ) -> MomentumResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
-            X (None): Value ignored. We treat self.approx_mean as the observed variable.
-            n_iter (int): Number of EM iterations.
-            emtol (float): Tolerance for the change in log-likelihood between iterations.
+            Xtrain (list[hseu.NDArray]|None): If None, uses `self.approximate_mean` as the observed training values. Defaults to None.
+            Xvalid (list[hseu.NDArray]|None): If None, uses `self.validation_approximate_mean` as observed validation. Defaults to None.
+            n_iter (int): Maximum number of EM iterations. Defaults to 1000.
+            emtol (float): Tolerance for the change in log-likelihood between iterations. Defaults to 1e-3.
+            patience (int): Number of validation iterations without improvement before stopping. Defaults to 5.
+            val_freq (int): Frequency of validation checks. Defaults to 10.
             **maximization_args: Keyword arguments to pass to the parent class's maximization method.
 
         Returns:
             MomentumResults: Results of fitting the model to the data.
         """
+        if Xtrain is None:
+            Xtrain = self.approximate_mean
+        if Xvalid is None and len(self.validation_approximate_mean) > 0:
+            Xvalid = self.validation_approximate_mean
         return super().fit(
-            self.approximate_mean,
-            n_iter,
-            emtol,
+            Xtrain,
+            Xvalid,
+            n_iter=n_iter,
+            emtol=emtol,
+            patience=patience,
+            val_freq=val_freq,
             **maximization_args
         )
+
+    def transform(self,
+            spikemats: list[hseu.NDArray],
+            Xtest: list[hseu.NDArray]|None = None
+        ):
+        self.testing_emission_probability   = []
+        self.testing_approximate_mean       = []
+        self.testing_approximate_covariance = []
+        for spk in spikemats:
+            (
+                emission_probability,
+                approximate_mean,
+                approximate_cov
+            ) = self.spike_to_gaussian(spk)
+            self.testing_emission_probability.append(emission_probability)
+            self.testing_approximate_mean.append(approximate_mean)
+            self.testing_approximate_covariance.append(approximate_cov)
+
+        if Xtest is None:
+            Xtest = self.testing_approximate_mean
+        return super().transform(
+            Xtest
+        ) 

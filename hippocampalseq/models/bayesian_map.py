@@ -11,16 +11,19 @@ class BayesianMAPResults:
     cumulative_probabilities: np.ndarray
 
 class BayesianMAP(StateSpace):
-    def __init__(self, place_fields: np.ndarray, dt: float, bin_size_cm: float):
+    def __init__(self, place_fields: np.ndarray, dt: float, bin_size: float):
         """Model for Bayesian Maximum A-Posteriori decoding.
         Args:
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             dt (float): Time step for the transition matrix.
-            bin_size_cm (float): Bin size in centimeters
+            bin_size (float): Bin size in centimeters
         """
         self.place_fields = place_fields
         self.dt = dt
-        self.bin_size = bin_size_cm
+        self.bin_size = bin_size
+
+    def name(self):
+        return "Bayesian Maximum A-Posteriori Estimator"
 
     def bayesian_decoding_one(
             self,

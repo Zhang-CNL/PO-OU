@@ -72,7 +72,7 @@ def trajectory_error_posterior(
             sampling
         )
         that = that[:len(xhat)]
-    else:
+    elif t is None and that is None:
         n = min(len(x), len(xhat))
         x = x[:n]
         xhat = xhat[:n]

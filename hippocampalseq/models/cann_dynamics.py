@@ -5,8 +5,20 @@ from .momentum import *
 from .linear_gaussian_system import *
 import hippocampalseq.utils as hseu
 
+__all__ = [
+    'CANNDynamics',
+    'bdiag'
+]
+
+bdiag = torch.vmap(torch.diag)
+
 class CANNDynamics(Momentum):
-    def __init__(self, true_position: list[np.ndarray], *args, **kwargs):
+    def __init__(self, 
+            true_position_train: list[hseu.NDArray], 
+            true_position_valid: list[hseu.NDArray]|None = None,
+            *args, 
+            **kwargs
+        ):
         r"""Initialize the CANNDynamics model.
         Model based on CANN subspace dynamics.
 
@@ -23,34 +35,62 @@ class CANNDynamics(Momentum):
         """
         super().__init__(*args, **kwargs)
 
-        self.true_position = [
-            hseu.atleast_3d(torch.from_numpy(tp))
-            for tp in true_position
+        self.true_position_train = [
+            hseu.atleast_3d(hseu.ensure_torch(tp))
+            for tp in true_position_train
+        ]
+        self.true_position_valid = [
+            hseu.atleast_3d(hseu.ensure_torch(tp))
+            for tp in true_position_valid
         ]
 
-        self.syn_input    = torch.rand(self.latent_dim) # U
+        self.approximate_covariance_diag = [
+            bdiag(bdiag(cov)) 
+            for cov in self.approximate_covariance
+        ]
+        self.validation_approximate_covariance_diag = [
+            bdiag(bdiag(cov))
+            for cov in self.validation_approximate_covariance
+        ]
+
+
+        self.syn_input    = torch.rand(1)#torch.rand(self.latent_dim) # U
         self.pos_variance = torch.rand(1) # sigma_z
 
         self.n_parameters  += self.latent_dim + 1
 
-    def _construct_transition_matrix(self) -> torch.Tensor:
+    def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""Construct the transition matrix:
         $$\begin{pmatrix}
             -\lambda \Delta t + 1 & 0 \\ \Delta t & -U \Delta t + 1
         \end{pmatrix}$$
         """
+        if mode == "train":
+            cov = self.approximate_covariance_diag
+        elif mode == "valid":
+            cov = self.validation_approximate_covariance_diag
+        elif mode == "test":
+            cov = self.testing_approximate_covariance_diag
         I = torch.eye(self.latent_dim)
         Z = torch.zeros((self.latent_dim, self.latent_dim))
         If = torch.eye(self.augmented_dim)
 
         M1 = -torch.exp(self.decay) * I
         top = torch.cat((M1, Z), dim=1)
-        M4 = -torch.diag(torch.exp(self.syn_input))
-        bottom = torch.cat((I, M4), dim=1)
-        F = torch.cat((top, bottom), dim=0) * self.dt + If
-        return F
+        #M4 = -torch.diag(torch.exp(self.syn_input))
+        M4 = -torch.exp(self.syn_input)
+        Fs = []
+        for c in cov:
+            _I = I.expand(len(c),-1,-1)
+            _t = top.expand(len(c),-1,-1)
+            bottom = torch.cat((_I, M4 * c), dim=2)
+            F = torch.cat((_t, bottom), dim=1) * self.dt + If
+            Fs.append(F)
+        #bottom = torch.cat((I, M4), dim=1)
+        #F = torch.cat((top, bottom), dim=0) * self.dt + If
+        return Fs
 
-    def _construct_transition_covariance(self) -> torch.Tensor:
+    def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
         r"""Transition covariance matrix.
         $$\begin{pmatrix}
             \sigma_v^2 \Delta t & 0 \\ 0 & \sigma_z^2 \Delta t
@@ -66,32 +106,44 @@ class CANNDynamics(Momentum):
         Gamma   = torch.cat((top, bottom), dim=0)
         return Gamma
 
-    def _construct_transition_bias(self):
+    def _construct_transition_bias(self, mode: str = "train"):
         r"""Transition bias from synaptic input and true position.
         $$\begin{pmatrix}
             0 \\ U\Delta t x_t
         \end{pmatrix}$$
         """
+        if mode == "train":
+            tpos = self.true_position_train
+            cov = self.approximate_covariance_diag
+        elif mode == "valid": 
+            tpos = self.true_position_valid
+            cov = self.validation_approximate_covariance_diag
+        elif mode == "test":
+            tpos = self.true_position_test
+            cov = self.testing_approximate_covariance_diag
+        else:
+            raise ValueError(f"Mode {mode} not recognized")
         b = []
-        for tp in self.true_position:
+        for tp,c in zip(tpos, cov):
             b.append(
                 torch.cat((
                     torch.zeros_like(tp), 
-                    (self.dt * torch.diag(torch.exp(self.syn_input))) @ tp
+                    (self.dt * torch.exp(self.syn_input) * c) @ tp
                 ), dim=1)
             )
         return b
 
-    def build_batch_parameters(self, batch: int) -> LDSParameters:
-        params = super().build_batch_parameters(batch)
+    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
+        params = super().build_batch_parameters(batch, mode)
+        params.transition_matrix = self.global_parameters.transition_matrix[batch]
         params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
 
     def _calculate_sufficient_statistics(self, values: MomentumResults) -> KalmanStatistics:
         return LinearGaussianSystem._calculate_sufficient_statistics(self, values)
 
-    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics) -> torch.Tensor:
-        return LinearGaussianSystem._complete_loglikelihood(self, values, stats)
+    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics, mode: str = "train") -> torch.Tensor:
+        return LinearGaussianSystem._complete_loglikelihood(self, values, stats, mode)
 
     def _solve_parameters(
             self, 
@@ -124,7 +176,7 @@ class CANNDynamics(Momentum):
             
             lmb   = torch.exp(decay)
             sigv  = torch.exp(diffusion)
-            U     = torch.diag(torch.exp(syn_input))
+            U     = torch.exp(syn_input)
             sigz  = torch.exp(pos_variance)
 
             F1 = -lmb * self.dt + 1
@@ -134,10 +186,12 @@ class CANNDynamics(Momentum):
             F = torch.cat(
                 (
                     torch.cat((F1 * I, Z), dim=1),
-                    torch.cat((self.dt * I, (-U * self.dt) + I), dim=1)
+                    torch.cat((self.dt * I, -U * self.dt * I + I), dim=1)
                 ),
                 dim=0
             )
+            Ft = torch.cat((F1 * I, Z), dim=1)
+
             R = torch.cat(
                 (
                     torch.cat((sigmav * I, Z), dim=1),
@@ -156,9 +210,24 @@ class CANNDynamics(Momentum):
             for i in range(n_batches):
                 T = len(stats.Ez[i])
 
+                true_position = self.true_position_train[i]
+                emission_cov = self.approximate_covariance_diag[i]
+
+                Fb = torch.cat((
+                    self.dt * I.expand(T,-1,-1), 
+                    -self.dt * U * emission_cov + I), dim=2
+                )
+                F = torch.cat(
+                    (
+                        Ft.expand(T,-1,-1),
+                        Fb
+                    ),
+                    dim=1
+                )
+
                 b = torch.cat((
-                        torch.zeros_like(self.true_position[i]),
-                        self.dt * U @ self.true_position[i]
+                        torch.zeros_like(true_position),
+                        (self.dt * U * emission_cov) @ true_position
                     ),
                     dim=1
                 )
@@ -176,19 +245,26 @@ class CANNDynamics(Momentum):
                 
                 iloss = ivloss + izloss
 
-
                 # $ln\ |R| + \mathbb{E}\left[(z_t - Fz_{t-1} - b_t)^T R^{-1} (z_t - Fz_{t-1} - b_t)\right]$
-                tl1 = torch.sum(Ezz[i][1:], axis=0)
-                tl2 = torch.sum(Ezz1[i], axis=0) @ F.mT 
-                tl3 = F @ torch.sum(Ezz[i][:-1], axis=0) @ F.mT 
+                tl1 = Ezz[i][1:]
+                tl2 = Ezz1[i] @ F[1:].mT
+                tl3 = F[1:] @ Ezz[i][:-1] @ F[1:].mT 
+                #tl1 = torch.sum(Ezz[i][1:], axis=0)
+                #tl2 = torch.sum(Ezz1[i], axis=0) @ F.mT 
+                #tl3 = F @ torch.sum(Ezz[i][:-1], axis=0) @ F.mT 
                 tloss = tl1 - tl2 - tl2.mT + tl3
 
-                bl1 = torch.sum(Ez[i][1:] @ b[1:].mT, axis=0)
-                bl2 = F @ torch.sum(Ez[i][:-1] @ b[1:].mT, axis=0)
-                bl3 = torch.sum(b[1:] @ b[1:].mT, axis=0)
+                bl1 = Ez[i][1:] @ b[1:].mT
+                bl2 = F[1:] @ (Ez[i][:-1] @ b[1:].mT)
+                bl3 = b[1:] @ b[1:].mT
+                #bl1 = torch.sum(Ez[i][1:] @ b[1:].mT, axis=0)
+                #bl2 = F @ torch.sum(Ez[i][:-1] @ b[1:].mT, axis=0)
+                #bl3 = torch.sum(b[1:] @ b[1:].mT, axis=0)
                 bloss = bl3 + bl2 + bl2.mT - bl1 - bl1.mT 
 
-                loss = hseu.mulinv(R, tloss + bloss)
+                loss = torch.sum(tloss + bloss, axis=0)
+                loss = hseu.mulinv(R, loss)
+                #loss = hseu.mulinv(R, tloss + bloss)
                 loss = (T-1) * torch.logdet(R) + torch.trace(loss)
 
                 total_loss += (iloss + loss) / 2 
@@ -215,6 +291,31 @@ class CANNDynamics(Momentum):
         self.syn_input    = params[2].detach()
         self.pos_variance = params[3].detach()
 
-        self._initialize_globals()
+        self._initialize_globals("train")
 
         return loss
+
+    def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
+        self.true_position_test = self._initialize_observations(Xtest)
+        self.testing_emission_probability   = []
+        self.testing_approximate_mean       = []
+        self.testing_approximate_covariance = []
+
+        for spk in spikemats:
+            (
+                emission_probability,
+                approximate_mean,
+                approximate_cov
+            ) = self.spike_to_gaussian(spk)
+            self.testing_emission_probability.append(emission_probability)
+            self.testing_approximate_mean.append(approximate_mean)
+            self.testing_approximate_covariance.append(approximate_cov)
+
+        self.testing_approximate_covariance_diag = [
+            bdiag(bdiag(cov))
+            for cov in self.testing_approximate_covariance
+        ]
+
+        return LinearGaussianSystem.transform(
+            self.testing_approximate_mean
+        )

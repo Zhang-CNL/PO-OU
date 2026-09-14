@@ -17,6 +17,9 @@ class Stationary(StateSpace):
         self.place_fields = place_fields
         self.dt = dt
 
+    def name(self):
+        return "Stationary Dynamics"
+
     def fit(
             self,
             X: list[np.ndarray],
