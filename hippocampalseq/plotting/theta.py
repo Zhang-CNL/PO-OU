@@ -193,6 +193,21 @@ def plot_cell_phase_polar(
     return fig
 
 @save_wrapper
+
+
+def weighted_fit(dist, col_idx, phase_bin, position_bin, mid):
+    """Probability-weighted least squares. Returns (slope cm/deg, intercept cm, weighted r)."""
+    W = dist[:, col_idx].astype(float)
+    W = W / W.sum()
+    x = (np.asarray(col_idx) * phase_bin + phase_bin / 2)[None, :]
+    y = ((np.arange(dist.shape[0]) - mid) * position_bin)[:, None]
+    mx, my = (W * x).sum(), (W * y).sum()
+    cxx = (W * (x - mx) ** 2).sum()
+    cyy = (W * (y - my) ** 2).sum()
+    cxy = (W * (x - mx) * (y - my)).sum()
+    slope = cxy / cxx
+    return slope, my - slope * mx, cxy / np.sqrt(cxx * cyy)
+
 def plot_across_session_decoding_hist(
         decoding_distribution: np.ndarray, 
         forward_window: tuple[int,int] = (260, 60), 
@@ -215,19 +230,29 @@ def plot_across_session_decoding_hist(
     if reverse_window[1] < reverse_window[0]:
         rev_end_col += pbin
 
-    fwd_argmax = decoding_distribution[:,fwd_start_col:fwd_end_col].argmax(axis=0)
-    rev_argmax = decoding_distribution[:,rev_start_col:rev_end_col].argmax(axis=0)
+    # fwd_argmax = decoding_distribution[:,fwd_start_col:fwd_end_col].argmax(axis=0)
+    # rev_argmax = decoding_distribution[:,rev_start_col:rev_end_col].argmax(axis=0)
     
-    # Fit line to forward and reverse windows
+    # # Fit line to forward and reverse windows
+    # fwd_xcols = np.arange(fwd_start_col, fwd_end_col)
+    # rev_xcols = np.arange(rev_start_col, rev_end_col)
+    # fwd_slopebin,fwd_intercept_bin = np.polyfit(fwd_xcols, fwd_argmax, 1)
+    # rev_slopebin,rev_intercept_bin = np.polyfit(rev_xcols, rev_argmax, 1)
+    # fwd_line = fwd_slopebin * fwd_xcols + fwd_intercept_bin
+    # rev_line = rev_slopebin * rev_xcols + rev_intercept_bin
+
+    # fwd_line_deg = fwd_slopebin * position_bin / phase_bin
+    # rev_line_deg = rev_slopebin * position_bin / phase_bin
+    
+    mid = npos // 2
     fwd_xcols = np.arange(fwd_start_col, fwd_end_col)
     rev_xcols = np.arange(rev_start_col, rev_end_col)
-    fwd_slopebin,fwd_intercept_bin = np.polyfit(fwd_xcols, fwd_argmax, 1)
-    rev_slopebin,rev_intercept_bin = np.polyfit(rev_xcols, rev_argmax, 1)
-    fwd_line = fwd_slopebin * fwd_xcols + fwd_intercept_bin
-    rev_line = rev_slopebin * rev_xcols + rev_intercept_bin
-
-    fwd_line_deg = fwd_slopebin * position_bin / phase_bin
-    rev_line_deg = rev_slopebin * position_bin / phase_bin
+    fwd_line_deg, fwd_b, fwd_r = weighted_fit(decoding_distribution, fwd_xcols, phase_bin, position_bin, mid)
+    rev_line_deg, rev_b, rev_r = weighted_fit(decoding_distribution, rev_xcols, phase_bin, position_bin, mid)
+    fwd_xdeg = fwd_xcols * phase_bin + phase_bin / 2
+    rev_xdeg = rev_xcols * phase_bin + phase_bin / 2
+    fwd_fit_cm = fwd_line_deg * fwd_xdeg + fwd_b
+    rev_fit_cm = rev_line_deg * rev_xdeg + rev_b
 
     
     fig,axs = plt.subplots(2,1,
@@ -253,8 +278,8 @@ def plot_across_session_decoding_hist(
 
     fwd_xdeg = fwd_xcols * phase_bin + phase_bin / 2
     rev_xdeg = rev_xcols * phase_bin + phase_bin / 2
-    fwd_fit_cm = (fwd_line - mid) * position_bin
-    rev_fit_cm = (rev_line - mid) * position_bin
+    # fwd_fit_cm = (fwd_line - mid) * position_bin
+    # rev_fit_cm = (rev_line - mid) * position_bin
 
     axs[0].plot(fwd_xdeg, fwd_fit_cm, 'c--', linewidth=2.5, 
                 label=fr"Forward sweep: {fwd_line_deg:+.3f} cm/$^\circ$")
