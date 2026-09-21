@@ -21,23 +21,50 @@ PI = torch.tensor(np.pi)
 
 @dataclass
 class LDSResults:
+    """Results of fitting the linear gaussian system
+
+    :param observations            : list[torch.Tensor] : Observed values $x_t$. Real emitted data,
+    :param predicted_mean          : list[torch.Tensor] : Predicted mean $\mu_{t|t-1}$ 
+    :param predicted_cov           : list[torch.Tensor] : Predicted covariance $V_{t|t-1}$
+    :param filtered_mean           : list[torch.Tensor] : Filtered mean $\mu_{t|t}$
+    :param filtered_cov            : list[torch.Tensor] : Filterd covariance $V_{t|t}$ 
+    :param smoothed_gain           : list[torch.Tensor] : RTS smoothing gain $J_t$ 
+    :param smoothed_mean           : list[torch.Tensor] : Smoothed mean $\hat{\mu}_{t|T}$ 
+    :param smoothed_cov            : list[torch.Tensor] : Smoothed covariance $\hat{V}_{t|T}$ 
+    :param loglike                 : list[float]        : Observed log likelihood $ln\ P(x_{1...T}|\theta)$
+    :param loglike_full            : torch.Tensor       : Complete data log likelihood $ln\ P(x_{1...T},z_{1...T}|\theta)$
+    :param cumulative_probabilities: torch.Tensor       : Cumulative probabilities for each time-series.
+    :param aic                     : float              : Akaike information criterion
+    :param bic                     : float              : Bayesian information criterion 
+    """
     observations             : list[torch.Tensor] = field(default_factory=list) 
-    predicted_mean           : list[torch.Tensor] = field(default_factory=list) # Stores $\mu_{t+1|t}$
-    predicted_cov            : list[torch.Tensor] = field(default_factory=list) # Stores $P_{t+1|t}$
-    filtered_mean            : list[torch.Tensor] = field(default_factory=list) # Stores $\mu_{t|t}$
-    filtered_cov             : list[torch.Tensor] = field(default_factory=list) # Stores $V_{t|t}$
-    smoothed_gain            : list[torch.Tensor] = field(default_factory=list) # Stores $J_t$
-    smoothed_mean            : list[torch.Tensor] = field(default_factory=list) # Stores $\hat{\mu}_{t|T}$
-    smoothed_cov             : list[torch.Tensor] = field(default_factory=list) # Stores $\hat{V}_{t|T}$
+    predicted_mean           : list[torch.Tensor] = field(default_factory=list) 
+    predicted_cov            : list[torch.Tensor] = field(default_factory=list) 
+    filtered_mean            : list[torch.Tensor] = field(default_factory=list) 
+    filtered_cov             : list[torch.Tensor] = field(default_factory=list) 
+    smoothed_gain            : list[torch.Tensor] = field(default_factory=list) 
+    smoothed_mean            : list[torch.Tensor] = field(default_factory=list) 
+    smoothed_cov             : list[torch.Tensor] = field(default_factory=list) 
     loglike                  : list[float]        = field(default_factory=list)
     loglike_full             : torch.Tensor       = field(default_factory=lambda: torch.empty(0))
     cumulative_probabilities : torch.Tensor       = field(default_factory=lambda: torch.empty(0))
-    aic                      : float = 0
-    bic                      : float = 0
+    aic                      : float              = 0
+    bic                      : float              = 0
 
 
 @dataclass
 class LDSStatistics:
+    """Sufficient statistics for maximizing the parameters of the LDS.
+
+    :param Cov : list[torch.Tensor] : $\hat{V}_tJ_{t-1}$
+    :param Ez  : list[torch.Tensor] : $\mathbb{E}[z^T]$
+    :param Ezz : list[torch.Tensor] : $\mathbb{E}[zz^T]$
+    :param Ezz1: list[torch.Tensor] : $\mathbb{E}[z_{t}z_{t-1}^T]$
+    :param Ez1z: list[torch.Tensor] : $\mathbb{E}[z_{t-1}z_t^T]$
+    :param Exx : list[torch.Tensor] : $\mathbb{E}[xx^T]$
+    :param Exz : list[torch.Tensor] : $\mathbb{E}[xz^T]$
+    :param Ezx : list[torch.Tensor] : $\mathbb{E}[zx^T]$
+    """
     Cov  : list[torch.Tensor] = field(default_factory=list) # $\hat{V}_tJ_{t-1}$
     Ez   : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[z^T]$
     Ezz  : list[torch.Tensor] = field(default_factory=list) # $\mathbb{E}[zz^T]$
@@ -49,6 +76,17 @@ class LDSStatistics:
 
 @dataclass
 class LDSParameters:
+    """Parameters of the LDS
+
+    :param transition_matrix     : torch.Tensor : Transition matrix $F_t$
+    :param transition_covariance : torch.Tensor : Transition covariance $Q_t$
+    :param transition_bias       : torch.Tensor : Transition bias $b_t$
+    :param emission_matrix       : torch.Tensor : Emission matrix $H_t$
+    :param emission_covariance   : torch.Tensor : Emission covariance $R_t$
+    :param emission_bias         : torch.Tensor : Emission bias $d_t$
+    :param initial_mean          : torch.Tensor : Initial mean $\mu_0$
+    :param initial_covariance    : torch.Tensor : Initial covariance $V_0$
+    """
     transition_matrix     : torch.Tensor
     transition_covariance : torch.Tensor 
     transition_bias       : torch.Tensor 
@@ -59,6 +97,15 @@ class LDSParameters:
     initial_covariance    : torch.Tensor
 
 class LinearGaussianSystem(StateSpace):
+    r"""Implementation of Kalman Filtering and RTS smoothing to solve for
+    linear dynamic systems with Gaussian transition and emission functions.
+        $$\begin{align}
+            z_t &= F_tz_{t-1} + b_t + \xi_t \\
+            x_t &= H_tz_t + d_t + \eta_t \\
+                \xi_t &\sim \mathcal{N}(0, Q_t) \\
+                \eta_t &\sim \mathcal{N}(0, R_t)
+        \end{align}$$
+    """
     def __init__(
         self,
         latent_dim: int, 
@@ -68,6 +115,17 @@ class LinearGaussianSystem(StateSpace):
         environment_size: list[tuple[int,...]]|None = None,
         bin_size: float|None = None
     ):
+        r"""Initialize the LDS.
+        Args:
+            latent_dim (int): Dimension of latent state.
+            emission_dim (int): Dimension of observation.
+            order (int): Order of the LDS. The augmented state will be order * latent_dim. Default: 1
+            default_params (dict[str, torch.Tensor], optional): Dictionary of default parameters.
+                These parameters will not be learned. Default {}.
+            environment_size (list[tuple[int,...]]|None, optional): Size of the environment the code is being run in.
+                Only use to calculate the marginal distribution. Default: None. 
+            bin_size (float|None, optional): Bin size in centimeters. Only use to calculate the marginal distribution. Default: None
+        """
 
         self.latent_dim = latent_dim
         self.augmented_dim = order * latent_dim
@@ -219,12 +277,16 @@ class LinearGaussianSystem(StateSpace):
         R = hseu.extract_last_dims(batch_params.emission_covariance, 0)
         d = hseu.extract_last_dims(batch_params.emission_bias, 0)
         x0 = hseu.extract_last_dims(values.observations[batch], 0)
-        
-        P0Ct = batch_params.initial_covariance @ H.T
-        K1 = hseu.invmul(P0Ct, H @ P0Ct + R)
-        innovation = x0 - H @ batch_params.initial_mean - d
-        mu1 = batch_params.initial_mean + K1 @ innovation
-        v1 = (torch.eye(self.augmented_dim) - K1 @ H) @ batch_params.initial_covariance
+
+        if torch.any(x0.isnan()):
+            mu1  = batch_params.initial_mean
+            v1   = batch_params.initial_covariance
+        else:
+            P0Ct = batch_params.initial_covariance @ H.T
+            K1 = hseu.invmul(P0Ct, H @ P0Ct + R)
+            innovation = x0 - H @ batch_params.initial_mean - d
+            mu1 = batch_params.initial_mean + K1 @ innovation
+            v1 = (torch.eye(self.augmented_dim) - K1 @ H) @ batch_params.initial_covariance
 
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = v1
@@ -246,14 +308,18 @@ class LinearGaussianSystem(StateSpace):
         Am1 = F @ mut1 + b
         Pn1 = F @ vt1 @ F.T + Q
 
-        # $K = P_{t|t-1} H^T (H P_{t|t-1} H^T + R)^{-1}$
-        Pct = Pn1 @ H.T
-        K = hseu.invmul(Pct, H @ Pct + R)
-        # $\mu_{t|t} = \mu_{t|t-1} + K (x_t - H \mu_{t|t-1} - d)$
-        # $$P_{t|t} = (I - K H) P_{t|t-1}$$
-        innovation = xt - H @ Am1 - d
-        mut = Am1 + K @ innovation 
-        vt  = (torch.eye(self.augmented_dim) - K @ H) @ Pn1
+        if torch.any(xt.isnan()):
+            mut = Am1
+            vt  = Pn1
+        else:
+            # $K = P_{t|t-1} H^T (H P_{t|t-1} H^T + R)^{-1}$
+            Pct = Pn1 @ H.T
+            K = hseu.invmul(Pct, H @ Pct + R)
+            # $\mu_{t|t} = \mu_{t|t-1} + K (x_t - H \mu_{t|t-1} - d)$
+            # $$P_{t|t} = (I - K H) P_{t|t-1}$$
+            innovation = xt - H @ Am1 - d
+            mut = Am1 + K @ innovation 
+            vt  = (torch.eye(self.augmented_dim) - K @ H) @ Pn1
 
         values.filtered_mean[batch][t]    = mut # $\mu_{t|t}$
         values.filtered_cov[batch][t]     = vt  # $P_{t|t}$
@@ -565,7 +631,20 @@ class LinearGaussianSystem(StateSpace):
             sc = torch.atleast_2d(values.smoothed_cov[i][:,self.latent_dim:,self.latent_dim:])
             cp = torch.zeros((sm.shape[0],)+sz)
             for t in range(sm.shape[0]):
-                L = torch.linalg.cholesky(sc[t])
+                cov_t = sc[t]
+                U, S, Vh = torch.linalg.svd(cov_t)
+                S_clamped = torch.clamp(S, min=1e-8)
+                cov_reg = U @ torch.diag(S_clamped) @ Vh
+                try:
+                    L = torch.linalg.cholesky(cov_reg)
+                except Exception as e:
+                    print(i,t)
+                    print(cov_reg)
+                    print(S)
+                    print(cov_t)
+                    print(values.smoothed_cov[i][t])
+                    raise e
+
                 mvn = MultivariateNormal(
                     sm[t].ravel(), 
                     scale_tril=L

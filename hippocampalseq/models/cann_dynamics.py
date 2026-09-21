@@ -54,10 +54,13 @@ class CANNDynamics(Momentum):
         ]
 
 
-        self.syn_input    = torch.rand(1)#torch.rand(self.latent_dim) # U
+        self.syn_input    = torch.rand(2) # U
         self.pos_variance = torch.rand(1) # sigma_z
 
-        self.n_parameters  += self.latent_dim + 1
+        self.n_parameters  += 2
+
+    def name(self):
+        return "Momentum + Covariance Scaling & Synaptic Input"
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""Construct the transition matrix:
@@ -80,14 +83,14 @@ class CANNDynamics(Momentum):
         #M4 = -torch.diag(torch.exp(self.syn_input))
         M4 = -torch.exp(self.syn_input)
         Fs = []
-        for c in cov:
+        for cc in cov:
+            c = cc.clone()
+            c[1:] = cc[:-1]
             _I = I.expand(len(c),-1,-1)
             _t = top.expand(len(c),-1,-1)
             bottom = torch.cat((_I, M4 * c), dim=2)
             F = torch.cat((_t, bottom), dim=1) * self.dt + If
             Fs.append(F)
-        #bottom = torch.cat((I, M4), dim=1)
-        #F = torch.cat((top, bottom), dim=0) * self.dt + If
         return Fs
 
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
@@ -124,7 +127,9 @@ class CANNDynamics(Momentum):
         else:
             raise ValueError(f"Mode {mode} not recognized")
         b = []
-        for tp,c in zip(tpos, cov):
+        for tp,cc in zip(tpos, cov):
+            c = cc.clone()
+            c[1:] = cc[:-1]
             b.append(
                 torch.cat((
                     torch.zeros_like(tp), 
@@ -201,25 +206,21 @@ class CANNDynamics(Momentum):
             )
 
             v0 = sigmav / (1 - F1**2)
-            ic = torch.linalg.inv(
-                self.global_parameters.initial_covariance[self.latent_dim:,self.latent_dim:]
-            )
-            im = self.global_parameters.initial_mean[self.latent_dim:]
 
             total_loss = 0
             for i in range(n_batches):
                 T = len(stats.Ez[i])
 
-                true_position = self.true_position_train[i]
-                emission_cov = self.approximate_covariance_diag[i]
+                true_position = self.true_position_train[i][1:]
+                emission_cov = self.approximate_covariance_diag[i][:-1]
 
                 Fb = torch.cat((
-                    self.dt * I.expand(T,-1,-1), 
+                    self.dt * I.expand(T-1,-1,-1), 
                     -self.dt * U * emission_cov + I), dim=2
                 )
                 F = torch.cat(
                     (
-                        Ft.expand(T,-1,-1),
+                        Ft.expand(T-1,-1,-1),
                         Fb
                     ),
                     dim=1
@@ -237,26 +238,31 @@ class CANNDynamics(Momentum):
                 ivloss = self.latent_dim * torch.log(v0) + ivloss / v0
 
                 # $\mathbb{E}\left[(z_1 - \mu_0 - b_1)^T \hat{V}_0^{-1} (z_1 - \mu_0 - b_1)\right]$
-                izloss = Ez[i][0,self.latent_dim:].mT @ ic @ (-b[0,self.latent_dim:]) \
-                    + im.mT @ ic @ b[0,self.latent_dim:] \
-                    - b[0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
-                    + b[0,self.latent_dim:].mT @ ic @ im \
-                    + b[0,self.latent_dim:].mT @ ic @ b[0,self.latent_dim:]
+                # izloss = Ez[i][0,self.latent_dim:].mT @ ic @ (-b[0,self.latent_dim:]) \
+                    # + im.mT @ ic @ b[0,self.latent_dim:] \
+                    # - b[0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
+                    # + b[0,self.latent_dim:].mT @ ic @ im \
+                    # + b[0,self.latent_dim:].mT @ ic @ b[0,self.latent_dim:]
+                #izloss = Ez[i][0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
+                #    - Ez[i][0,self.latent_dim:].mT @ ic @ im \
+                #    - im.mT @ ic @ Ez[i][0,self.latent_dim:] \
+                #    + im.mT @ ic @ im
+
                 
-                iloss = ivloss + izloss
+                iloss = ivloss #+ izloss
 
                 # $ln\ |R| + \mathbb{E}\left[(z_t - Fz_{t-1} - b_t)^T R^{-1} (z_t - Fz_{t-1} - b_t)\right]$
                 tl1 = Ezz[i][1:]
-                tl2 = Ezz1[i] @ F[1:].mT
-                tl3 = F[1:] @ Ezz[i][:-1] @ F[1:].mT 
+                tl2 = Ezz1[i] @ F.mT
+                tl3 = F @ Ezz[i][:-1] @ F.mT 
                 #tl1 = torch.sum(Ezz[i][1:], axis=0)
                 #tl2 = torch.sum(Ezz1[i], axis=0) @ F.mT 
                 #tl3 = F @ torch.sum(Ezz[i][:-1], axis=0) @ F.mT 
                 tloss = tl1 - tl2 - tl2.mT + tl3
 
-                bl1 = Ez[i][1:] @ b[1:].mT
-                bl2 = F[1:] @ (Ez[i][:-1] @ b[1:].mT)
-                bl3 = b[1:] @ b[1:].mT
+                bl1 = Ez[i][1:] @ b.mT
+                bl2 = F @ (Ez[i][:-1] @ b.mT)
+                bl3 = b @ b.mT
                 #bl1 = torch.sum(Ez[i][1:] @ b[1:].mT, axis=0)
                 #bl2 = F @ torch.sum(Ez[i][:-1] @ b[1:].mT, axis=0)
                 #bl3 = torch.sum(b[1:] @ b[1:].mT, axis=0)
@@ -291,6 +297,11 @@ class CANNDynamics(Momentum):
         self.syn_input    = params[2].detach()
         self.pos_variance = params[3].detach()
 
+        print(f"Decay: {self.decay}")
+        print(f"Diffusion: {self.diffusion}")
+        print(f"Synaptic input: {self.syn_input}")
+        print(f"Pos variance: {self.pos_variance}")
+
         self._initialize_globals("train")
 
         return loss
@@ -311,11 +322,14 @@ class CANNDynamics(Momentum):
             self.testing_approximate_mean.append(approximate_mean)
             self.testing_approximate_covariance.append(approximate_cov)
 
+
+
         self.testing_approximate_covariance_diag = [
             bdiag(bdiag(cov))
             for cov in self.testing_approximate_covariance
         ]
 
         return LinearGaussianSystem.transform(
+            self,
             self.testing_approximate_mean
         )

@@ -1,0 +1,17 @@
+{
+    "name": "10ms_5ms_theta_nonflat",
+    "session_types": [
+        "Linear",
+        "Open"
+    ],
+    "ignore_theta" : false,
+    "theta_args" : {
+        "time_window_s": 0.01,
+        "time_window_advance_s": 0.005
+    },
+    "placefield_args": {
+        "place_field_posterior" : false,
+        "flatten_linear" : false
+    },
+    "ignore_ripples" : true
+}

@@ -104,7 +104,7 @@ def load_raw_data(
         prior_mean_rat_sps = placefield_kwargs.get('prior_mean_rat_sps', 1.0),
         prior_beta_s       = placefield_kwargs.get('prior_beta_s', .01),
         min_spike_rate     = placefield_kwargs.get('min_spikerate', 1.0), 
-        velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 10.0),
+        velocity_cutoff    = placefield_kwargs.get('velocity_cutoff', 5.0),
         flatten_linear     = placefield_kwargs.get('flatten_linear', True)
     )
     print(f"Calculating place fields took {time.time() - start}s")
@@ -136,13 +136,13 @@ def load_raw_data(
 def process_theta(
         raw_data: RawData,
         placefield_data: PlaceFields,
-        velocity_cutoff: float = 10.0,
         theta_kwargs: dict[str, Any] = {
             'time_window_s': 60,
             'time_window_advance_s': None,
             'theta_length_s': (0.08, 0.16),
             'max_cycle_duration_s': 1.0,
-            'run_period_threshold': 2.0
+            'run_period_threshold': 2.0,
+            'velocity_cutoff': 10.0
         },
     ) -> Theta:
     start = time.time()
@@ -175,7 +175,7 @@ def process_theta(
         placefield_data.place_cell_ids,
         time_window_s         = theta_kwargs.get('time_window_s', 60 / 1000),
         time_window_advance_s = theta_kwargs.get('time_window_advance_s', None),
-        velocity_cutoff       = velocity_cutoff,
+        velocity_cutoff       = theta_kwargs.get('velocity_cutoff', 10.0),
         run_period_threshold  = theta_kwargs.get('run_period_threshold', 2.0)
     )
     print(f"Extracting theta run sequences took {time.time() - start}")

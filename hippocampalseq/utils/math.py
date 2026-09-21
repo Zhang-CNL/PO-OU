@@ -149,7 +149,7 @@ def laplacian_approximation(
     H[batch,1,0] = -dxy
     H[batch,1,1] = -dyy
 
-    Sigma[batch] = torch.linalg.inv(H[batch])
+    Sigma[batch] = inv(H[batch])
 
     # Fallback on moment matching for edge cases
     nb = ~bounded_mask
@@ -193,17 +193,42 @@ def mT(x: NDArray) -> NDArray:
         return x.mT
     return np.matrix_transpose(x)
 
-def invmul(A: NDArray, B: NDArray) -> NDArray:
+def issquare(A: NDArray) -> bool:
+    if A.ndim == 1:
+        return True
+    return A.shape[-1] == A.shape[-2]
+
+def invmul(A: NDArray, B: NDArray, jitter=1e-9) -> NDArray:
     """Computes :math:`AB^{-1}`"""
     if isinstance(A, torch.Tensor):
+        if issquare(B):
+            I = torch.eye(B.shape[1])
+            B = B + I * jitter
         return mT(torch.linalg.solve(mT(B), mT(A)))
+    if issquare(B):
+        I = np.eye(B.shape[1])
+        B = B + I * jitter
     return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
 
-def mulinv(B: NDArray, A: NDArray) -> NDArray:
+def mulinv(B: NDArray, A: NDArray, jitter=1e-9) -> NDArray:
     """Computes :math:`B^{-1}A`"""
     if isinstance(A, torch.Tensor):
+        if issquare(B):
+            I = torch.eye(B.shape[1])
+            B = B + I * jitter
         return torch.linalg.solve(B, A)
+    if issquare(B):
+        I = np.eye(A.shape[1])
+        B = B + I * jitter
     return np.linalg.solve(B, A)
+
+def inv(A: NDArray, jitter=1e-9):
+    I = torch.eye(A.shape[-1]) if isinstance(A, torch.Tensor) else np.eye(A.shape[-1])
+    return mulinv(
+        A,
+        I,
+        jitter=jitter
+    )
 
 def orthog(X: NDArray) -> NDArray:
     if isinstance(X, torch.Tensor):
