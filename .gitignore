@@ -21,3 +21,4 @@ typings/
 pyrightconfig.json
 
 *.log
+.env
