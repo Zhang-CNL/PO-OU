@@ -39,22 +39,24 @@ class CANNDynamics(Momentum):
             hseu.atleast_3d(hseu.ensure_torch(tp))
             for tp in true_position_train
         ]
-        self.true_position_valid = [
-            hseu.atleast_3d(hseu.ensure_torch(tp))
-            for tp in true_position_valid
-        ]
+        if true_position_valid is not None:
+            self.true_position_valid = [
+                hseu.atleast_3d(hseu.ensure_torch(tp))
+                for tp in true_position_valid
+            ]
 
         self.approximate_covariance_diag = [
             bdiag(bdiag(cov)) 
             for cov in self.approximate_covariance
         ]
-        self.validation_approximate_covariance_diag = [
-            bdiag(bdiag(cov))
-            for cov in self.validation_approximate_covariance
-        ]
+        if self.validation_approximate_covariance is not None:
+            self.validation_approximate_covariance_diag = [
+                bdiag(bdiag(cov))
+                for cov in self.validation_approximate_covariance
+            ]
 
 
-        self.syn_input    = torch.rand(2) # U
+        self.syn_input    = torch.rand(1) # U
         self.pos_variance = torch.rand(1) # sigma_z
 
         self.n_parameters  += 2

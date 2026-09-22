@@ -273,23 +273,27 @@ class LinearGaussianSystem(StateSpace):
         return values
 
     def _filter_init(self, values: LDSResults, batch_params: LDSParameters, batch: int) -> LDSResults:
-        H = hseu.extract_last_dims(batch_params.emission_matrix, 0)
-        R = hseu.extract_last_dims(batch_params.emission_covariance, 0)
-        d = hseu.extract_last_dims(batch_params.emission_bias, 0)
-        x0 = hseu.extract_last_dims(values.observations[batch], 0)
+        H   = hseu.extract_last_dims(batch_params.emission_matrix, 0)
+        R   = hseu.extract_last_dims(batch_params.emission_covariance, 0)
+        d   = hseu.extract_last_dims(batch_params.emission_bias, 0)
+        x0  = hseu.extract_last_dims(values.observations[batch], 0)
+        mu0 = batch_params.initial_mean
+        v0  = batch_params.initial_covariance
 
         if torch.any(x0.isnan()):
-            mu1  = batch_params.initial_mean
-            v1   = batch_params.initial_covariance
+            mu1  = mu0
+            v1   = v0
         else:
-            P0Ct = batch_params.initial_covariance @ H.T
+            P0Ct = v0 @ H.T
             K1 = hseu.invmul(P0Ct, H @ P0Ct + R)
-            innovation = x0 - H @ batch_params.initial_mean - d
-            mu1 = batch_params.initial_mean + K1 @ innovation
-            v1 = (torch.eye(self.augmented_dim) - K1 @ H) @ batch_params.initial_covariance
+            innovation = x0 - H @ mu0 - d
+            mu1 = mu0 + K1 @ innovation
+            v1 = (torch.eye(self.augmented_dim) - K1 @ H) @ v0
 
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = v1
+        values.predicted_mean[batch][0] = mu0
+        values.predicted_cov[batch][0]  = v0
         return values
 
     def _filter(self, values: LDSResults, batch_params: LDSParameters, batch: int, t: int) -> LDSResults:
@@ -321,10 +325,10 @@ class LinearGaussianSystem(StateSpace):
             mut = Am1 + K @ innovation 
             vt  = (torch.eye(self.augmented_dim) - K @ H) @ Pn1
 
-        values.filtered_mean[batch][t]    = mut # $\mu_{t|t}$
-        values.filtered_cov[batch][t]     = vt  # $P_{t|t}$
-        values.predicted_mean[batch][t-1] = Am1 # $\mu_{t|t-1}$
-        values.predicted_cov[batch][t-1]  = Pn1 # $P_{t|t-1}$
+        values.filtered_mean[batch][t]  = mut # $\mu_{t|t}$
+        values.filtered_cov[batch][t]   = vt  # $P_{t|t}$
+        values.predicted_mean[batch][t] = Am1 # $\mu_{t|t-1}$
+        values.predicted_cov[batch][t]  = Pn1 # $P_{t|t-1}$
         return values
 
     def _smooth_init(self, values: LDSResults, _: LDSParameters, batch: int) -> LDSResults:
@@ -336,8 +340,8 @@ class LinearGaussianSystem(StateSpace):
 
     def _smooth(self, values: LDSResults, batch_params: LDSParameters, batch: int, t: int) -> LDSResults:
         F = hseu.extract_last_dims(batch_params.transition_matrix, t)
-        Amt = values.predicted_mean[batch][t] # $\mu_{t|t-1}$
-        Pt  = values.predicted_cov[batch][t]  # $P_{t|t-1}$
+        Amt = values.predicted_mean[batch][t+1] # $\mu_{t+1|t}$
+        Pt  = values.predicted_cov[batch][t+1]  # $P_{t+1|t}$
         mt  = values.filtered_mean[batch][t]  # $\mu_{t|t}$
         vt  = values.filtered_cov[batch][t]   # $P_{t|t}$
 

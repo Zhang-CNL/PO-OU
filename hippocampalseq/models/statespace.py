@@ -42,3 +42,8 @@ class StateSpace:
             *_: tuple,
         ) -> StateSpaceResults:
         raise NotImplementedError
+
+    def transform(self,
+            X: list[np.ndarray|torch.Tensor],
+        ) -> StateSpaceResults:
+        raise NotImplementedError

@@ -17,8 +17,8 @@ class CANNDynamicsSpikes(CANNDynamics):
             self,
             place_fields: hseu.NDArray,
             spikemat_train: hseu.NDArray,
-            spikemat_valid: hseu.NDArray,
             true_position_train: list[hseu.NDArray],
+            spikemat_valid: hseu.NDArray|None=None,
             true_position_valid: list[hseu.NDArray]|None = None,
             gaussian_sigma_s: float = 0.1,
             *args,
@@ -46,21 +46,28 @@ class CANNDynamicsSpikes(CANNDynamics):
         self.n_spikes_train = []
         for spk in spikemat_train:
             #spk = gaussian_filter1d(spk, sigma=sigma, axis=0)
-            spk = torch.from_numpy(spk).double()
+            spk = hseu.ensure_torch(spk).double()
             spk = hseu.atleast_3d(spk.sum(axis=1))
             #spk = spk / (spk + 1)
             self.n_spikes_train.append(spk)
 
-        self.n_spikes_valid = []
-        for spk in spikemat_valid:
-            #spk = gaussian_filter1d(spk, sigma=sigma, axis=0)
-            spk = torch.from_numpy(spk).double()
-            spk = hseu.atleast_3d(spk.sum(axis=1))
-            #spk = spk / (spk + 1)
-            self.n_spikes_valid.append(spk)
+        if spikemat_valid is not None:
+            self.n_spikes_valid = []
+            for spk in spikemat_valid:
+                #spk = gaussian_filter1d(spk, sigma=sigma, axis=0)
+                spk = hseu.ensure_torch(spk).double()
+                spk = hseu.atleast_3d(spk.sum(axis=1))
+                #spk = spk / (spk + 1)
+                self.n_spikes_valid.append(spk)
 
         self.tau = torch.rand(1)
         self.n_parameters += 1
+
+        print(torch.exp(self.decay))
+        print(torch.exp(self.diffusion))
+        print(torch.exp(self.pos_variance))
+        print(torch.exp(self.syn_input))
+        print(torch.exp(self.tau))
 
     def name(self):
         return "Momentum + Synapic Input & Spike Scaling"
@@ -85,8 +92,8 @@ class CANNDynamicsSpikes(CANNDynamics):
         If = torch.eye(self.augmented_dim)
 
         M1 = -torch.exp(self.decay) * I
-        #M4 = -torch.exp(self.syn_input) * I
-        M4 = torch.diag(-torch.exp(self.syn_input))
+        M4 = -torch.exp(self.syn_input) * I
+        #M4 = torch.diag(-torch.exp(self.syn_input))
         top = torch.cat((M1, Z), dim=1)
         bottom = torch.cat((I, M4), dim=1)
 
@@ -152,8 +159,8 @@ class CANNDynamicsSpikes(CANNDynamics):
             raise ValueError(f"Mode {mode} not recognized")
 
         I = torch.eye(self.latent_dim)
-        #Udt = torch.exp(self.syn_input) * self.dt * I
-        Udt = torch.diag(torch.exp(self.syn_input)) * self.dt
+        Udt = torch.exp(self.syn_input) * self.dt * I
+        #Udt = torch.diag(torch.exp(self.syn_input)) * self.dt
 
         biases = []
         for spk,tp in zip(nspikes, true_position):
@@ -212,10 +219,10 @@ class CANNDynamicsSpikes(CANNDynamics):
 
             spikes = self.n_spikes_train
 
-            F1     = -lmb * self.dt + 1
+            F1     = 1 - lmb * self.dt
             sigmav = sigv**2 * self.dt
             sigmaz = sigz**2 * self.dt
-            udt    = U * self.dt# * I
+            udt    = U * self.dt * I
 
             Ft = torch.cat((F1 * I, Z), dim=1)
             Qt = torch.cat((sigmav * I, Z), dim=1)
@@ -228,7 +235,6 @@ class CANNDynamicsSpikes(CANNDynamics):
                 spike = spikes[i][:-1] * tau
                 tp    = self.true_position_train[i][1:]
                 udts  = udt / spike
-                loss       = 0
 
                 Fb = torch.cat((
                     self.dt * I.expand(T-1,-1,-1),
@@ -253,9 +259,8 @@ class CANNDynamicsSpikes(CANNDynamics):
                     udts @ tp
                 ), dim=1)
 
-                ivloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
-                ivloss = self.latent_dim * torch.log(v0) + ivloss / v0
-                loss = loss + ivloss
+                ivloss = self.latent_dim * torch.log(v0) \
+                    + (Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]) / v0
 
                 tl1 = Ezz[i][1:]
                 tl2 = Ezz1[i] @ F.mT 
@@ -270,9 +275,8 @@ class CANNDynamicsSpikes(CANNDynamics):
                 tloss = hseu.mulinv(Q, tloss + bloss)
                 tloss = torch.sum(tloss, axis=0)
                 tloss = torch.sum(torch.logdet(Q), axis=0) + torch.trace(tloss)
-                loss = loss + tloss
 
-                total_loss += loss
+                total_loss += tloss + ivloss
 
             return total_loss
 
@@ -296,6 +300,12 @@ class CANNDynamicsSpikes(CANNDynamics):
         self.syn_input    = params[2].detach()
         self.pos_variance = params[3].detach()
         self.tau          = params[4].detach()
+
+        print(torch.exp(self.decay))
+        print(torch.exp(self.diffusion))
+        print(torch.exp(self.syn_input))
+        print(torch.exp(self.pos_variance))
+        print(torch.exp(self.tau))
 
         self._initialize_globals("train")
         return loss

@@ -7,8 +7,8 @@ from .statespace import *
 
 @dataclass
 class BayesianMAPResults:
-    decoded_trajectories: list[np.ndarray]
-    cumulative_probabilities: np.ndarray
+    decoded_trajectories     : list[np.ndarray]
+    cumulative_probabilities : np.ndarray
 
 class BayesianMAP(StateSpace):
     def __init__(self, place_fields: np.ndarray, dt: float, bin_size: float):
@@ -84,4 +84,8 @@ class BayesianMAP(StateSpace):
             cum_probs
         )
 
+    def transform(self,
+        X: list[np.ndarray],
+    ) -> BayesianMAPResults:
+        return self.fit(X)
 
