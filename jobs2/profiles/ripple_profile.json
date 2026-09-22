@@ -1,0 +1,11 @@
+{
+    "name": "3ms_ripple",
+    "ignore_theta" : true,
+    "placefield_args" : {
+        "place_field_posterior": false
+    },
+    "ripple_args": {
+        "time_window_s": 0.003
+    },
+    "ignore_ripples" : false
+}

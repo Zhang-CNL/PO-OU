@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=hippocampalseq_models
+#SBATCH --job-name=hippocampalseq_analysis
 #SBATCH --partition=256GBv2
 #SBATCH --nodes=1
 #SBATCH --array=0-2
@@ -19,6 +19,5 @@ RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/"
 
 conda activate hippocampalswr
 # Runs each model and saves the processed data to {RESULTS_PATH}/{RAT_NAME}/{SESSION}
-# Model results are saved to {RESULTS_PATH}/{RAT_NAME}/{SESSION}/{MODEL}
-python -u models.py --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}" \
+python -u model_analysis.py --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}" \
     --results-path $RESULTS_PATH $@

@@ -28,31 +28,45 @@ def optimize(
     for p in parameters:
         p.requires_grad_(True)
 
+    optimizer_name = autograd_kwargs.get('optimizer', 'Adam')
+
     optimizers = {
         'Adam'  : torch.optim.Adam,
         'SGD'   : torch.optim.SGD,
         'AdamW' : torch.optim.AdamW,
         'LBFGS' : torch.optim.LBFGS
     }
-    optimizer = optimizers[autograd_kwargs.get('optimizer', 'Adam')](
+    optimizer = optimizers[optimizer_name](
         parameters,
         lr=autograd_kwargs.get('lr', .01)
     )
 
     prev_loss = np.inf
+    n_epochs = autograd_kwargs.get('n_epochs', 1000)
+    gd_tol = autograd_kwargs.get('gd_tol', 1e-3)
 
-    def wrapped_closure():
-        optimizer.zero_grad()
-        loss = closure(parameters, **closure_kwargs)
-        loss.backward()
-        with torch.no_grad():
-            return closure(parameters, **closure_kwargs)
+    if optimizer_name == 'LBFGS':
+        def wrapped_closure():
+            optimizer.zero_grad()
+            loss = closure(parameters, **closure_kwargs)
+            loss.backward()
+            with torch.no_grad():
+                return closure(parameters, **closure_kwargs)
 
-    for epoch in range(autograd_kwargs.get('n_epochs', 1000)):
-        loss = optimizer.step(wrapped_closure)
-        if epoch > 0 and abs((loss.item() - prev_loss) / prev_loss) < autograd_kwargs.get('gd_tol', 1e-3):
-            break
-        prev_loss = loss.item()
+        for epoch in range(n_epochs):
+            loss = optimizer.step(wrapped_closure)
+            if epoch > 0 and abs((loss.item() - prev_loss) / prev_loss) < gd_tol:
+                break
+            prev_loss = loss.item()
+    else:
+        for epoch in range(n_epochs):
+            optimizer.zero_grad()
+            loss = closure(parameters, **closure_kwargs)
+            loss.backward()
+            optimizer.step()
+            if epoch > 0 and abs((loss.item() - prev_loss) / prev_loss) < gd_tol:
+                break
+            prev_loss = loss.item()
 
     return loss.detach(),parameters
 
@@ -149,7 +163,7 @@ def laplacian_approximation(
     H[batch,1,0] = -dxy
     H[batch,1,1] = -dyy
 
-    Sigma[batch] = torch.linalg.inv(H[batch])
+    Sigma[batch] = inv(H[batch])
 
     # Fallback on moment matching for edge cases
     nb = ~bounded_mask
@@ -167,7 +181,7 @@ def laplacian_approximation(
 def analytical_gaussian_approximation(
         z: torch.Tensor,
         pz: torch.Tensor,
-        mean_position: str = 'max',
+        mean_position: str = 'weighted',
     ) -> tuple[torch.Tensor, torch.Tensor]:
     B, Nx, Ny = pz.shape
     if z.ndim == 2:
@@ -193,17 +207,42 @@ def mT(x: NDArray) -> NDArray:
         return x.mT
     return np.matrix_transpose(x)
 
-def invmul(A: NDArray, B: NDArray) -> NDArray:
+def issquare(A: NDArray) -> bool:
+    if A.ndim == 1:
+        return True
+    return A.shape[-1] == A.shape[-2]
+
+def invmul(A: NDArray, B: NDArray, jitter=1e-9) -> NDArray:
     """Computes :math:`AB^{-1}`"""
     if isinstance(A, torch.Tensor):
+        if issquare(B):
+            I = torch.eye(B.shape[1])
+            B = B + I * jitter
         return mT(torch.linalg.solve(mT(B), mT(A)))
+    if issquare(B):
+        I = np.eye(B.shape[1])
+        B = B + I * jitter
     return mT(np.linalg.solve(mT(B), mT(A))) # Equivalent to A @ np.linalg.inv(B)
 
-def mulinv(B: NDArray, A: NDArray) -> NDArray:
+def mulinv(B: NDArray, A: NDArray, jitter=1e-9) -> NDArray:
     """Computes :math:`B^{-1}A`"""
     if isinstance(A, torch.Tensor):
+        if issquare(B):
+            I = torch.eye(B.shape[1])
+            B = B + I * jitter
         return torch.linalg.solve(B, A)
+    if issquare(B):
+        I = np.eye(A.shape[1])
+        B = B + I * jitter
     return np.linalg.solve(B, A)
+
+def inv(A: NDArray, jitter=1e-9):
+    I = torch.eye(A.shape[-1]) if isinstance(A, torch.Tensor) else np.eye(A.shape[-1])
+    return mulinv(
+        A,
+        I,
+        jitter=jitter
+    )
 
 def orthog(X: NDArray) -> NDArray:
     if isinstance(X, torch.Tensor):

@@ -15,6 +15,9 @@ class MomentumVelocityBias(Momentum):
     r"""Momentum subclass that adds an additive bias to the hidden velocity.
     The bias is $F(\hat{v})$ where $\hat{v}$ is the true velocity provided to the
     function.
+    Same as the momentum model, only the velocity dynamics have 
+    a bias function applied:
+    $$\dot{v}_t = -\lambda v_t + F(v_{true,t}) + \sigma \xi_t$$
     """
 
     def __init__(self, 
@@ -25,9 +28,6 @@ class MomentumVelocityBias(Momentum):
             **kwargs
         ):
         r"""Create the MomentumVelocityBias model.
-        Same as the momentum model, only the velocity dynamics have 
-        a bias function applied:
-        $$\dot{v}_t = -\lambda v_t + F(v_{true,t}) + \sigma \xi_t$$
 
         Args:
             velocity_train (list[hseu.NDArray]): True animal velocity for each session for the training set.

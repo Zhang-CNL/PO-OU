@@ -24,7 +24,7 @@ class StateSpace:
         return "StateSpace"
 
     def filter(self, values: StateSpaceResults) -> StateSpaceResults:
-        raise NotImplementedErrpr
+        raise NotImplementedError
 
     def smooth(self, values: StateSpaceResults) -> StateSpaceResults:
         raise NotImplementedError
@@ -40,5 +40,10 @@ class StateSpace:
     def fit(self,
             X: list[np.ndarray|torch.Tensor],
             *_: tuple,
+        ) -> StateSpaceResults:
+        raise NotImplementedError
+
+    def transform(self,
+            X: list[np.ndarray|torch.Tensor],
         ) -> StateSpaceResults:
         raise NotImplementedError

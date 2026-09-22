@@ -11,11 +11,6 @@ __all__ = [
     'MomentumResults'
 ]
 
-@dataclass
-class MomentumParameters(LDSParameters):
-    decay     : torch.Tensor
-    diffusion : torch.Tensor
-
 @dataclass 
 class MomentumResults(LDSResults):
     emission_probabilities : list[torch.Tensor] = field(default_factory=list)
@@ -23,9 +18,23 @@ class MomentumResults(LDSResults):
     approximate_covariance : list[torch.Tensor] = field(default_factory=list)
 
 class Momentum(LinearGaussianSystem):
-    """State-space model that includes momentum as a parameters.
-    Essentially, this collapses down to a second-order markov chain, so we can use kalman filtering.
-    We have a uniform prior and our observation covariance shifts over time, so we take that into account here as well.
+    r"""State-space model that includes momentum as a parameters.
+    We have a uniform prior and our observation covariance shifts over time.
+
+    One-dimensional form of the model where we use the following approximation:
+    $$
+    \frac{d}{dt}\begin{pmatrix} v_t \\ z_t \end{pmatrix} = 
+        \begin{pmatrix} -\lambda & 0 \\ 1 & 0\end{pmatrix}\begin{pmatrix} v_t \\ z_t \end{pmatrix}
+        + \begin{pmatrix} \sigma_v & 0 \\ 0 & 0\end{pmatrix}\xi_t
+    $$
+        $v_t$ and $z_t$ are the velocity and position respectively, and each has an x and a y component.
+    $$
+    \begin{pmatrix} v_1 \\ z_1 \end{pmatrix} = 
+        \begin{pmatrix} 0 & 0 \\ 0 & N_{xy}/2 \end{pmatrix} 
+        + \begin{pmatrix} \sigma^2 / (2\lambda) & 0 \\ 0 & N_{xy}^2/12\end{pmatrix}\xi_1
+    $$
+    We approximated our uniform distribution prior for the position as a gaussian distribution
+    and used a stationary OU process prior for the velocity.
     """
     def __init__(self,
             dt: float, 
@@ -37,13 +46,6 @@ class Momentum(LinearGaussianSystem):
             seed: int|None = 42
         ):
         r"""Initialize the momentum SSM.
-        One-dimensional form of the model where we use the following approximation:
-
-        $$\frac{d}{dt}\begin{pmatrix} v_t \\ z_t \end{pmatrix} = 
-            \begin{pmatrix} -\lambda & 0 \\ 1 & 0\end{pmatrix}\begin{pmatrix} v_t \\ z_t \end{pmatrix}
-            + \begin{pmatrix} \sigma_v & 0 \\ 0 & 0\end{pmatrix}\xi_t$$
-            
-            $v_t$ and $z_t$ are the velocity and position respectively, and each has an x and a y component.
         Args:
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             spikemat (np.ndarray|torch.Tensor): (T, Ncells) Spikemat,
@@ -144,14 +146,6 @@ class Momentum(LinearGaussianSystem):
             emission_probabilities = self.emission_probabilities,
             approximate_mean       = self.approximate_mean,
             approximate_covariance = self.approximate_covariance
-        )
-
-    def _initialize_globals(self, mode: str = "train"): 
-        super()._initialize_globals(mode)
-        self.global_parameters = MomentumParameters(
-            decay     = self.decay,
-            diffusion = self.diffusion,
-            **asdict(self.global_parameters),
         )
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
@@ -419,7 +413,6 @@ class Momentum(LinearGaussianSystem):
                 T = len(Ezz[i])
 
                 iloss = Ezz[i][0] / v0
-                iloss = self.latent_dim * torch.log(v0) + iloss
                 iloss = self.latent_dim * torch.log(v0) + iloss
 
                 loss = Ezz[i][1:] \
