@@ -23,6 +23,14 @@ class StateSpace:
     def name(self):
         return "StateSpace"
 
+    def random_initializer(self, shape: tuple[int,...]|int, method: str) -> torch.Tensor:
+        if method == 'uniform':
+            return np.random.rand(*shape)
+        elif method == 'normal':
+            return np.random.randn(*shape)
+        else:
+            raise NotImplementedError
+
     def filter(self, values: StateSpaceResults) -> StateSpaceResults:
         raise NotImplementedError
 

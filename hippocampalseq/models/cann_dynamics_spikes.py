@@ -15,14 +15,16 @@ def _regularize_psd(self, cov: torch.Tensor, min_eig: float = 1e-8) -> None:
 class CANNDynamicsSpikes(CANNDynamics):
     def __init__(
             self,
+            dt: float,
+            environment_size: list[tuple[int,...]],
+            bin_size: int,
             place_fields: hseu.NDArray,
             spikemat_train: hseu.NDArray,
             true_position_train: list[hseu.NDArray],
             spikemat_valid: hseu.NDArray|None=None,
             true_position_valid: list[hseu.NDArray]|None = None,
             gaussian_sigma_s: float = 0.1,
-            *args,
-            **kwargs
+            initialization_method: str|dict[str, hseu.NDArray] = 'uniform',
         ):
         r"""Projected CANN dynamics with a $\tau_E$ term added to the equation.
 
@@ -32,13 +34,15 @@ class CANNDynamicsSpikes(CANNDynamics):
         and $c$ is a tunable parameter.
         """
         super().__init__(
+            dt=dt, 
+            environment_size=environment_size, 
+            bin_size=bin_size,
+            place_fields=place_fields,
             true_position_train=true_position_train, 
             true_position_valid=true_position_valid,
-            place_fields=place_fields,
             spikemat_train=spikemat_train,
             spikemat_valid=spikemat_valid,
-            *args, 
-            **kwargs
+            initialization_method=initialization_method
         )
 
         sigma = (gaussian_sigma_s / self.dt).item()
@@ -60,7 +64,11 @@ class CANNDynamicsSpikes(CANNDynamics):
                 #spk = spk / (spk + 1)
                 self.n_spikes_valid.append(spk)
 
-        self.tau = torch.rand(1)
+        self.tau = self.random_initializer(
+            "tau",
+            (1,),
+            self.initialization_method
+        )
         self.n_parameters += 1
 
         print(torch.exp(self.decay))

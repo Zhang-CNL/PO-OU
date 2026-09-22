@@ -17,6 +17,10 @@ class GaussianApproximationResults:
     cumulative_probabilities : np.ndarray
 
 class GaussianApproximation(StateSpace):
+    """Trajectory decoding by treating each individual time point
+    as a Gaussian. Estimates the mean and covariance indepdendently
+    for each time bin.
+    """
     def __init__(self, place_fields: np.ndarray, dt: float, bin_size: float, environment_size: list[tuple[int,...]]):
         self.place_fields = place_fields
         self.dt = dt
@@ -27,6 +31,7 @@ class GaussianApproximation(StateSpace):
         return "Gaussian Approximation"
 
     def approximate_spikemat(self, spikemat: np.ndarray):
+        spikemat = spikemat[np.where(spikemat.sum(axis=1)) > 0]
         emission_probability = hseu.calc_poisson_emission_probabilities_2d(
             spikemat, 
             self.place_fields,

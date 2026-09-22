@@ -113,7 +113,8 @@ class LinearGaussianSystem(StateSpace):
         order: int = 1,
         default_params: dict[str, torch.Tensor] = {},
         environment_size: list[tuple[int,...]]|None = None,
-        bin_size: float|None = None
+        bin_size: float|None = None,
+        initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
     ):
         r"""Initialize the LDS.
         Args:
@@ -125,6 +126,8 @@ class LinearGaussianSystem(StateSpace):
             environment_size (list[tuple[int,...]]|None, optional): Size of the environment the code is being run in.
                 Only use to calculate the marginal distribution. Default: None. 
             bin_size (float|None, optional): Bin size in centimeters. Only use to calculate the marginal distribution. Default: None
+            initialization_method (str|dict[str, hseu.NDArray], optional): Method for initializing the parameters.
+                Either a string ['normal', 'uniform'] or a dict with named parameters. Default: 'uniform'
         """
 
         self.latent_dim = latent_dim
@@ -144,9 +147,15 @@ class LinearGaussianSystem(StateSpace):
 
         self.environment_size = environment_size
         self.bin_size = bin_size
+        self.initialization_method = initialization_method
 
     def name(self):
         return "Linear Gaussian Dynamic System"
+
+    def random_initializer(self, parameter_name: str, shape: tuple[int, ...] | int, method: str|dict) -> torch.Tensor:
+        if isinstance(method, dict):
+            return hseu.ensure_torch(method[parameter_name])
+        return hseu.ensure_torch(super().random_initializer(shape, method))
         
     def _initialize_observations(self, X: torch.Tensor|list[torch.Tensor]|None):
         if X is None:
@@ -159,29 +168,57 @@ class LinearGaussianSystem(StateSpace):
         return X
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
-        F = torch.rand(self.augmented_dim, self.augmented_dim)
+        F = self.random_initializer(
+            "transition_matrix",
+            (self.augmented_dim, self.augmented_dim), 
+            self.initialization_method
+        )
         return F / F.sum(axis=1, keepdim=True)
     
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
-        Q = torch.randn(self.augmented_dim, self.augmented_dim)
+        Q = self.random_initializer(
+            "transition_covariance",
+            (self.augmented_dim, self.augmented_dim), 
+            self.initialization_method
+        )
         return Q @ Q.T 
     
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
-        return torch.rand(self.augmented_dim, 1)
+        return self.random_initializer(
+            "transition_bias",
+            (self.augmented_dim, 1), 
+            self.initialization_method
+        )
 
     def _construct_emission_matrix(self, mode: str = "train") -> torch.Tensor:
-        H = torch.rand(self.emission_dim, self.augmented_dim)
+        H = self.random_initializer(
+            "emission_matrix",
+            (self.emission_dim, self.augmented_dim), 
+            self.initialization_method
+        )
         return H / H.sum(axis=1, keepdim=True)
     
     def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
-        R = torch.randn(self.emission_dim, self.emission_dim)
+        R = self.random_initializer(
+            "emission_covariance",
+            (self.emission_dim, self.emission_dim), 
+            self.initialization_method
+        )
         return R @ R.T
     
     def _construct_emission_bias(self, mode: str = "train") -> torch.Tensor:
-        return torch.rand(self.emission_dim, 1)
+        return self.random_initializer(
+            "emission_bias",
+            (self.emission_dim, 1), 
+            self.initialization_method
+        )
     
     def _construct_initial_mean(self, mode: str = "train") -> torch.Tensor:
-        return torch.randn(self.augmented_dim, 1)
+        return self.random_initializer(
+            "initial_mean",
+            (self.augmented_dim, 1), 
+            self.initialization_method
+        )
     
     def _construct_initial_covariance(self, mode: str = "train") -> torch.Tensor:
         return torch.eye(self.augmented_dim)

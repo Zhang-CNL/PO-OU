@@ -43,7 +43,7 @@ class Momentum(LinearGaussianSystem):
             place_fields: hseu.NDArray, 
             spikemat_train: list[hseu.NDArray],
             spikemat_valid: list[hseu.NDArray]|None=None,
-            seed: int|None = 42
+            initialization_method: str|dict[str, hseu.NDArray] = 'uniform',
         ):
         r"""Initialize the momentum SSM.
         Args:
@@ -52,7 +52,6 @@ class Momentum(LinearGaussianSystem):
             dt (float): Time step for the transition matrix.
             environment_size (list[tuple[int,...]]): List of coordinates corresponding to the bounds of the environment.
             bin_size (int): Size of individual bins in cm.
-            seed: (int|None): Seed for the random number generator
         """
         if place_fields.shape[-1] == 1:
             n_zdim = 1
@@ -63,14 +62,12 @@ class Momentum(LinearGaussianSystem):
             n_zdim, 
             2,
             environment_size=environment_size,
-            bin_size=bin_size
+            bin_size=bin_size,
+            initialization_method=initialization_method
         )
 
         self.dt   = torch.tensor(dt)
         self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
-
-        if seed is not None:
-            torch.random.manual_seed(seed)
 
         self.place_fields = hseu.ensure_torch(place_fields)
 
@@ -105,9 +102,9 @@ class Momentum(LinearGaussianSystem):
 
         # Random initialization of parameters
         # Scale of ln(10) meters
-        self.decay     = torch.rand(1)
-        self.diffusion = torch.rand(1)
-        self.n_parameters = 2
+        self.decay     = self.random_initializer("decay", (1,), init_method=initialization_method)
+        self.diffusion = self.random_initializer("diffusion", (1,), init_method=initialization_method)
+        self.n_parameters   = 2
 
     def name(self):
         return "Momentum"

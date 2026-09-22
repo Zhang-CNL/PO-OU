@@ -14,10 +14,15 @@ bdiag = torch.vmap(torch.diag)
 
 class CANNDynamics(Momentum):
     def __init__(self, 
+            dt: float,
+            environment_size: list[tuple[int,...]],
+            bin_size: int,
+            place_fields: hseu.NDArray,
+            spikemat_train: hseu.NDArray,
             true_position_train: list[hseu.NDArray], 
             true_position_valid: list[hseu.NDArray]|None = None,
-            *args, 
-            **kwargs
+            spikemat_valid: hseu.NDArray|None = None,
+            initialization_method: str|dict[str, hseu.NDArray] = 'uniform',
         ):
         r"""Initialize the CANNDynamics model.
         Model based on CANN subspace dynamics.
@@ -30,10 +35,16 @@ class CANNDynamics(Momentum):
 
         Args:
             true_position (list[np.ndarray]): List of true positions.
-            *args: Additional arguments for the parent class.
-            **kwargs: Additional keyword arguments for the parent class.
         """
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            dt,
+            environment_size,
+            bin_size,
+            place_fields,
+            spikemat_train,
+            spikemat_valid,
+            initialization_method
+        )
 
         self.true_position_train = [
             hseu.atleast_3d(hseu.ensure_torch(tp))
@@ -56,8 +67,16 @@ class CANNDynamics(Momentum):
             ]
 
 
-        self.syn_input    = torch.rand(1) # U
-        self.pos_variance = torch.rand(1) # sigma_z
+        self.syn_input    = self.random_initializer(
+            "synaptic_input",
+            (1,),
+            initialization_method
+        ) # U
+        self.pos_variance = self.random_initializer(
+            "position_variance", 
+            (1,), 
+            initialization_method
+        ) # sigma_z
 
         self.n_parameters  += 2
 

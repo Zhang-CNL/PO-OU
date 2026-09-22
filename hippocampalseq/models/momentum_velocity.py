@@ -13,7 +13,7 @@ class MomentumVelocity(Momentum):
             spikemat_train: list[hseu.NDArray],
             spikemat_valid: list[hseu.NDArray]|None=None,
             velocity_type: str ='true',
-            seed: int|None = 42
+            initialization_method: str|dict[str, hseu.NDArray] = 'uniform',
         ):
         r"""Momentum model but we include an observed velocity variable.
         The same basic internal momentum is used, however the emission probabilities are different.
@@ -40,19 +40,22 @@ class MomentumVelocity(Momentum):
             velocity_type (str): Type of velocity to use. 
                 'observed' to calculate it from the place-fields. 'true' to use the true velocity.
                 Defaults to 'true'.
-            seed: (int|None): Seed for the random number generator
         """
         super().__init__(
             dt=dt, 
             environment_size=environment_size, 
             bin_size=bin_size, 
-            seed=seed,
             place_fields=place_fields,
             spikemat_train=spikemat_train,
-            spikemat_valid=spikemat_valid
+            spikemat_valid=spikemat_valid,
+            initialization_method=initialization_method
         )
         self.velocity_type = velocity_type
-        self.emission_velocity_variance = torch.rand((self.emission_dim, self.emission_dim))
+        self.emission_velocity_variance = self.random_initializer(
+            "emission_velocity_variance",
+            (self.emission_dim, self.emission_dim),
+            self.initialization_method
+        )
         self.emission_dim *= 2
         self.n_parameters += self.emission_velocity_variance.numel()
 
