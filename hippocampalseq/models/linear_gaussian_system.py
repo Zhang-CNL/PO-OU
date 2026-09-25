@@ -117,6 +117,7 @@ class LinearGaussianSystem(StateSpace):
         initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
     ):
         r"""Initialize the LDS.
+
         Args:
             latent_dim (int): Dimension of latent state.
             emission_dim (int): Dimension of observation.

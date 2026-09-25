@@ -5,8 +5,11 @@ from .momentum_velocity import *
 from .momentum_velocity_bias import *
 from .cann_dynamics import *
 from .cann_dynamics_spikes import *
+from .ou_dynamics import *
+
 from .bayesian_map import *
 from .gaussian_approximation import *
+
 from .stationary import *
 from .sca import *
 from .metrics import *

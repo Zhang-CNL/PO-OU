@@ -2,24 +2,6 @@ import numpy as np
 import hippocampalseq.utils as hseu
 
 
-def trajectory_error_centered(
-        x: np.ndarray,
-        x_hat: np.ndarray,
-        t: np.ndarray,
-        t_hat: np.ndarray,
-        environment_size: list[tuple[int,...]],
-        bin_size: int = 2.0
-    ):
-    mids = np.ndarray([
-        int(round((es[1] - es[0]) / 2.0)) 
-        for es in environment_size
-    ])[:,None]
-    decoded_data_size = (max(mids) * 2) + 1
-
-    translated = translate_decoding(
-        x_hat,
-    )
-
 def _interp(
         x: np.ndarray,
         x_hat: np.ndarray,

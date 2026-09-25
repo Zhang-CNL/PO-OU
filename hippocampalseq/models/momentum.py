@@ -102,8 +102,8 @@ class Momentum(LinearGaussianSystem):
 
         # Random initialization of parameters
         # Scale of ln(10) meters
-        self.decay     = self.random_initializer("decay", (1,), init_method=initialization_method)
-        self.diffusion = self.random_initializer("diffusion", (1,), init_method=initialization_method)
+        self.decay     = self.random_initializer("decay", (1,), method=initialization_method)
+        self.diffusion = self.random_initializer("diffusion", (1,), method=initialization_method)
         self.n_parameters   = 2
 
     def name(self):
