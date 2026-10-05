@@ -18,9 +18,9 @@ class OUDynamics(LinearGaussianSystem):
             environment_size: list[tuple[int,...]],
             bin_size: int,
             place_fields: hseu.NDArray,
-            spikemat_train: hseu.NDArray,
+            spikemat_train: list[hseu.NDArray],
             true_position_train: list[hseu.NDArray],
-            spikemat_valid: hseu.NDArray|None=None,
+            spikemat_valid: list[hseu.NDArray]|None=None,
             true_position_valid: list[hseu.NDArray]|None = None,
             initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
         ):
@@ -306,7 +306,7 @@ class OUDynamics(LinearGaussianSystem):
                 tloss = hseu.mulinv(Q, tloss)
                 tloss = (T-1) * torch.logdet(Q) + torch.trace(tloss)
 
-                total_loss += (iloss + tloss) / 2.0
+                total_loss += iloss + tloss
 
             return total_loss
         
@@ -330,6 +330,7 @@ class OUDynamics(LinearGaussianSystem):
         self.F22 = params[2].detach()
         self.velocity_variance = params[3].detach()
         self.position_variance = params[4].detach()
+        self.velocity_prior_variance = params[5].detach()
 
         self._initialize_globals()
 

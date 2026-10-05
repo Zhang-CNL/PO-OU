@@ -9,7 +9,6 @@ from neo.io import NeuralynxIO
 from typing import Any
 
 
-
 def parse_ncs_timestamps(csc_file: str, samples_per_record: int=512) -> np.ndarray:
     """
     Read per-record timestamps from a Neuralynx .ncs file and interpolate
@@ -58,25 +57,14 @@ def parse_ncs_timestamps(csc_file: str, samples_per_record: int=512) -> np.ndarr
     )
     return all_times
 
-def load_lfp_data(
-        position_data: nap.TsdFrame, 
-        spike_data: nap.TsGroup, 
-        datapath: str,
-        n_channels_to_load: int|list[int] = 2
-    ) -> dict[str, Any]:
-    """Load LFP data from a .ncs file
-    Args:
-        position_data (nap.TsdFrame): Raw position data from the rat.
-        spike_data (nap.TsGroup): Raw spike data.
-        datapath (str): Base path to the directory where the .ncs file is stored.
-    
-    Returns:
-        dict: A dict containing LFP data such as amplitude and phase, as well as metadata.
-    """
-
-    #  Load samples via Neo
+def load_unfiltered_lfp(
+    position_data: nap.TsdFrame,
+    spike_data: nap.TsGroup,
+    datapath: str,
+    n_channels_to_load: int | list[int] = 2,
+    ):
     if type(n_channels_to_load) == int:
-        n_channels_to_load = [i for i in range(n_channels_to_load)]
+        n_channels_to_load = list(range(n_channels_to_load))
     includes = []
     channels_loaded = 0
     for item in os.listdir(datapath):
@@ -176,6 +164,48 @@ def load_lfp_data(
         else:
             warnings.warn(f'    -> no three-way overlap, session dropped')
 
+    lfp_sessions = []
+    for session in sessions_ok:
+        s = max(run_intervals.start[session], lfp_start)
+        e = min(run_intervals.end[session], lfp_end)
+
+        seg = data_full.restrict(nap.IntervalSet(start=s, end=e))
+        lfp_sessions.append(seg)
+    metadata = {
+        'n_session': len(sessions_ok),
+        'lfp_data_range': (lfp_start, lfp_end),
+        'clock_drift_ppm': drift_ppm
+    }
+    return (
+        lfp_sessions, 
+        Sample_Frequency,
+        metadata 
+    )
+
+def load_lfp_data(
+        position_data: nap.TsdFrame, 
+        spike_data: nap.TsGroup, 
+        datapath: str,
+        n_channels_to_load: int|list[int] = 2
+    ) -> dict[str, Any]:
+    """Load LFP data from a .ncs file
+    Args:
+        position_data (nap.TsdFrame): Raw position data from the rat.
+        spike_data (nap.TsGroup): Raw spike data.
+        datapath (str): Base path to the directory where the .ncs file is stored.
+    
+    Returns:
+        dict: A dict containing LFP data such as amplitude and phase, as well as metadata.
+    """
+
+    #  Load samples via Neo
+    sessions_ok,Sample_Frequency,metadata = load_unfiltered_lfp(
+        position_data,
+        spike_data,
+        datapath,
+        n_channels_to_load
+    )
+
     # Per-session bandpass + Hilbert 
     Lower_Bound, Upper_Bound = 6, 12   # Hz
     nyquist = Sample_Frequency / 2
@@ -187,15 +217,14 @@ def load_lfp_data(
     amp_parts, phase_parts, pow_parts = [], [], []
     effective_starts, effective_ends = [], []
 
-    for i in sessions_ok:
-        s = max(run_intervals.start[i], lfp_start)
-        e = min(run_intervals.end[i], lfp_end)
-        effective_starts.append(s)
-        effective_ends.append(e)
-
-        seg   = data_full.restrict(nap.IntervalSet(start=s, end=e))
+    for seg in sessions_ok:
         t_seg = seg.index.values
         x_seg = seg.values
+
+        s = t_seg[0]
+        e = t_seg[-1]
+        effective_starts.append(s)
+        effective_ends.append(e)
 
         # Skip empty/too-short segments (filtfilt needs > 3 * filter order * 2 samples)
         if len(x_seg) < 100:
@@ -247,11 +276,7 @@ def load_lfp_data(
         'LFP': lfp_data, 
         'sampling_rate': Sample_Frequency, 
         'run_interval' : effective_support,
-        'metadata': {
-            'n_session': len(sessions_ok),
-            'lfp_data_range': (lfp_start, lfp_end),
-            'clock_drift_ppm': drift_ppm
-        }
+        'metdata' : metadata
     }
 
     return out

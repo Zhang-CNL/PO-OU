@@ -19,6 +19,14 @@ class AttrDict(dict):
     def __copy__(self):
         return AttrDict(self)
 
+def backend(x: NDArray) -> type:
+    if isinstance(x, torch.Tensor):
+        return torch
+    elif isinstance(x, np.ndarray):
+        return np
+    else:
+        raise ValueError(f"Unsupported type: {type(x)}. Expected torch.Tensor or np.ndarray.")
+
 def spike_info_to_tsg(spike_info: dict[int, nap.TsdFrame]) -> nap.TsGroup:
     return nap.TsGroup({
         cell: nap.Ts(t=spike_info[cell].index.values) for cell in spike_info
@@ -26,6 +34,23 @@ def spike_info_to_tsg(spike_info: dict[int, nap.TsdFrame]) -> nap.TsGroup:
 
 def grad_tensor(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.detach().clone().requires_grad_(True)
+
+def block_diagonal_scaled_identity(x: torch.Tensor, n: int) -> torch.Tensor:
+    """Build a block-diagonal matrix from each component in x.
+    Essentially a giant matrix where the diagonals of the large matrix are $x_k \cdot I_n$.
+
+    Args:
+        x (torch.Tensor): A vector of scalars.
+        n (int): The size of the individual blocks in the matrix.
+
+    Returns:
+        torch.Tensor: A block-diagonal matrix.
+    """
+    #values = x.squeeze(-1)  # (K,)
+    x = x.squeeze()
+    identity = torch.eye(n, dtype=x.dtype, device=x.device)
+    blocks = atleast_3d(x) * identity  # (K, N, N)
+    return torch.block_diag(*blocks.unbind(dim=0))
 
 def changeover_functions(_type: type, *args: Iterable[str]) -> Callable[...,Any]|list[Callable[...,Any]]:
     """Given a type of an array, return an arbritrary list of functions from the proper module

@@ -89,7 +89,7 @@ class MomentumVelocity(Momentum):
         params.emission_covariance = self.global_parameters.emission_covariance[batch]
         return params
 
-    def _calculate_sufficient_statistics(self, values: MomentumResuts) -> KalmanStatistics:
+    def _calculate_sufficient_statistics(self, values: MomentumResuts, mode="train") -> KalmanStatistics:
         r"""Calculate sufficient statistics for the momentum with velocity model.
         Since our log-likelihood calculation has non-constant emissions,
         we calculate $\mathbb{E}[v_t v_t^T]$, $\mathbb{E}[v_t \hat{v}_t^T]$, $\mathbb{E}[\hat{v}_tv_t^T]$, and $\mathbb{E}[\hat{v}_t\hat{v}_t^T]$.
@@ -97,10 +97,16 @@ class MomentumVelocity(Momentum):
         still want to keep stats.Ezz from the momentum model for our latent storage.
 
         """
-        stats = super()._calculate_sufficient_statistics(values)
+        if mode == "train":
+            velocity = self.velocity_train
+        elif mode == "valid":
+            velocity = self.velocity_valid
+        elif mode == "test":
+            velocity = self.velocity_test
+        stats = super()._calculate_sufficient_statistics(values, mode)
 
         Exx,Exz,Ezx,Ezz = [],[],[],[]
-        for sm,x in zip(values.smoothed_mean, self.velocity_train):
+        for sm,x in zip(values.smoothed_mean, velocity):
             sm = sm[:,:self.latent_dim]
             exx = x @ x.mT 
             exz = x @ sm.mT 

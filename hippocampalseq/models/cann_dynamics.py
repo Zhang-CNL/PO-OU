@@ -165,8 +165,8 @@ class CANNDynamics(Momentum):
         params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
 
-    def _calculate_sufficient_statistics(self, values: MomentumResults) -> KalmanStatistics:
-        return LinearGaussianSystem._calculate_sufficient_statistics(self, values)
+    def _calculate_sufficient_statistics(self, values: MomentumResults, mode:str = "train") -> KalmanStatistics:
+        return LinearGaussianSystem._calculate_sufficient_statistics(self, values, mode)
 
     def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics, mode: str = "train") -> torch.Tensor:
         return LinearGaussianSystem._complete_loglikelihood(self, values, stats, mode)

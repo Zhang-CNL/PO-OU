@@ -250,7 +250,7 @@ class Momentum(LinearGaussianSystem):
             initial_covariance    = self.global_parameters.initial_covariance
         )
 
-    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics, mode: str = "train") -> torch.Tensor:
+    def _complete_loglikelihood(self, values: MomentumResults, _: KalmanStatistics, mode: str = "train") -> torch.Tensor:
         r"""Calculate the full-data log-likelihood for the model given the current state.
 
         Args:
@@ -263,66 +263,76 @@ class Momentum(LinearGaussianSystem):
         """
         loglike = 0
 
-        log2pi = torch.log(2*PI)
+        log2pi = torch.log(2*torch.tensor(torch.pi))
         rank   = self.latent_dim
 
         self._initialize_globals(mode)
-        mu0 = self.global_parameters.initial_mean
-        A   = self.global_parameters.transition_matrix
-        C   = self.global_parameters.emission_matrix
-        V0     = self.global_parameters.initial_covariance
-        Sigma  = self.global_parameters.emission_covariance
-        Gamma  = self.global_parameters.transition_covariance
 
-        GammaS = torch.linalg.svd(Gamma)[1]
-        GPi = torch.diag(1 / GammaS[:rank])
-        GPld= torch.log(torch.prod(GammaS[:rank]))
 
-        for b in range(len(values.observations)):
-            T = values.observations[b].shape[0]
+        for i in range(len(values.observations)):
+            params = self.build_batch_parameters(i, mode=mode)
+            T = values.observations[i].shape[0]
+            t = torch.arange(T)
+            F = hseu.extract_last_dims(params.transition_matrix, t[1:])
+            Q = hseu.extract_last_dims(params.transition_covariance, t[1:])
+            H = hseu.extract_last_dims(params.emission_matrix, t)
+            R = hseu.extract_last_dims(params.emission_covariance, t)
+            b = hseu.extract_last_dims(params.transition_bias, t[1:])
+            d = hseu.extract_last_dims(params.emission_bias, t)
+            mu0 = params.initial_mean
+            V0  = params.initial_covariance
 
-            muhat = values.smoothed_mean[b]
-            vhat  = values.smoothed_cov[b]
-            Jhat  = values.smoothed_gain[b]
-            
-            Exx  = values.observations[b] @ values.observations[b].mT
+            if Q.ndim == 2:
+                Q_v        = Q[:rank,:rank]
+                logdet_Q_v = (T-1) * torch.logdet(Q_v)
+            else:
+                Q_v        = Q
+                logdet_Q_v = torch.sum(torch.logdet(Q_v), axis=0)
+
+            muhat = values.smoothed_mean[i]
+            vhat  = values.smoothed_cov[i]
+            Jhat  = values.smoothed_gain[i]
+
+            Exx  = values.observations[i] @ values.observations[i].mT
             Ezz  = vhat + muhat @ muhat.mT
-            Ezx  = muhat @ values.observations[b].mT
-            Ezz1 = Jhat[:-1] @ vhat[1:] + muhat[1:] @ muhat[:-1].mT 
-
-            _loglike = 2 * T * rank * log2pi \
-                + torch.logdet(V0) \
-                + (T-1) * GPld \
-                + torch.sum(torch.logdet(Sigma[b])) 
-
+            Ezx  = muhat @ values.observations[i].mT
+            Ezz1 = vhat[1:] @ Jhat[:-1].mT + muhat[1:] @ muhat[:-1].mT 
 
             ip1 = Ezz[0]
             ip2 = mu0 @ muhat[0].mT
             ip3 = mu0 @ mu0.mT
             ill = hseu.mulinv(V0, ip1 - ip2 - ip2.mT + ip3)
-            ill = torch.trace(ill) 
-            _loglike += ill
+            loglike += (
+                torch.logdet(V0)
+                + torch.trace(ill)
+                + self.augmented_dim * log2pi
+            )
 
             tp1 = Ezz[1:,:rank,:rank]
-            tp2 = (Ezz1 @ A.mT)[:,:rank,:rank]
-            tp3 = (A @ Ezz[:-1] @ A.mT)[:,:rank,:rank]
-            tll = torch.sum(tp1 - tp2 - tp2.mT + tp3, axis=0) 
-            tll = GPi @ tll
-            tll = torch.trace(tll) 
-            _loglike += tll
+            tp2 = (Ezz1 @ F.mT)[:,:rank,:rank]
+            tp3 = (F @ Ezz[:-1] @ F.mT)[:,:rank,:rank]
+            tll = hseu.mulinv(Q_v, tp1 - tp2 - tp2.mT + tp3)
+            tll = torch.sum(tll, axis=0)
+            loglike += (
+                logdet_Q_v
+                + torch.trace(tll)
+                + (T-1) * rank * log2pi
+            )
 
             ep1 = Exx
-            ep2 = C @ Ezx
-            ep3 = C @ Ezz @ C.mT
-            ell = hseu.mulinv(Sigma[b], ep1 - ep2 - ep2.mT + ep3)
+            ep2 = H @ Ezx
+            ep3 = H @ Ezz @ H.mT
+            ell = hseu.mulinv(R, ep1 - ep2 - ep2.mT + ep3)
             ell = torch.sum(ell, axis=0)
-            ell = torch.trace(ell) 
-            _loglike += ell
+            loglike += (
+                torch.sum(torch.logdet(R), axis=0)
+                + torch.trace(ell)
+                + T * self.emission_dim * log2pi
+            )
 
-            loglike += _loglike
-        return -loglike / 2.0
+        return -0.5 * loglike
 
-    def _calculate_sufficient_statistics(self, values: MomentumResults) -> KalmanStatistics:
+    def _calculate_sufficient_statistics(self, values: MomentumResults, mode: str="train") -> KalmanStatistics:
         """
         Calculate sufficient statistics for performing maximization given the filtered
         and smoothed values of the model.
@@ -342,13 +352,13 @@ class Momentum(LinearGaussianSystem):
             v_vv = sc[:,:N,:N]
             g_vv = sg[:,:N,:N]
             # $$Cov[z_t,z_{t-1}] = \hat{V}_t J_{t-1}$$
-            cov = btrace(v_vv[1:] @ g_vv[:-1].mT).squeeze() # tr(2,2) -> (1,1)
+            cov = btrace(v_vv[1:] @ g_vv[:-1].mT).reshape(-1) # tr(2,2) -> (1,1)
             # $$E[z_t] = \hat{\mu}_t$$
             ez = muvv # (2,1)
             # $$E[z_t^T z_t] = \hat{\mu}_t^T \hat{\mu}_t + tr(\hat{V}_t)$$
-            ezz = (muvv.mT @ muvv).squeeze() + btrace(v_vv).squeeze() # (1,2)(2,1) + (1,1) -> (1,1)
+            ezz = (muvv.mT @ muvv).squeeze() + btrace(v_vv).reshape(-1) # (1,2)(2,1) + (1,1) -> (1,1)
             # $$E[z_t^T z_{t-1}] = tr(Cov[z_t,z_{t-1}]) + \hat{\mu}_t^T \hat{\mu}_{t-1}$$
-            ezz1 = cov.squeeze() + (muvv[1:].mT @ muvv[:-1]).squeeze() # (1,1) + (1,2)(2,1) -> (1,1)
+            ezz1 = cov.squeeze() + (muvv[1:].mT @ muvv[:-1]).reshape(-1) # (1,1) + (1,2)(2,1) -> (1,1)
 
             Cov.append(cov)
             Ez.append(ez)

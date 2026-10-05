@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 import copy
 import warnings
 from dataclasses import dataclass, field
@@ -13,11 +12,9 @@ __all__ = [
     'LDSResults',
     'LDSStatistics',
     'LDSParameters',
-    'PI'
 ]
 
 torch.set_default_dtype(torch.double)
-PI = torch.tensor(np.pi)
 
 @dataclass
 class LDSResults:
@@ -225,32 +222,35 @@ class LinearGaussianSystem(StateSpace):
         return torch.eye(self.augmented_dim)
 
     def _initialize_globals(self, mode: str = "train"):
-        default = lambda name, value: self.default_parameters.get(name, value)
+        def default(name, fn):
+            if name in self.default_parameters:
+                return self.default_parameters[name]
+            return fn(mode)
 
         params = LDSParameters(
             transition_matrix = default("transition_matrix", 
-                self._construct_transition_matrix(mode)
+                self._construct_transition_matrix
             ),
             transition_covariance = default("transition_covariance",
-                    self._construct_transition_covariance(mode)
+                    self._construct_transition_covariance
             ),
             transition_bias = default("transition_bias",
-                self._construct_transition_bias(mode)
+                self._construct_transition_bias
             ),
             emission_matrix = default("emission_matrix",
-                self._construct_emission_matrix(mode)
+                self._construct_emission_matrix
             ),
             emission_covariance = default("emission_covariance",
-                self._construct_emission_covariance(mode),
+                self._construct_emission_covariance
             ),
             emission_bias = default("emission_bias",
-                self._construct_emission_bias(mode)
+                self._construct_emission_bias
             ),
             initial_mean = default("initial_mean", 
-                self._construct_initial_mean(mode)
+                self._construct_initial_mean
             ),
             initial_covariance = default("initial_covariance",
-                self._construct_initial_covariance(mode)
+                self._construct_initial_covariance
             )
         )
         self.global_parameters = params
@@ -406,7 +406,7 @@ class LinearGaussianSystem(StateSpace):
         where $S_t = C_t P_{t|t-1} C_t^T + \Gamma$ and $\nu_t = x_t - C\mu_{t|t-1}$
 
         """
-        log2pi = torch.log(2 * PI)
+        log2pi = torch.log(2 * torch.tensor(torch.pi))
         rank = self.augmented_dim 
         loglike = torch.tensor([[0.0]])
 
@@ -429,8 +429,13 @@ class LinearGaussianSystem(StateSpace):
         return -0.5 * loglike.squeeze()
 
     def _complete_loglikelihood(self, values: LDSResults, stats: LDSStatistics, mode: str = "train") -> torch.Tensor:
-        """Calculate the complete data log likelihood of the model given the sufficient statistics and current 
-        parameters.
+        r"""Calculate the complete data log likelihood of the model given the sufficient statistics and current 
+        parameters:
+        $$
+        ln\ P(X,Z|\theta) = ln\ P(z_1|\mu_0,V_0) + \sum_{t=2}^T ln\ P(z_t|z_{t-1}, F, Q)
+            + \sum_{t=1}^T ln\ P(x_t|z_t, H, R)
+        $$
+        For the full expanded equation, see Bishp 2006 chapter 13.3.2.
 
         Args:
             values (LDSResults): The filtered and smoothed values of the model.
@@ -440,96 +445,96 @@ class LinearGaussianSystem(StateSpace):
         Returns:
             torch.Tensor: The log likelihood of the model.
         """
-        log2pi = torch.log(2 * PI)
-        rank = self.augmented_dim
+        log2pi = torch.log(2 * torch.tensor(torch.pi))
         loglike = torch.tensor([[0.0]])
 
-        for b in range(len(values.observations)):
-            params = self.build_batch_parameters(b, mode=mode)
-            T = len(values.observations[b])
-            t = np.arange(T)
-            tmat = hseu.extract_last_dims(params.transition_matrix, t[1:])
-            tcov = hseu.extract_last_dims(params.transition_covariance, t[1:])
-            emat = hseu.extract_last_dims(params.emission_matrix, t)
-            ecov = hseu.extract_last_dims(params.emission_covariance, t)
-            tbias = hseu.extract_last_dims(params.transition_bias, t)
-            ebias = hseu.extract_last_dims(params.emission_bias, t)
+        for i in range(len(values.observations)):
+            params = self.build_batch_parameters(i, mode=mode)
+            T = len(values.observations[i])
+            t = torch.arange(T)
+            F = hseu.extract_last_dims(params.transition_matrix, t[1:])
+            Q = hseu.extract_last_dims(params.transition_covariance, t[1:])
+            H = hseu.extract_last_dims(params.emission_matrix, t)
+            R = hseu.extract_last_dims(params.emission_covariance, t)
+            b = hseu.extract_last_dims(params.transition_bias, t[1:])
+            d = hseu.extract_last_dims(params.emission_bias, t)
 
             iloglike = 0
-            
-            # Log-determinant of the Gaussian portions
-            ilogd = torch.logdet(params.initial_covariance)
-            tlogd = torch.logdet(tcov)
-            if tcov.ndim == 2:
+
+            # Initial state 
+            ip1 = stats.Ezz[i][0]
+            ip2 = params.initial_mean @ values.smoothed_mean[i][0].mT 
+            ip3 = params.initial_mean @ params.initial_mean.mT 
+            ip  = ip1 - ip2 - ip2.mT + ip3
+            # Initial loglike
+            ill = hseu.invmul(params.initial_covariance, ip)
+            iloglike += (
+                torch.logdet(params.initial_covariance)
+                + torch.trace(ill)
+                + self.augmented_dim * log2pi
+            )
+
+            # Base transition term 
+            tp1 = stats.Ezz[i][1:]
+            tp2 = stats.Ezz1[i] @ F.mT 
+            tp3 = F @ stats.Ezz[i][:-1] @ F.mT 
+            tp  = tp1 - tp2 - tp2.mT + tp3
+            # Transition bias term 
+            tpb1 = stats.Ez[i][1:] @ b.mT 
+            tpb2 = F @ stats.Ez[i][:-1] @ b.mT 
+            tpb3 = b @ b.mT 
+            tpb  = tpb3 + tpb2 + tpb2.mT - tpb1 - tpb1.mT 
+            # Transition loglike
+            tll = hseu.mulinv(Q, tp + tpb)
+            tll = torch.sum(tll, axis=0)
+            tlogd = torch.logdet(Q)
+            if Q.ndim == 2:
                 tlogd *= (T - 1)
             else:
                 tlogd = torch.sum(tlogd, axis=0)
-            elogd = torch.logdet(ecov)
-            if ecov.ndim == 2:
+
+            iloglike += (
+                tlogd
+                + torch.trace(tll)
+                + (T-1) * self.augmented_dim * log2pi
+            )
+
+            # Base emission term
+            ep1 = stats.Exx[i]
+            ep2 = stats.Exz[i] @ H.mT 
+            ep3 = H @ stats.Ezz[i] @ H.mT 
+            ep  = ep1 - ep2 - ep2.mT + ep3
+            # Emission bias term 
+            epb1 = values.observations[i] @ d.mT 
+            epb2 = H @ stats.Ez[i] @ d.mT 
+            epb3 = d @ d.mT 
+            epb  = epb3 + epb2 + epb2.mT - epb1 - epb1.mT 
+            # Emission loglike
+            ell = hseu.mulinv(R, ep + epb)
+            ell = torch.sum(ell, axis=0)
+            elogd = torch.logdet(R)
+            if R.ndim == 2:
                 elogd *= T 
             else:
                 elogd = torch.sum(elogd, axis=0)
-            iloglike += ilogd + tlogd + elogd
+            iloglike += (
+                elogd
+                + torch.trace(ell)
+                + T * self.emission_dim * log2pi
+            ) 
 
-            # Initial state 
-            ip1 = stats.Ezz[b][0]
-            ip2 = params.initial_mean @ values.smoothed_mean[b][0].mT 
-            ip3 = params.initial_mean @ params.initial_mean.mT 
-            ip  = ip1 - ip2 - ip2.mT + ip3
-            # Initial state bias term
-            tbias0 = tbias[0] if tbias.ndim == 3 else tbias
-            ipb1 = stats.Ez[b][0] @ tbias0.mT
-            ipb2 = params.initial_mean @ tbias0.mT
-            ipb3 = tbias0 @ tbias0.mT
-            ipb = ipb3 + ipb2 + ipb2.mT - ipb1 - ipb1.mT
-            # Initial loglike
-            ill = hseu.invmul(params.initial_covariance, ip + ipb)
-            iloglike += torch.trace(ill)
-
-            # Base transition term 
-            tp1 = stats.Ezz[b][1:]
-            tp2 = stats.Ezz1[b] @ tmat.mT 
-            tp3 = tmat @ stats.Ezz[b][:-1] @ tmat.mT 
-            tp  = tp1 - tp2 - tp2.mT + tp3
-            # Transition bias term 
-            bias = tbias[1:] if tbias.ndim == 3 else tbias
-            tpb1 = stats.Ez[b][1:] @ bias.mT 
-            tpb2 = tmat @ stats.Ez[b][:-1] @ bias.mT 
-            tpb3 = bias @ bias.mT 
-            tpb  = tpb3 + tpb2 + tpb2.mT - tpb1 - tpb1.mT 
-            # Transition loglike
-            if tcov.ndim == 2:
-                tll = hseu.mulinv(tcov, torch.sum(tp + tpb, axis=0))
-            else:
-                tll = hseu.mulinv(tcov, tp + tpb)
-                tll = torch.sum(tll, axis=0)
-            iloglike += torch.trace(tll)
-
-            # Base emission term
-            ep1 = stats.Exx[b]
-            ep2 = stats.Exz[b] @ emat.mT 
-            ep3 = emat @ stats.Ezz[b] @ emat.mT 
-            ep  = ep1 - ep2 - ep2.mT + ep3
-            # Emission bias term 
-            epb1 = values.observations[b] @ ebias.mT 
-            epb2 = emat @ stats.Ez[b] @ ebias.mT 
-            epb3 = ebias @ ebias.mT 
-            epb  = epb3 + epb2 + epb2.mT - epb1 - epb1.mT 
-            # Emission loglike
-            if ecov.ndim == 2:
-                ell = hseu.mulinv(ecov, torch.sum(ep + epb, axis=0))
-            else:
-                ell = hseu.mulinv(ecov, ep + epb)
-                ell = torch.sum(ell, axis=0)
-            iloglike += torch.trace(ell)
-
-            loglike += iloglike + T * rank * log2pi
+            loglike += iloglike
 
         return -0.5 * loglike.squeeze()
 
-    def _calculate_sufficient_statistics(self, values: LDSResults) -> LDSStatistics:
-        """Calculate sufficient statistics for performing maximization given the filtered
+    def _calculate_sufficient_statistics(self, values: LDSResults, mode: str = "train") -> LDSStatistics:
+        r"""Calculate sufficient statistics for performing maximization given the filtered
          and smoothed values of the model.
+        From Bishop 2006, eqns 104-107.
+        $Cov[z_t,z_{t-1}] = \hat{V}_t J_{t-1}^T$
+        $\mathbb{E}[z_t] = \hat{\mu}_t$
+        $\mathbb{E}[z_tz_t^T] = \hat{V}_t + \hat{\mu}_t\hat{\mu}_t^T$
+        $\mathbb{E}[z_{t}z_{t-1}^T] = \hat{V}_t J_{t-1}^T + \hat{\mu}_t\hat{\mu}_{t-1}^T$
 
         Args:
             values (LDSResults): The filtered and smoothed values of the model.
@@ -720,7 +725,7 @@ class LinearGaussianSystem(StateSpace):
 
     def m_step(self, values: KalmanResults, **kwargs) -> torch.Tensor:
         with torch.no_grad():
-            stats = self._calculate_sufficient_statistics(values)
+            stats = self._calculate_sufficient_statistics(values, "train")
         return self._solve_parameters(values, stats, **kwargs)
 
     def fit(self,
@@ -751,7 +756,7 @@ class LinearGaussianSystem(StateSpace):
         values = self._initialize_values(Xtrain)
         
         best_params = None
-        best_valid_ll = -np.inf
+        best_valid_ll = -torch.inf
         patience_counter = 0
         
         if Xvalid is not None:
@@ -837,6 +842,16 @@ class LinearGaussianSystem(StateSpace):
                 self.bin_size,
                 valid_values
             )
+        valid_values.loglike_full = self._complete_loglikelihood(
+            valid_values,
+            self._calculate_sufficient_statistics(valid_values, "valid"),
+            mode="valid"
+        )
+        valid_values.aic = self.aic(valid_values.loglike_full)
+        valid_values.bic = self.bic(
+            valid_values.loglike_full,
+            sum(len(obs) for obs in valid_values.observations)
+        )
         return values, valid_values
 
     def transform(
@@ -860,4 +875,14 @@ class LinearGaussianSystem(StateSpace):
                 self.bin_size, 
                 values    
             )
+        values.loglike_full = self._complete_loglikelihood(
+            values,
+            self._calculate_sufficient_statistics(values, "test"),
+            mode="test"
+        )
+        values.aic = self.aic(values.loglike_full)
+        values.bic = self.bic(
+            values.loglike_full,
+            sum(len(obs) for obs in values.observations)
+        )
         return values

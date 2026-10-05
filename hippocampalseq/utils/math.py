@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import scipy
 from typing import Callable,Any
-from .utils import changeover_functions,NDArray
+from .utils import changeover_functions,NDArray,backend
 
 import matplotlib.pyplot as plt
 
@@ -94,22 +94,23 @@ def calc_poisson_emission_probabilities_log_2d(
     Returns:
         (NDArray): (T, Nbx, Nby) matrix of emission probabilities
     """
-    sum,log,einsum,amax = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'amax')
+    xp = backend(spikemat)
+    #sum,log,einsum,amax = changeover_functions(type(spikemat), 'sum', 'log', 'einsum', 'amax')
     lambdas = place_fields * dt
     if lambdas.ndim == 2:
         lambdas = lambdas[...,None]
     if lambdas.ndim > 3:
         lambdas = lambdas.squeeze()
 
-    sum_lambda = sum(lambdas, axis=0)
+    sum_lambda = xp.sum(lambdas, axis=0)
 
-    log_lambdas = log(lambdas + 1e-10)
-    term1 = einsum('tn,nhw->thw', spikemat, log_lambdas)
+    log_lambdas = xp.log(lambdas + 1e-10)
+    term1 = xp.einsum('tn,nhw->thw', spikemat, log_lambdas)
     log_likelihood_maps = term1 - sum_lambda
 
     # Numerical stability trick per time bin
     # Subtract max along spatial dimensions (H, W) for each T
-    max_log = amax(log_likelihood_maps, axis=(1, 2), keepdims=True)
+    max_log = xp.amax(log_likelihood_maps, axis=(1, 2), keepdims=True)
 
     return log_likelihood_maps - max_log
 
@@ -118,9 +119,10 @@ def calc_poisson_emission_probabilities_2d(
         place_fields: NDArray,
         dt: float|NDArray
     ) -> NDArray:
-    exp = changeover_functions(type(spikemat), 'exp')
+    #exp = changeover_functions(type(spikemat), 'exp')
+    xp = backend(spikemat)
     log_emission = calc_poisson_emission_probabilities_log_2d(spikemat, place_fields, dt)
-    return exp(log_emission)
+    return xp.exp(log_emission)
 
 def laplacian_approximation(
         emission_prob: torch.Tensor,
@@ -214,6 +216,11 @@ def issquare(A: NDArray) -> bool:
 
 def invmul(A: NDArray, B: NDArray, jitter=1e-9) -> NDArray:
     """Computes :math:`AB^{-1}`"""
+    xp  = backend(A)
+    if issquare(B):
+        I = xp.eye(B.shape[1])
+        B = B + I * jitter
+    return mT(xp.linalg.solve(mT(B), mT(A))) # Equivalent to
     if isinstance(A, torch.Tensor):
         if issquare(B):
             I = torch.eye(B.shape[1])
@@ -226,6 +233,11 @@ def invmul(A: NDArray, B: NDArray, jitter=1e-9) -> NDArray:
 
 def mulinv(B: NDArray, A: NDArray, jitter=1e-9) -> NDArray:
     """Computes :math:`B^{-1}A`"""
+    xp = backend(A)
+    if issquare(B):
+        I = xp.eye(B.shape[1])
+        B = B + I * jitter
+    return xp.linalg.solve(B, A)
     if isinstance(A, torch.Tensor):
         if issquare(B):
             I = torch.eye(B.shape[1])
@@ -316,8 +328,9 @@ def _components(
     Essentially the projections of a vector onto perpendicular axes.
     $V_x = V cos(\theta)$ and $V_y = V sin(\theta)$.
     """
-    C = np.sum(np.cos(p * (X - phi)), axis=axis)
-    S = np.sum(np.sin(p * (X - phi)), axis=axis)
+    xp = backend(X)
+    C = xp.sum(xp.cos(p * (X - phi)), axis=axis)
+    S = xp.sum(xp.sin(p * (X - phi)), axis=axis)
     return C, S
 
 def rayleightest(X: np.ndarray, axis: int|None = None) -> np.ndarray|float:
@@ -418,3 +431,32 @@ def imresize(arr: np.ndarray, decoded_data_size: int|tuple[int,int]) -> np.ndarr
         decoded_data_size[1],
         axis=1
     )
+
+def norm(x: NDArray, axis: int|None = None, method: str = 'l2') -> NDArray:
+    """Normalize an array.
+    Methods:
+        'l2': Normalize by the L2 norm (Euclidean norm).
+        'l1': Normalize by the L1 norm (Manhattan norm).
+        'unit': Normalize to have zero mean and unit variance.
+        'none': Do not normalize. For compatiblity.
+
+    Args:
+        x (NDArray): Input array.
+        axis (int|None): Axis along which to compute the norm. If None, computes the norm of the flattened array.
+        method (str): Method to use for normalization. Options are 'l2', 'l1', 'unit', or 'none'.
+
+    Returns:
+        NDArray: The normed.
+    """
+    xp = backend(x)
+    if method == 'l2':
+        return x / xp.sqrt(xp.sum(xp.square(x), axis=axis))
+    elif method == 'l1':
+        return x / xp.sum(xp.abs(x), axis=axis)
+    elif method == 'unit':
+        return (x - x.mean(axis=axis, keepdims=True)) / x.std(axis=axis, keepdims=True)
+    elif method == 'none':
+        return x
+    else:
+        raise ValueError(f"Unknown normalization method: {method}")
+    
