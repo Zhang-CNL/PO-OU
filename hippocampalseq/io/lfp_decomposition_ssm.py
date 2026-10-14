@@ -47,7 +47,6 @@ def sigmoid_clamp_constraint(
     theta = 2 * torch.pi / fs * frequency_hz
     return theta, frequency_hz
 
-
 def fill_missing_oscillators(
         frequencies: torch.Tensor,
         damping: torch.Tensor,
@@ -87,6 +86,94 @@ def fill_missing_oscillators(
         torch.cat((damping, extra_a)),
     )
 
+def whittle_nll(
+        params,
+        Y: list[torch.Tensor],
+        f_s: torch.Tensor|float,
+        frequency_range: tuple[float, float],
+        *,
+        remove_mean: bool = True,
+        include_dc: bool = True
+    ):
+    raw_frequncies, raw_damping, component_covariances, tau2 = params
+    a_k = torch.tanh(raw_damping).reshape(-1)
+    f = sigmoid_clamp_constraint(
+        raw_frequencies, 
+        f_s,
+        min_hz=frequency_range[0],
+        max_hz=frequency_range[1]
+    )[0].reshape(-1)
+    sigma_k = torch.exp(component_covariances)**2
+
+    if not (a_k.numel() == f.numel() == sigma_k.numel()):
+        raise ValueError(
+            f"Expected raw_damping, raw_frequencies, and component_covariances to have the same number of elements. "
+            f"Got {damping.numel()}, {f.numel()}, and {sigma_k.numel()}"
+        )
+    K = a_k.numel()
+
+    
+    nll = 0.0
+
+    c,s = torch.cos(f), torch.sin(f)
+    blocks = torch.stack((
+        torch.stack((c,-s), dim=-1),
+        torch.stack((s, c), dim=-1),
+    ), dim=-2)
+    blocks = F * a_k[:,None]
+    F = torch.block_diag(*blocks.unbind(dim=0))
+
+    Q = hseu.block_diagonal_scaled_identity(sigma_k, 2)
+
+    H = torch.zeros(2 * K, dtype=f.dtype, device=f.device)
+    H[0::2] = 1.0
+
+    complex_dtype = torch.complex128 if f.dtype == torch.float64 else torch.complex64
+    F = F.to(complex_dtype)
+    H = H.to(complex_dtype)
+    Q = Q.to(complex_dtype)
+
+    for y in Y:
+        T = y.numel()
+        if T < 2:
+            raise ValueError(
+                f"Expected at least 2 elements in y. Got {y.numel()}"
+            )
+        
+        y_spec = y - y.mean() if remove_mean else y
+        fft = torch.fft.rfft(y_spec)
+        periodogram = torch.abs(fft) ** 2 / T
+
+        omega = 2 * torch.pi * torch.fft.rfftfreq(T, device=y.device, dtype=y.dtype)
+
+        eye = torch.eye(2 * K, dtype=complex_dtype, device=y.device)
+        phase = torch.exp(-1j * omega).to(complex_dtype)
+        A = eye.unsqueeze(0) -  hseu.atleast_3d(phase) * F.unsqueeze(0)
+
+        G = torch.linalg.solve(A, eye.expand_as(A))
+        spectral_cov = G @ Q @ G.mH
+
+        model_spectrum = torch.einsum(
+            'i,fih,j->f', H, spectral_cov, H.conj()
+        ).real + tau2
+        model_spectrum = torch.clamp(model_spectrum, min=torch.finfo(model_spectrum.dtype).eps)
+
+        weights = torch.full_like(periodogram, 2.0)
+        weights[0] = 1.0
+        if T % 2 == 0:
+            weights[-1] = 1.0
+
+        if not include_dc:
+            periodogram    = periodogram[1:]
+            weights        = weights[1:]
+            model_spectrum = model_spectrum[1:]
+
+        nll += torch.sum(
+            weights * (periodogram * torch.log(model_spectrum) / model_spectrum)
+        )
+    return nll
+   
+
 class LFPDecomposition(hsem.LinearGaussianSystem):
     r"""Implmementation of state-space model for LFP decomposition from
     Matsuda & Komaki, 2017, "Time Series Decomposition into Oscillation Components and Phase Estimation"
@@ -106,7 +193,8 @@ class LFPDecomposition(hsem.LinearGaussianSystem):
             n_components: int, 
             dt: float, 
             frequency_range: tuple[float,float] = (0.1, 200.0),
-            initialization_method: str = 'autoregressive'
+            initialization_method: str = 'autoregressive',
+            objective_function: str = 'kalman'
         ):
         """Initialize the LFP decomposition model.
 
@@ -115,6 +203,7 @@ class LFPDecomposition(hsem.LinearGaussianSystem):
             dt (float): Time step size in seconds.
             frequency_range (tuple[float,float]): Frequency range for the oscillators in Hz. Defaults to (0.1, 200.0).
             initialization_method (str): Method for initializing parameters ('uniform', 'normal', 'autoregressive'). Defaults to 'autoregressive'.
+            objective_function (str): Objective function to use for fitting ('kalman', 'whittle'). Defaults to 'kalman'.
         """
         latent_dim = n_components * 2
         emission_matrix = torch.ones((1, latent_dim)) # $y_t = \sum_{k=1}^K x_{k,t,1} + w_t$
@@ -166,6 +255,7 @@ class LFPDecomposition(hsem.LinearGaussianSystem):
         )
 
         self.n_parameters = 3 * n_components + 1
+        self.objective_function = objective_function
 
     def name(self):
         return f"{self.n_components}-dimensional Univariate LFP Decomposition"
@@ -262,13 +352,23 @@ class LFPDecomposition(hsem.LinearGaussianSystem):
             n_epochs: int = 1000, 
             gd_tol: float = 1e-3
         ): 
-        frequencies           = hseu.grad_tensor(self.raw_frequencies)
-        amplitudes            = hseu.grad_tensor(self.raw_damping)
-        component_covariances = hseu.grad_tensor(self.component_covariances)
-        params = [frequencies, amplitudes, component_covariances]
+        params = [
+            hseu.grad_tensor(self.raw_frequencies),
+            hseu.grad_tensor(self.raw_damping),
+            hseu.grad_tensor(self.component_covariances)
+        ]
 
-        def loss_closure(params, n_batches: int, stats: LDSStatistics):
-            frequncies, amplitudes, component_covariances = params
+        if self.objective_function == 'whittle':
+            params += [hseu.grad_tensor(self.tau2)]
+
+        def loss_closure(
+                params, 
+                n_batches: int, 
+                stats: LDSStatistics, 
+                f_s: torch.Tensor,
+                frequency_range: tuple[float, float]
+            ):
+            frequencies,amplitudes,component_covariances = params
 
             Ez   = stats.Ez
             Ezz  = stats.Ezz
@@ -280,9 +380,9 @@ class LFPDecomposition(hsem.LinearGaussianSystem):
             # Construct transition matrix
             f = sigmoid_clamp_constraint(
                 frequencies, 
-                self.f_s,
-                min_hz=self.frequency_range[0],
-                max_hz=self.frequency_range[1]
+                f_s,
+                min_hz=frequency_range[0],
+                max_hz=frequency_range[1]
             )[0].squeeze()
             c,s = torch.cos(f), torch.sin(f)
             blocks = torch.stack((
@@ -321,13 +421,26 @@ class LFPDecomposition(hsem.LinearGaussianSystem):
 
             return total_loss
         
+        if self.objective_function == 'whittle':
+            objective = whittle_nll
+            args = {
+                'Y'               : values.observations,
+                'f_s'             : self.f_s,
+                'frequency_range' : self.frequency_range
+            }
+        elif self.objective_function == 'kalman':
+            objective = loss_closure
+            args = {
+                'n_batches'       : len(values.observations),
+                'stats'           : stats,
+                'f_s'             : self.f_s,
+                'frequency_range' : self.frequency_range
+            }
+        
         loss,params = hseu.optimize(
-            loss_closure, 
+            objective, 
             params, 
-            {
-                'n_batches' : len(values.observations),
-                'stats'     : stats,
-            },
+            args,
             {
                 'optimizer' : optimizer, 
                 'lr'        : lr, 

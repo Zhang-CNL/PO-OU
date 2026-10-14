@@ -109,6 +109,12 @@ class Momentum(LinearGaussianSystem):
     def name(self):
         return "Momentum"
 
+    def __str__(self):
+        return (self.name()
+            + f"\n    Decay = {self.decay.exp().item():.2f}"
+            + f"\n    Diffusion = {self.diffusion.exp().item():.2f}"
+        )
+
     def spike_to_gaussian(self, spikemat: hseu.NDArray):
         spikemat = hseu.ensure_torch(spikemat).double()
 

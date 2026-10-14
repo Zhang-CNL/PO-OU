@@ -4,14 +4,13 @@ from .linear_gaussian_system import *
 
 class OUDynamics(LinearGaussianSystem):
     r"""Dynamics of a partially-observed OU process. Taken from eqn. 16 Chen 2025.
-    $$\begin{align}
-    \begin{pmatrix} \dot{v}_t \\ \dot{z}_t \end{pmatrix} &= -\begin{pmatrix}F_{11} & F_{12} \\ -F_{12} & F_{22} \end{pmatrix}
-        \begin{pmatrix} v_t \\ (x_t - z_t) \end{pmatrix} 
-        + \begin{pmatrix} \sigma_v & 0 \\ 0 & \sigma_z \end{pmatrix}\xi_t \\ 
-    &= -\begin{pmatrix}F_{11} & -F_{12}\\ -F_{12} & -F_{22} \end{pmatrix}\begin{pmatrix}v_t \\ z_t \end{pmatrix}
-        - \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}\begin{pmatrix}x_t \\ x_t\end{pmatrix}
-        + \begin{pmatrix}\sigma_v & 0 \\ 0 & \sigma_z\end{pmatrix}\xi_t
-    \end{align}$$
+    $$\begin{pmatrix}v_{t+1} \\ z_{t+1} \end{pmatrix} = 
+        \left(I - \Delta t\begin{pmatrix}F_{11} & F_{12} \\ -F_{12} & F_{22}\end{pmatrix}\right)
+            \begin{pmatrix}v_t \\ z_t\end{pmatrix}
+        + \Delta t \begin{pmatrix}F_{12} & 0 \\ 0 & F_{22}\end{pmatrix}
+            \begin{pmatrix}x_t \\ x_t\end{pmatrix}
+        + \begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & \sigma_z\sqrt{\Delta t} \end{pmatrix}\xi_t
+    $$
     """
     def __init__(self,
             dt: float,
@@ -111,6 +110,16 @@ class OUDynamics(LinearGaussianSystem):
     def name(self):
         return "OU Process Dynamics"
 
+    def __str__(self):
+        return (self.name()
+            + f"\n    $F_{11}$ = {self.F11.item():.2f}"
+            + f"\n    $F_{12}$ = {self.F12.item():.2f}"
+            + f"\n    $F_{22}$ = {self.F22.item():.2f}"
+            + f"\n    $\sigma_v$ = {self.velocity_variance.exp().item():.2f}"
+            + f"\n    $\sigma_z$ = {self.position_variance.exp().item():.2f}"
+            + f"\n    $\sigma_{v,0}$ = {self.velocity_prior_variance.exp().item():.2f}"
+        )
+
     def spike_to_gaussian(self, spikemat: hseu.NDArray):
         spikemat = hseu.ensure_torch(spikemat).double()
 
@@ -153,8 +162,8 @@ class OUDynamics(LinearGaussianSystem):
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$I - \Delta t \begin{pmatrix} F_{11} & -F_{12} \\
-            -F_{12} & -F_{22}\end{pmatrix}
+        $$I - \Delta t \begin{pmatrix} F_{11} & F_{12} \\
+            -F_{12} & F_{22}\end{pmatrix}
         $$
         """
         I = torch.eye(self.latent_dim)
@@ -163,14 +172,14 @@ class OUDynamics(LinearGaussianSystem):
         F21 = F12
         F22 = self.F22 * I
         F = torch.vstack((
-            torch.hstack((F11, -F12)), 
-            torch.hstack((-F21, -F22))
+            torch.hstack(( F11, F12)), 
+            torch.hstack((-F21, F22))
         ))
         return torch.eye(self.augmented_dim) - F * self.dt
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$-\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
+        $$\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
         $$
         """
         if mode == "train":
@@ -184,7 +193,7 @@ class OUDynamics(LinearGaussianSystem):
             zs = self.F12 * self.dt * tp
             xs = self.F22 * self.dt * tp
             bias.append(
-                -torch.cat((zs, xs), dim=1)
+                torch.cat((zs, xs), dim=1)
             )
         return bias
 
@@ -242,17 +251,17 @@ class OUDynamics(LinearGaussianSystem):
             n_epochs: int = 1000, 
             gd_tol: float = 1e-3, 
         ) -> torch.Tensor:
-        F11 = hseu.grad_tensor(self.F11)
-        F12 = hseu.grad_tensor(self.F12)
-        F22 = hseu.grad_tensor(self.F22)
-        velocity_variance = hseu.grad_tensor(self.velocity_variance)
-        position_variance = hseu.grad_tensor(self.position_variance)
-        velocity_prior_variance = hseu.grad_tensor(self.velocity_prior_variance)
-
-        params = [F11, F12, F22, velocity_variance, position_variance, velocity_prior_variance]
+        params = [
+            hseu.grad_tensor(self.F11),
+            hseu.grad_tensor(self.F12),
+            hseu.grad_tensor(self.F22),
+            hseu.grad_tensor(self.velocity_variance),
+            hseu.grad_tensor(self.position_variance),
+            hseu.grad_tensor(self.velocity_prior_variance),
+        ]
 
         def loss_closure(params, n_batches: int, stats: SufficientStatistics):
-            F11, F12, F22, velocity_variance, position_variance, velocity_prior_variance = params
+            F11,F12,F22,velocity_variance,position_variance,velocity_prior_variance = params
 
             Ez   = stats.Ez
             Ezz  = stats.Ezz
@@ -262,15 +271,13 @@ class OUDynamics(LinearGaussianSystem):
             Z = torch.zeros((self.latent_dim, self.latent_dim))
 
             F = torch.cat((
-                torch.cat((F11 * I, -F12 * I), dim=1),
-                torch.cat((-F12 * I, -F22 * I), dim=1)
+                torch.cat(( F11 * I, F12 * I), dim=1),
+                torch.cat((-F12 * I, F22 * I), dim=1)
             ), dim=0)
             F = torch.eye(self.augmented_dim) - F * self.dt
 
-            velocity_variance = torch.exp(velocity_variance)
-            position_variance = torch.exp(position_variance)
-            sigv = velocity_variance**2 * self.dt
-            sigz = position_variance**2 * self.dt
+            sigv = torch.exp(velocity_variance)**2 * self.dt
+            sigz = torch.exp(position_variance)**2 * self.dt
 
             Q = torch.cat((
                 torch.cat((sigv * I, Z), dim=1),
@@ -284,7 +291,7 @@ class OUDynamics(LinearGaussianSystem):
                 T = len(Ezz[i])
 
                 tpos = true_position[i][1:]
-                bias = -torch.cat((
+                bias = torch.cat((
                     F12 * tpos,
                     F22 * tpos
                 ), dim=1) * self.dt
@@ -380,4 +387,4 @@ class OUDynamics(LinearGaussianSystem):
 
         return super().transform(
             self.testing_approximate_mean
-        ) 
+        )

@@ -23,6 +23,9 @@ class StateSpace:
     def name(self):
         return "StateSpace"
 
+    def __str__(self):
+        return self.name() + "\n    No Parameters"
+
     def random_initializer(self, shape: tuple[int,...]|int, method: str) -> torch.Tensor:
         if method == 'uniform':
             return np.random.rand(*shape)

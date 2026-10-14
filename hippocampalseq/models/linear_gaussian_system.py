@@ -150,6 +150,9 @@ class LinearGaussianSystem(StateSpace):
     def name(self):
         return "Linear Gaussian Dynamic System"
 
+    def __str__(self):
+        return self.name() 
+
     def random_initializer(self, parameter_name: str, shape: tuple[int, ...] | int, method: str|dict) -> torch.Tensor:
         if isinstance(method, dict):
             return hseu.ensure_torch(method[parameter_name])
@@ -317,6 +320,7 @@ class LinearGaussianSystem(StateSpace):
         x0  = hseu.extract_last_dims(values.observations[batch], 0)
         mu0 = batch_params.initial_mean
         v0  = batch_params.initial_covariance
+        I   = torch.eye(self.augmented_dim)
 
         if torch.any(x0.isnan()):
             mu1  = mu0
@@ -326,7 +330,10 @@ class LinearGaussianSystem(StateSpace):
             K1 = hseu.invmul(P0Ct, H @ P0Ct + R)
             innovation = x0 - H @ mu0 - d
             mu1 = mu0 + K1 @ innovation
-            v1 = (torch.eye(self.augmented_dim) - K1 @ H) @ v0
+            v1 = (I - K1 @ H) @ v0
+            # Joseph form
+            #v1 = (I - K1 @ H) @ v0 @ (I - K1 @ H).mT \
+            #    + K1 @ R @ K1.mT
 
         values.filtered_mean[batch][0]  = mu1
         values.filtered_cov[batch][0]   = v1
@@ -338,15 +345,16 @@ class LinearGaussianSystem(StateSpace):
         H    = hseu.extract_last_dims(batch_params.emission_matrix, t)
         R    = hseu.extract_last_dims(batch_params.emission_covariance, t)
         d    = hseu.extract_last_dims(batch_params.emission_bias, t)
-        F    = hseu.extract_last_dims(batch_params.transition_matrix, t)
-        Q    = hseu.extract_last_dims(batch_params.transition_covariance, t)
+        F    = hseu.extract_last_dims(batch_params.transition_matrix, t) # $F_t = F_{t-1->t}$
+        Q    = hseu.extract_last_dims(batch_params.transition_covariance, t) # $Q_t = Q_{t-1->t}$
         b    = hseu.extract_last_dims(batch_params.transition_bias, t)
         xt   = hseu.extract_last_dims(values.observations[batch], t)
         mut1 = values.filtered_mean[batch][t-1]
         vt1  = values.filtered_cov[batch][t-1]
+        I    = torch.eye(self.augmented_dim)
 
-        # $\mu_{t|t-1} = F \mu_{t-1|t-1} + b$
-        # $$P_{t|t-1} = F P_{t-1|t-1} F^T + Q$$
+        # $\mu_{t|t-1} = F_t \mu_{t-1|t-1} + b_t$
+        # $$P_{t|t-1} = F_t P_{t-1|t-1} F_t^T + Q_t$$
         Am1 = F @ mut1 + b
         Pn1 = F @ vt1 @ F.T + Q
 
@@ -361,7 +369,8 @@ class LinearGaussianSystem(StateSpace):
             # $$P_{t|t} = (I - K H) P_{t|t-1}$$
             innovation = xt - H @ Am1 - d
             mut = Am1 + K @ innovation 
-            vt  = (torch.eye(self.augmented_dim) - K @ H) @ Pn1
+            vt  = (I - K @ H) @ Pn1
+            vt  = 0.5 * (vt + vt.T)
 
         values.filtered_mean[batch][t]  = mut # $\mu_{t|t}$
         values.filtered_cov[batch][t]   = vt  # $P_{t|t}$
@@ -377,18 +386,19 @@ class LinearGaussianSystem(StateSpace):
         return values
 
     def _smooth(self, values: LDSResults, batch_params: LDSParameters, batch: int, t: int) -> LDSResults:
-        F = hseu.extract_last_dims(batch_params.transition_matrix, t)
+        F = hseu.extract_last_dims(batch_params.transition_matrix, t+1) # $F_{t+1} = F_{t->t+1}$
         Amt = values.predicted_mean[batch][t+1] # $\mu_{t+1|t}$
         Pt  = values.predicted_cov[batch][t+1]  # $P_{t+1|t}$
         mt  = values.filtered_mean[batch][t]  # $\mu_{t|t}$
         vt  = values.filtered_cov[batch][t]   # $P_{t|t}$
 
-        # $J_t = P_{t|t}F^T P_{t+1|t}^{-1}$
+        # $J_t = P_{t|t}F_{t+1}^T P_{t+1|t}^{-1}$
         J = hseu.invmul(vt @ F.T, Pt)
         # $\hat{\mu}_t = \mu_{t|t} + J_t ( \hat{\mu}_{t+1} - \mu_{t+1|t} )$
         # $$\hat{P}_t = P_{t|t} + J_t ( \hat{P}_{t+1} - P_{t+1|t} ) J_t^T$$
         muht = mt + J @ (values.smoothed_mean[batch][t+1] - Amt)
         vht  = vt + J @ (values.smoothed_cov[batch][t+1] - Pt) @ J.mT
+        vht  = 0.5 * (vht + vht.T)
 
         values.smoothed_gain[batch][t] = J
         values.smoothed_mean[batch][t] = muht
@@ -686,10 +696,10 @@ class LinearGaussianSystem(StateSpace):
                     L = torch.linalg.cholesky(cov_reg)
                 except Exception as e:
                     print(i,t)
-                    print(cov_reg)
-                    print(S)
-                    print(cov_t)
-                    print(values.smoothed_cov[i][t])
+                    print(values.smoothed_cov[i][t-2:t+3])
+                    print(values.filtered_cov[i][t-2:t+3])
+                    print(values.predicted_cov[i][t-2:t+3])
+                    print(values.smoothed_gain[i][t-2:t+3])
                     raise e
 
                 mvn = MultivariateNormal(
@@ -807,7 +817,7 @@ class LinearGaussianSystem(StateSpace):
                         break
             
         if i == n_iter - 1:
-            warnings.warn(f"Failed to converge after {i} epochs, exiting")
+            warnings.warn(f"Failed to converge after {i+1} epochs, exiting")
 
         if best_params is not None:
             self.global_parameters = best_params

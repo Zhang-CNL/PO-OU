@@ -7,7 +7,25 @@ def count_spikes(spikemat: torch.Tensor) -> torch.Tensor:
     spk = hseu.ensure_torch(spikemat).double()
     return hseu.atleast_3d(spk.sum(dim=1))
 
+def lag_spikes(spikecount: torch.Tensor) -> torch.Tensor:
+    spk = spikecount.clone()
+    spk[1:] = spikecount[:-1]
+    return spk
+
+# Tried:
+# - denom = torch.exp(1 + tau * n)
+# - denom = 1 + tau * n / (n + K)
+# - denom = 1 + tau * log(1 + n)
+
 class OUDynamicsScaled(OUDynamics):
+    r"""Version of the OUDynamics model where the 
+    transition matrix, bias, and covariance are scaled by the spike count
+    from the previous time step.
+    $$\begin{aligned}
+        z_{t+1} &= \tau_E^{-1}F z_t + \tau_E^{-1}b_t + \sqrt{\tau_E^{-1}}\xi_t \\
+        \tau_E &= c\cdot n_{E,t} + 1
+    \end{aligned}$$
+    """
     def __init__(self,
             dt: float,
             environment_size: list[tuple[int,...]],
@@ -17,8 +35,26 @@ class OUDynamicsScaled(OUDynamics):
             true_position_train: list[hseu.NDArray],
             spikemat_valid: list[hseu.NDArray]|None=None,
             true_position_valid: list[hseu.NDArray]|None = None,
-            initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
+            initialization_method: str|dict[str, hseu.NDArray] = 'hotstart'
         ):
+        if initialization_method == 'hotstart':
+            print('Hotstarting the model with no spike-scaling considered...')
+            ou_model = OUDynamics(
+                dt, environment_size,
+                bin_size, place_fields,
+                spikemat_train, true_position_train,
+                spikemat_valid, true_position_valid 
+            )
+            results = ou_model.fit()
+            initialization_method = {
+                'F11'                     : ou_model.F11,
+                'F12'                     : ou_model.F12,
+                'F22'                     : ou_model.F22,
+                'velocity_variance'       : ou_model.velocity_variance,
+                'position_variance'       : ou_model.position_variance,
+                'velocity_prior_variance' : ou_model.velocity_prior_variance
+            }
+            print('Hotstarting complete.')
         super().__init__(
             dt=dt,
             environment_size=environment_size,
@@ -35,6 +71,9 @@ class OUDynamicsScaled(OUDynamics):
         if spikemat_valid is not None:
             self.spikecount_valid = [count_spikes(spk) for spk in spikemat_valid]
 
+        if isinstance(initialization_method, dict):
+            self.initialization_method = 'uniform'
+
         self.tau = self.random_initializer(
             "tau",
             (1,),
@@ -45,7 +84,20 @@ class OUDynamicsScaled(OUDynamics):
     def name(self):
         return "Spike-count Scaled OU Process Dynamics"
 
+    def __str__(self):
+        return super().__str__() + f"\n    $\tau$ = {self.tau.exp().item():.2f}"
+
+    def build_denom(self, tau: torch.Tensor, spikes: torch.Tensor) -> torch.Tensor:
+        n_t = lag_spikes(spikes)
+        return hseu.atleast_3d(1.0 + tau * n_t)
+
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
+        r"""
+        $$I - \Delta t\begin{pmatrix}
+            F_{11} & F_{12} \\
+            -\tau_E^{-1}F_{12} & \tau_E^{-1}F_{22} \\
+        \end{pmatrix}$$
+        """
         if mode == "train":
             spikecount = self.spikecount_train
         elif mode == "valid":
@@ -55,23 +107,40 @@ class OUDynamicsScaled(OUDynamics):
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
 
-        F = super()._construct_transition_matrix(mode)
         tau = torch.exp(self.tau)
+        I = torch.eye(self.latent_dim)
 
         F_scaled = []
         for spk in spikecount:
             T = len(spk)
-            denom = 1.0 + tau * spk
-            F_scaled.append(F.expand(T,-1,-1) / denom)
+            It = I.expand(T,-1,-1)
+            denom = self.build_denom(tau, spk)
+            Ftop = torch.cat((self.F11 * It, self.F12 * It), dim=2)
+            Fbot = torch.cat((
+                -self.F12 / denom * It,
+                 self.F22 / denom * It
+            ), dim=2)
+            F = torch.cat((Ftop, Fbot), dim=1)
+            F = torch.eye(self.augmented_dim) - F * self.dt
+            F_scaled.append(F)
         return F_scaled
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
+        r"""
+        $$\Delta t\begin{pmatrix}
+            F_{12} \\
+            \tau_E^{-1}F_{22} \\
+        \end{pmatrix}x_t$$
+        """
         if mode == "train":
             spikecount = self.spikecount_train
+            true_pos   = self.true_position_train
         elif mode == "valid":
             spikecount = self.spikecount_valid
+            true_pos   = self.true_position_valid
         elif mode == "test":
             spikecount = self.spikecount_test
+            true_pos   = self.true_position_test
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
 
@@ -79,12 +148,21 @@ class OUDynamicsScaled(OUDynamics):
         tau = torch.exp(self.tau)
 
         b_scaled = []
-        for bt,spk in zip(b,spikecount):
-            denom = 1.0 + tau * spk
-            b_scaled.append(bt / denom)
+        for tp,spk in zip(true_pos,spikecount):
+            denom = self.build_denom(tau, spk)
+            b = torch.cat((
+                self.F12 * self.dt * tp,
+                self.F22 * self.dt * tp / denom
+            ), dim=1)
+            b_scaled.append(b)
         return b_scaled
 
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
+        r"""
+        $$\begin{pmatrix}
+            \sigma_v^2\Delta t & 0 \\ 0 & \sigma_z^2\Delta t \tau_E^{-1}
+        \end{pmatrix}$$
+        """
         if mode == "train":
             spikecount = self.spikecount_train
         elif mode == "valid":
@@ -94,14 +172,25 @@ class OUDynamicsScaled(OUDynamics):
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
 
-        Q = super()._construct_transition_covariance(mode)
-        tau = torch.exp(self.tau)
+        Z    = torch.zeros((self.latent_dim, self.latent_dim))
+        I    = torch.eye(self.latent_dim)
+        tau  = torch.exp(self.tau)
+        sigv = torch.exp(self.velocity_variance)**2 * self.dt
+        sigz = torch.exp(self.position_variance)**2 * self.dt
 
         Q_scaled = []
         for spk in spikecount:
             T = len(spk)
-            denom = 1.0 + tau * spk
-            Q_scaled.append(Q.expand(T,-1,-1) / denom)
+            denom = self.build_denom(tau, spk)
+            _Z = Z.expand(T,-1,-1)
+            _I = I.expand(T,-1,-1)
+            _sigv = sigv * _I
+            _sigz = sigz / denom * _I
+            Q_s = torch.cat((
+                torch.cat((_sigv, _Z), dim=2),
+                torch.cat((_Z, _sigz), dim=2)
+            ), dim=1)
+            Q_scaled.append(Q_s)
         return Q_scaled
 
 
@@ -113,45 +202,34 @@ class OUDynamicsScaled(OUDynamics):
         return params
 
     def _solve_parameters(self, values: MomentumResults, stats: LDSStatistics, optimizer: str = "Adam", lr: float = 0.01, n_epochs: int = 1000, gd_tol: float = 0.001) -> torch.Tensor:
-        F11 = hseu.grad_tensor(self.F11)
-        F12 = hseu.grad_tensor(self.F12)
-        F22 = hseu.grad_tensor(self.F22)
-        velocity_variance = hseu.grad_tensor(self.velocity_variance)
-        position_variance = hseu.grad_tensor(self.position_variance)
-        velocity_prior_variance = hseu.grad_tensor(self.velocity_prior_variance)
-        tau = hseu.grad_tensor(self.tau)
-
         params = [
-            F11, F12, F22, 
-            velocity_variance, 
-            position_variance, 
-            velocity_prior_variance, 
-            tau
+            hseu.grad_tensor(self.F11),
+            hseu.grad_tensor(self.F12),
+            hseu.grad_tensor(self.F22),
+            hseu.grad_tensor(self.velocity_variance),
+            hseu.grad_tensor(self.position_variance),
+            hseu.grad_tensor(self.velocity_prior_variance),
+            hseu.grad_tensor(self.tau),
         ]
 
         def loss_closure(params, n_batches: int, stats: SufficientStatistics):
-            F11,F12,F22,velocity_variance,position_variance,velocity_prior_variance,tau = params
+            (
+                F11,F12,F22,
+                velocity_variance,
+                position_variance,
+                velocity_prior_variance,
+                tau 
+            ) = params
 
             Ez, Ezz, Ezz1 = stats.Ez, stats.Ezz, stats.Ezz1
 
             I = torch.eye(self.latent_dim)
             Z = torch.zeros((self.latent_dim, self.latent_dim))
 
-            F = torch.cat((
-                torch.cat(( F11 * I, -F12 * I), dim=1),
-                torch.cat((-F12 * I, -F22 * I), dim=1)
-            ), dim=0)
-            F = (torch.eye(self.augmented_dim) - F * self.dt)
+            sigv = torch.exp(velocity_variance)**2 * self.dt
+            sigz = torch.exp(position_variance)**2 * self.dt
 
-            velocity_variance = torch.exp(velocity_variance)
-            position_variance = torch.exp(position_variance)
-            sigv = velocity_variance**2 * self.dt
-            sigz = position_variance**2 * self.dt
-
-            Q = torch.cat((
-                torch.cat(( sigz * I, Z), dim=1),
-                torch.cat(( Z, sigv * I), dim=1)
-            ), dim=0)
+            Qtop = torch.cat((sigz * I, Z), dim=1)
 
             sigv0 = torch.exp(velocity_prior_variance)**2 * self.dt
             true_position = self.true_position_train
@@ -162,10 +240,18 @@ class OUDynamicsScaled(OUDynamics):
             for i in range(n_batches):
                 T = len(Ez[i])
                 tpos = true_position[i][1:]
-                denom = 1 + etau * spikecount[i][1:]
-                Fscaled = F.expand(T-1, -1, -1) / denom
+                denom = self.build_denom(etau, spikecount[i][:-1])
+                _I = I .expand(T-1,-1,-1)
+                Fscaled = torch.cat((
+                    torch.cat(( F11 * _I / denom, -F12 * I / denom), dim=2),
+                    torch.cat((-F12 * _I, -F22 * _I), dim=2)
+                ), dim=1)
+                Fscaled = torch.eye(self.augmented_dim) - Fscaled * self.dt
 
-                Qscaled = Q.expand(T-1, -1, -1) / denom
+                Qscaled = torch.cat((
+                    Qtop.expand(T-1,-1,-1),
+                    torch.cat((Z, sigv * I), dim=1) / denom
+                ), dim=1)
 
                 b_scaled = -torch.cat((
                     F12 * tpos,
@@ -211,21 +297,13 @@ class OUDynamicsScaled(OUDynamics):
             }
         )
 
-        self.F11 = params[0].detach()
-        self.F12 = params[1].detach()
-        self.F22 = params[2].detach()
-        self.velocity_variance = params[3].detach()
-        self.position_variance = params[4].detach()
+        self.F11                     = params[0].detach()
+        self.F12                     = params[1].detach()
+        self.F22                     = params[2].detach()
+        self.velocity_variance       = params[3].detach()
+        self.position_variance       = params[4].detach()
         self.velocity_prior_variance = params[5].detach()
-        self.tau = params[6].detach()
-
-        print(f"F_11 = {self.F11}")
-        print(f"F_12 = {self.F12}")
-        print(f"F_22 = {self.F22}")
-        print(f"velocity_variance = {self.velocity_variance}")
-        print(f"position_variance = {self.position_variance}")
-        print(f"velocity_prior_variance = {self.velocity_prior_variance}")
-        print(f"tau = {self.tau}")
+        self.tau                     = params[6].detach()
 
         return loss
 
