@@ -85,7 +85,10 @@ class OUDynamicsScaled(OUDynamics):
         return "Spike-count Scaled OU Process Dynamics"
 
     def __str__(self):
-        return super().__str__() + f"\n    $\tau$ = {self.tau.exp().item():.2f}"
+        return (super().__str__()
+            + "\n    "
+            + rf"$\tau$ = {self.tau.exp().item():.2f}"
+        )
 
     def build_denom(self, tau: torch.Tensor, spikes: torch.Tensor) -> torch.Tensor:
         n_t = lag_spikes(spikes)
@@ -144,9 +147,7 @@ class OUDynamicsScaled(OUDynamics):
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
 
-        b = super()._construct_transition_bias(mode)
         tau = torch.exp(self.tau)
-
         b_scaled = []
         for tp,spk in zip(true_pos,spikecount):
             denom = self.build_denom(tau, spk)
@@ -197,8 +198,8 @@ class OUDynamicsScaled(OUDynamics):
     def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
         params = super().build_batch_parameters(batch, mode)
         params.transition_matrix     = params.transition_matrix[batch]
-        params.transition_bias       = params.transition_bias[batch]
         params.transition_covariance = params.transition_covariance[batch]
+        # Transition bias already handled up above.
         return params
 
     def _solve_parameters(self, values: MomentumResults, stats: LDSStatistics, optimizer: str = "Adam", lr: float = 0.01, n_epochs: int = 1000, gd_tol: float = 0.001) -> torch.Tensor:
@@ -229,7 +230,8 @@ class OUDynamicsScaled(OUDynamics):
             sigv = torch.exp(velocity_variance)**2 * self.dt
             sigz = torch.exp(position_variance)**2 * self.dt
 
-            Qtop = torch.cat((sigz * I, Z), dim=1)
+            Ftop = torch.cat((F11 * I, F12 * I), dim=1)
+            Qtop = torch.cat((sigv * I, Z), dim=1)
 
             sigv0 = torch.exp(velocity_prior_variance)**2 * self.dt
             true_position = self.true_position_train
@@ -241,22 +243,22 @@ class OUDynamicsScaled(OUDynamics):
                 T = len(Ez[i])
                 tpos = true_position[i][1:]
                 denom = self.build_denom(etau, spikecount[i][:-1])
-                _I = I .expand(T-1,-1,-1)
+                _I = I.expand(T-1,-1,-1)
                 Fscaled = torch.cat((
-                    torch.cat(( F11 * _I / denom, -F12 * I / denom), dim=2),
-                    torch.cat((-F12 * _I, -F22 * _I), dim=2)
+                    Ftop.expand(T-1,-1,-1),
+                    torch.cat((-F12 * _I / denom, F22 * _I / denom), dim=2)
                 ), dim=1)
                 Fscaled = torch.eye(self.augmented_dim) - Fscaled * self.dt
 
                 Qscaled = torch.cat((
                     Qtop.expand(T-1,-1,-1),
-                    torch.cat((Z, sigv * I), dim=1) / denom
+                    torch.cat((Z, sigz * I), dim=1) / denom
                 ), dim=1)
 
-                b_scaled = -torch.cat((
+                b_scaled = torch.cat((
                     F12 * tpos,
-                    F22 * tpos
-                ), dim=1) * self.dt / denom
+                    F22 * tpos / denom
+                ), dim=1) * self.dt
 
                 iloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
                 iloss = self.latent_dim * torch.log(sigv0) + iloss / sigv0

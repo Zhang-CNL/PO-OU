@@ -117,7 +117,7 @@ class OUDynamics(LinearGaussianSystem):
             + f"\n    $F_{22}$ = {self.F22.item():.2f}"
             + f"\n    $\sigma_v$ = {self.velocity_variance.exp().item():.2f}"
             + f"\n    $\sigma_z$ = {self.position_variance.exp().item():.2f}"
-            + f"\n    $\sigma_{v,0}$ = {self.velocity_prior_variance.exp().item():.2f}"
+            + f"\n    $\sigma_{{v,0}}$ = {self.velocity_prior_variance.exp().item():.2f}"
         )
 
     def spike_to_gaussian(self, spikemat: hseu.NDArray):
