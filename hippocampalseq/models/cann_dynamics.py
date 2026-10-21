@@ -7,10 +7,7 @@ import hippocampalseq.utils as hseu
 
 __all__ = [
     'CANNDynamics',
-    'bdiag'
 ]
-
-bdiag = torch.vmap(torch.diag)
 
 class CANNDynamics(Momentum):
     def __init__(self, 
@@ -56,18 +53,7 @@ class CANNDynamics(Momentum):
                 for tp in true_position_valid
             ]
 
-        self.approximate_covariance_diag = [
-            bdiag(bdiag(cov)) 
-            for cov in self.approximate_covariance
-        ]
-        if self.validation_approximate_covariance is not None:
-            self.validation_approximate_covariance_diag = [
-                bdiag(bdiag(cov))
-                for cov in self.validation_approximate_covariance
-            ]
-
-
-        self.syn_input    = self.random_initializer(
+        self.syn_input = self.random_initializer(
             "synaptic_input",
             (1,),
             initialization_method
@@ -83,36 +69,28 @@ class CANNDynamics(Momentum):
     def name(self):
         return "Momentum + Covariance Scaling & Synaptic Input"
 
+    def __str__(self):
+        return (super().__str__()
+            + f"\n    Synaptic Input = {self.syn_input.exp().item():.2f}"
+            + f"\n    Position Variance = {self.pos_variance.exp().item():.2f}"
+        )
+
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""Construct the transition matrix:
-        $$\begin{pmatrix}
-            -\lambda \Delta t + 1 & 0 \\ \Delta t & -U \Delta t + 1
+        $$I + \Delta t\begin{pmatrix}
+            -\lambda & 0 \\ 1 & - U
         \end{pmatrix}$$
         """
-        if mode == "train":
-            cov = self.approximate_covariance_diag
-        elif mode == "valid":
-            cov = self.validation_approximate_covariance_diag
-        elif mode == "test":
-            cov = self.testing_approximate_covariance_diag
         I = torch.eye(self.latent_dim)
         Z = torch.zeros((self.latent_dim, self.latent_dim))
         If = torch.eye(self.augmented_dim)
 
         M1 = -torch.exp(self.decay) * I
-        top = torch.cat((M1, Z), dim=1)
-        #M4 = -torch.diag(torch.exp(self.syn_input))
-        M4 = -torch.exp(self.syn_input)
-        Fs = []
-        for cc in cov:
-            c = cc.clone()
-            c[1:] = cc[:-1]
-            _I = I.expand(len(c),-1,-1)
-            _t = top.expand(len(c),-1,-1)
-            bottom = torch.cat((_I, M4 * c), dim=2)
-            F = torch.cat((_t, bottom), dim=1) * self.dt + If
-            Fs.append(F)
-        return Fs
+        M4 = -torch.exp(self.syn_input) * I
+        return torch.cat((
+            torch.cat((M1, Z), dim=1),
+            torch.cat((I, M4), dim=1)
+        ), dim=0) * self.dt + If
 
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
         r"""Transition covariance matrix.
@@ -138,30 +116,24 @@ class CANNDynamics(Momentum):
         """
         if mode == "train":
             tpos = self.true_position_train
-            cov = self.approximate_covariance_diag
         elif mode == "valid": 
             tpos = self.true_position_valid
-            cov = self.validation_approximate_covariance_diag
         elif mode == "test":
             tpos = self.true_position_test
-            cov = self.testing_approximate_covariance_diag
         else:
             raise ValueError(f"Mode {mode} not recognized")
         b = []
-        for tp,cc in zip(tpos, cov):
-            c = cc.clone()
-            c[1:] = cc[:-1]
+        for tp in tpos:
             b.append(
                 torch.cat((
                     torch.zeros_like(tp), 
-                    (self.dt * torch.exp(self.syn_input) * c) @ tp
+                    (self.dt * torch.exp(self.syn_input)) * tp
                 ), dim=1)
             )
         return b
 
     def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
         params = super().build_batch_parameters(batch, mode)
-        params.transition_matrix = self.global_parameters.transition_matrix[batch]
         params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
 
@@ -180,18 +152,18 @@ class CANNDynamics(Momentum):
             n_epochs: int = 1000, 
             gd_tol: float = 0.001
         ) -> torch.Tensor:
-        decay        = hseu.grad_tensor(self.decay)
-        diffusion    = hseu.grad_tensor(self.diffusion)
-        syn_input    = hseu.grad_tensor(self.syn_input)
-        pos_variance = hseu.grad_tensor(self.pos_variance)
-        params = [decay, diffusion, syn_input, pos_variance]
+        params = [
+            hseu.grad_tensor(self.decay),
+            hseu.grad_tensor(self.diffusion),
+            hseu.grad_tensor(self.syn_input),
+            hseu.grad_tensor(self.pos_variance)
+        ]
 
-        def loss_closure(
-                params, 
-                n_batches: int, 
-                stats: SufficientStatistics
-            ):
-            decay,diffusion,syn_input,pos_variance = params
+        def loss_closure(params, n_batches: int, stats: SufficientStatistics):
+            (
+                decay, diffusion, 
+                syn_input, pos_variance
+            ) = params
 
             Ez   = stats.Ez
             Ezz  = stats.Ezz
@@ -205,94 +177,52 @@ class CANNDynamics(Momentum):
             U     = torch.exp(syn_input)
             sigz  = torch.exp(pos_variance)
 
-            F1 = -lmb * self.dt + 1
             sigmav = sigv**2 * self.dt
             sigmaz = sigz**2 * self.dt
 
-            F = torch.cat(
-                (
-                    torch.cat((F1 * I, Z), dim=1),
-                    torch.cat((self.dt * I, -U * self.dt * I + I), dim=1)
-                ),
-                dim=0
-            )
-            Ft = torch.cat((F1 * I, Z), dim=1)
+            F = torch.cat((
+                torch.cat((-lmb * I, Z), dim=1),
+                torch.cat((I, -U * I), dim=1)
+            ), dim=0) * self.dt + torch.eye(self.augmented_dim)
 
-            R = torch.cat(
-                (
-                    torch.cat((sigmav * I, Z), dim=1),
-                    torch.cat((Z, sigmaz * I), dim=1)
-                ),
-                dim=0
-            )
+            Q = torch.cat((
+                torch.cat((sigmav * I, Z), dim=1),
+                torch.cat((Z, sigmaz * I), dim=1)
+            ), dim=0)
 
-            v0 = sigmav / (1 - F1**2)
+            v0 = sigmav / (1 - (1 + lmb * self.dt)**2)
 
             total_loss = 0
             for i in range(n_batches):
                 T = len(stats.Ez[i])
 
                 true_position = self.true_position_train[i][1:]
-                emission_cov = self.approximate_covariance_diag[i][:-1]
-
-                Fb = torch.cat((
-                    self.dt * I.expand(T-1,-1,-1), 
-                    -self.dt * U * emission_cov + I), dim=2
-                )
-                F = torch.cat(
-                    (
-                        Ft.expand(T-1,-1,-1),
-                        Fb
-                    ),
-                    dim=1
-                )
 
                 b = torch.cat((
                         torch.zeros_like(true_position),
-                        (self.dt * U * emission_cov) @ true_position
+                        (self.dt * U) * true_position
                     ),
                     dim=1
                 )
 
                 # $2ln\ |V_0| + \mathbb{E}\left[z_1^T z_1\right] / V_0$
                 ivloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
-                ivloss = self.latent_dim * torch.log(v0) + ivloss / v0
-
-                # $\mathbb{E}\left[(z_1 - \mu_0 - b_1)^T \hat{V}_0^{-1} (z_1 - \mu_0 - b_1)\right]$
-                # izloss = Ez[i][0,self.latent_dim:].mT @ ic @ (-b[0,self.latent_dim:]) \
-                    # + im.mT @ ic @ b[0,self.latent_dim:] \
-                    # - b[0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
-                    # + b[0,self.latent_dim:].mT @ ic @ im \
-                    # + b[0,self.latent_dim:].mT @ ic @ b[0,self.latent_dim:]
-                #izloss = Ez[i][0,self.latent_dim:].mT @ ic @ Ez[i][0,self.latent_dim:] \
-                #    - Ez[i][0,self.latent_dim:].mT @ ic @ im \
-                #    - im.mT @ ic @ Ez[i][0,self.latent_dim:] \
-                #    + im.mT @ ic @ im
-
-                
-                iloss = ivloss #+ izloss
+                iloss = self.latent_dim * torch.log(v0) + ivloss / v0
 
                 # $ln\ |R| + \mathbb{E}\left[(z_t - Fz_{t-1} - b_t)^T R^{-1} (z_t - Fz_{t-1} - b_t)\right]$
                 tl1 = Ezz[i][1:]
                 tl2 = Ezz1[i] @ F.mT
                 tl3 = F @ Ezz[i][:-1] @ F.mT 
-                #tl1 = torch.sum(Ezz[i][1:], axis=0)
-                #tl2 = torch.sum(Ezz1[i], axis=0) @ F.mT 
-                #tl3 = F @ torch.sum(Ezz[i][:-1], axis=0) @ F.mT 
                 tloss = tl1 - tl2 - tl2.mT + tl3
 
                 bl1 = Ez[i][1:] @ b.mT
-                bl2 = F @ (Ez[i][:-1] @ b.mT)
+                bl2 = F @ Ez[i][:-1] @ b.mT
                 bl3 = b @ b.mT
-                #bl1 = torch.sum(Ez[i][1:] @ b[1:].mT, axis=0)
-                #bl2 = F @ torch.sum(Ez[i][:-1] @ b[1:].mT, axis=0)
-                #bl3 = torch.sum(b[1:] @ b[1:].mT, axis=0)
                 bloss = bl3 + bl2 + bl2.mT - bl1 - bl1.mT 
 
                 loss = torch.sum(tloss + bloss, axis=0)
-                loss = hseu.mulinv(R, loss)
-                #loss = hseu.mulinv(R, tloss + bloss)
-                loss = (T-1) * torch.logdet(R) + torch.trace(loss)
+                loss = hseu.mulinv(Q, loss)
+                loss = (T-1) * torch.logdet(Q) + torch.trace(loss)
 
                 total_loss += (iloss + loss) / 2 
 
@@ -318,37 +248,17 @@ class CANNDynamics(Momentum):
         self.syn_input    = params[2].detach()
         self.pos_variance = params[3].detach()
 
-        print(f"Decay: {self.decay}")
-        print(f"Diffusion: {self.diffusion}")
-        print(f"Synaptic input: {self.syn_input}")
-        print(f"Pos variance: {self.pos_variance}")
-
         self._initialize_globals("train")
 
         return loss
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
         self.true_position_test = self._initialize_observations(Xtest)
-        self.testing_emission_probability   = []
-        self.testing_approximate_mean       = []
-        self.testing_approximate_covariance = []
-
-        for spk in spikemats:
-            (
-                emission_probability,
-                approximate_mean,
-                approximate_cov
-            ) = self.spike_to_gaussian(spk)
-            self.testing_emission_probability.append(emission_probability)
-            self.testing_approximate_mean.append(approximate_mean)
-            self.testing_approximate_covariance.append(approximate_cov)
-
-
-
-        self.testing_approximate_covariance_diag = [
-            bdiag(bdiag(cov))
-            for cov in self.testing_approximate_covariance
-        ]
+        (
+            self.testing_emission_probability,
+            self.testing_approximate_mean,
+            self.testing_approximate_covariance
+        ) = self.spike_approximations(spikemats)
 
         return LinearGaussianSystem.transform(
             self,

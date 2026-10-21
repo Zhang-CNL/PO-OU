@@ -238,13 +238,23 @@ def train_test_valid_split(data_length: int, percent_train: float, percent_valid
         (np.ndarray): Test indices
     """
     train_length = int(data_length * percent_train)
-    percent_valid = int(data_length * percent_valid)
-    assert train_length + percent_valid <= data_length, "Percentage must add up to 100%."
-    trainvalid_idx = np.random.choice(data_length, train_length + percent_valid, replace=False)
+    if np.allclose(percent_valid + percent_train, 1.0):
+        valid_length = data_length - train_length
+        test_length  = 0
+    else:
+        valid_length = int(data_length * percent_valid)
+        test_length  = data_length - train_length - valid_length
+
+    assert train_length + valid_length + test_length == data_length, "Percentage must add up to 100%."
+
+    trainvalid_idx = np.random.choice(data_length, train_length + valid_length, replace=False)
     train_idx = np.random.choice(trainvalid_idx, train_length, replace=False)
     valid_idx = np.setdiff1d(trainvalid_idx, train_idx)
-    test_idx = np.setdiff1d(np.arange(data_length), trainvalid_idx)
-    return train_idx, valid_idx, test_idx
+    if test_length == 0:
+        return train_idx, valid_idx
+    else:
+        test_idx = np.setdiff1d(np.arange(data_length), trainvalid_idx)
+        return train_idx, valid_idx, test_idx
 
 def ensure_numpy(x: hseu.NDArray) -> np.ndarray:
     if torch.is_tensor(x):

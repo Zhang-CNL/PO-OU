@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, asdict
 from functools import wraps
 
 import hippocampalseq.utils as hseu
+from .spike_mixin import *
 from .linear_gaussian_system import *
 
 __all__ = [
@@ -17,7 +18,7 @@ class MomentumResults(LDSResults):
     approximate_mean       : list[torch.Tensor] = field(default_factory=list)
     approximate_covariance : list[torch.Tensor] = field(default_factory=list)
 
-class Momentum(LinearGaussianSystem):
+class Momentum(SpikeMixin, LinearGaussianSystem):
     r"""State-space model that includes momentum as a parameters.
     We have a uniform prior and our observation covariance shifts over time.
 
@@ -70,35 +71,17 @@ class Momentum(LinearGaussianSystem):
         self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
 
         self.place_fields = hseu.ensure_torch(place_fields)
+        (
+            self.emission_probabilities,
+            self.approximate_mean,
+            self.approximate_covariance
+        ) = self.spike_approximations(spikemat_train)
 
-        self.emission_probabilities = []
-        self.approximate_mean       = []
-        self.approximate_covariance = []
-        for spk in spikemat_train:
-            (
-                emission_probability, 
-                approx_mean, 
-                approx_cov
-            ) = self.spike_to_gaussian(spk)
-            
-            self.emission_probabilities.append(emission_probability)
-            self.approximate_mean.append(approx_mean)
-            self.approximate_covariance.append(approx_cov)
-
-        self.validation_emission_probabilities = []
-        self.validation_approximate_mean       = []
-        self.validation_approximate_covariance = []
-        if spikemat_valid is not None:
-            for spk in spikemat_valid:
-                (
-                    emission_probability, 
-                    approx_mean, 
-                    approx_cov
-                ) = self.spike_to_gaussian(spk)
-                
-                self.validation_emission_probabilities.append(emission_probability)
-                self.validation_approximate_mean.append(approx_mean)
-                self.validation_approximate_covariance.append(approx_cov)
+        (
+            self.validation_emission_probabilities,
+            self.validation_approximate_mean,
+            self.validation_approximate_covariance
+        ) = self.spike_approximations(spikemat_valid)
 
         # Random initialization of parameters
         # Scale of ln(10) meters
@@ -115,23 +98,6 @@ class Momentum(LinearGaussianSystem):
             + f"\n    Diffusion = {self.diffusion.exp().item():.2f}"
         )
 
-    def spike_to_gaussian(self, spikemat: hseu.NDArray):
-        spikemat = hseu.ensure_torch(spikemat).double()
-
-        emission_probability = hseu.calc_poisson_emission_probabilities_2d(
-            spikemat, 
-            self.place_fields,
-            self.dt
-        )
-        emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
-        emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
-
-        approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
-            self.grid,
-            emission_probability,
-            'weighted',
-        )
-        return emission_probability, approx_mean, approx_cov
 
     @wraps(LinearGaussianSystem._initialize_values)
     def _initialize_values(self, X: list[torch.Tensor]) -> MomentumResults:
@@ -213,6 +179,8 @@ class Momentum(LinearGaussianSystem):
 
         The prior for the velocity is a stationary OU process prior:
             $$P(v_1) = \mathcal{N}(v_1|0, \sigma^2 / (2\lambda))$$
+        but if we take it in discrete time, we get a prior:
+            $P(v_1) = \mathcal{N}\left(v_1|0, \sigma^2\Delta t / (1 - (1-\lambda\Delta t)^2)\right)$
         Returns:
             (torch.Tensor): Prior mean for augmented state $[z_t; z_{t-1}]^T$
             (torch.Tensor): Prior covariance for augmented state
@@ -292,7 +260,7 @@ class Momentum(LinearGaussianSystem):
                 Q_v        = Q[:rank,:rank]
                 logdet_Q_v = (T-1) * torch.logdet(Q_v)
             else:
-                Q_v        = Q
+                Q_v        = Q[:,:rank,:rank]
                 logdet_Q_v = torch.sum(torch.logdet(Q_v), axis=0)
 
             muhat = values.smoothed_mean[i]
@@ -501,18 +469,11 @@ class Momentum(LinearGaussianSystem):
             spikemats: list[hseu.NDArray],
             Xtest: list[hseu.NDArray]|None = None
         ):
-        self.testing_emission_probability   = []
-        self.testing_approximate_mean       = []
-        self.testing_approximate_covariance = []
-        for spk in spikemats:
-            (
-                emission_probability,
-                approximate_mean,
-                approximate_cov
-            ) = self.spike_to_gaussian(spk)
-            self.testing_emission_probability.append(emission_probability)
-            self.testing_approximate_mean.append(approximate_mean)
-            self.testing_approximate_covariance.append(approximate_cov)
+        (
+            self.testing_emission_probability,
+            self.testing_approximate_mean,
+            self.testing_approximate_covariance
+        ) = self.spike_approximations(spikemats)
 
         if Xtest is None:
             Xtest = self.testing_approximate_mean

@@ -11,6 +11,9 @@ def _linear(A,b,v):
 def _exp(A,b,v):
     return torch.exp(A @ v + b)
 
+# TODO: Try using future speed F(v_t, v_{t+1})
+## Motivation = movement signal delay 
+
 class MomentumVelocityBias(Momentum):
     r"""Momentum subclass that adds an additive bias to the hidden velocity.
     The bias is $F(\hat{v})$ where $\hat{v}$ is the true velocity provided to the

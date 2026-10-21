@@ -1,4 +1,5 @@
 from .statespace import *
+from .spike_mixin import *
 from .linear_gaussian_system import *
 from .momentum import *
 from .momentum_velocity import *

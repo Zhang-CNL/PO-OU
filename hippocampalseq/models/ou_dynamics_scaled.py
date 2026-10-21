@@ -7,15 +7,8 @@ def count_spikes(spikemat: torch.Tensor) -> torch.Tensor:
     spk = hseu.ensure_torch(spikemat).double()
     return hseu.atleast_3d(spk.sum(dim=1))
 
-def lag_spikes(spikecount: torch.Tensor) -> torch.Tensor:
-    spk = spikecount.clone()
-    spk[1:] = spikecount[:-1]
-    return spk
-
-# Tried:
-# - denom = torch.exp(1 + tau * n)
-# - denom = 1 + tau * n / (n + K)
-# - denom = 1 + tau * log(1 + n)
+def lag_spikes(spikecount: torch.Tensor, n_lag: int=1) -> torch.Tensor:
+    return torch.roll(spikecount, shifts=n_lag, dims=0)
 
 class OUDynamicsScaled(OUDynamics):
     r"""Version of the OUDynamics model where the 
@@ -87,7 +80,7 @@ class OUDynamicsScaled(OUDynamics):
     def __str__(self):
         return (super().__str__()
             + "\n    "
-            + rf"$\tau$ = {self.tau.exp().item():.2f}"
+            + rf"$\tau$ = {self.tau.item():.2f}"
         )
 
     def build_denom(self, tau: torch.Tensor, spikes: torch.Tensor) -> torch.Tensor:
@@ -96,7 +89,7 @@ class OUDynamicsScaled(OUDynamics):
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$I - \Delta t\begin{pmatrix}
+        $$I + \Delta t\begin{pmatrix}
             F_{11} & F_{12} \\
             -\tau_E^{-1}F_{12} & \tau_E^{-1}F_{22} \\
         \end{pmatrix}$$
@@ -110,27 +103,26 @@ class OUDynamicsScaled(OUDynamics):
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
 
-        tau = torch.exp(self.tau)
         I = torch.eye(self.latent_dim)
 
         F_scaled = []
         for spk in spikecount:
             T = len(spk)
             It = I.expand(T,-1,-1)
-            denom = self.build_denom(tau, spk)
+            denom = self.build_denom(self.tau, spk)
             Ftop = torch.cat((self.F11 * It, self.F12 * It), dim=2)
             Fbot = torch.cat((
                 -self.F12 / denom * It,
                  self.F22 / denom * It
             ), dim=2)
             F = torch.cat((Ftop, Fbot), dim=1)
-            F = torch.eye(self.augmented_dim) - F * self.dt
+            F = torch.eye(self.augmented_dim) + F * self.dt
             F_scaled.append(F)
         return F_scaled
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$\Delta t\begin{pmatrix}
+        $$-\Delta t\begin{pmatrix}
             F_{12} \\
             \tau_E^{-1}F_{22} \\
         \end{pmatrix}x_t$$
@@ -147,11 +139,10 @@ class OUDynamicsScaled(OUDynamics):
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
 
-        tau = torch.exp(self.tau)
         b_scaled = []
         for tp,spk in zip(true_pos,spikecount):
-            denom = self.build_denom(tau, spk)
-            b = torch.cat((
+            denom = self.build_denom(self.tau, spk)
+            b = -torch.cat((
                 self.F12 * self.dt * tp,
                 self.F22 * self.dt * tp / denom
             ), dim=1)
@@ -175,14 +166,13 @@ class OUDynamicsScaled(OUDynamics):
 
         Z    = torch.zeros((self.latent_dim, self.latent_dim))
         I    = torch.eye(self.latent_dim)
-        tau  = torch.exp(self.tau)
         sigv = torch.exp(self.velocity_variance)**2 * self.dt
         sigz = torch.exp(self.position_variance)**2 * self.dt
 
         Q_scaled = []
         for spk in spikecount:
             T = len(spk)
-            denom = self.build_denom(tau, spk)
+            denom = self.build_denom(self.tau, spk)
             _Z = Z.expand(T,-1,-1)
             _I = I.expand(T,-1,-1)
             _sigv = sigv * _I
@@ -235,27 +225,26 @@ class OUDynamicsScaled(OUDynamics):
 
             sigv0 = torch.exp(velocity_prior_variance)**2 * self.dt
             true_position = self.true_position_train
-            etau = torch.exp(tau)
             spikecount = self.spikecount_train
             total_loss = 0
 
             for i in range(n_batches):
                 T = len(Ez[i])
                 tpos = true_position[i][1:]
-                denom = self.build_denom(etau, spikecount[i][:-1])
+                denom = self.build_denom(tau, spikecount[i][:-1])
                 _I = I.expand(T-1,-1,-1)
                 Fscaled = torch.cat((
                     Ftop.expand(T-1,-1,-1),
                     torch.cat((-F12 * _I / denom, F22 * _I / denom), dim=2)
                 ), dim=1)
-                Fscaled = torch.eye(self.augmented_dim) - Fscaled * self.dt
+                Fscaled = torch.eye(self.augmented_dim) + Fscaled * self.dt
 
                 Qscaled = torch.cat((
                     Qtop.expand(T-1,-1,-1),
                     torch.cat((Z, sigz * I), dim=1) / denom
                 ), dim=1)
 
-                b_scaled = torch.cat((
+                b_scaled = -torch.cat((
                     F12 * tpos,
                     F22 * tpos / denom
                 ), dim=1) * self.dt
@@ -263,7 +252,7 @@ class OUDynamicsScaled(OUDynamics):
                 iloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
                 iloss = self.latent_dim * torch.log(sigv0) + iloss / sigv0
 
-                tl1 = Ez[i][1:]
+                tl1 = Ezz[i][1:]
                 tl2 = Ezz1[i] @ Fscaled.mT
                 tl3 = Fscaled @ Ezz[i][:-1] @ Fscaled.mT
                 tloss = tl1 - tl2 - tl2.mT + tl3
@@ -271,7 +260,7 @@ class OUDynamicsScaled(OUDynamics):
                 bl1 = Ez[i][1:] @ b_scaled.mT
                 bl2 = Fscaled @ Ez[i][:-1] @ b_scaled.mT
                 bl3 = b_scaled @ b_scaled.mT
-                bloss = bl1 - bl2 - bl2.mT + bl3
+                bloss = bl3 + bl2 + bl2.mT - bl1 - bl1.mT
 
                 tloss = hseu.mulinv(Qscaled, tloss + bloss)
                 tloss = torch.sum(tloss, axis=0)

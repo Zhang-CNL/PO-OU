@@ -190,7 +190,14 @@ def plot_spikemat_position_aligned(
     colors = plt.cm.tab10(np.linspace(0, 1, len(cell_ids)))
     for i,cell in enumerate(cell_ids):
         subset = spike_info[cell] 
-        ax.scatter(subset['x'], subset['y'], s=5, color=colors[i], alpha=.5, label=f'Cell {cell}')
+        ax.scatter(
+            subset['x'], 
+            subset['y'], 
+            s=10, 
+            color=colors[i], 
+            alpha=1.0, 
+            label=f'Cell {cell}'
+        )
     if environment_size is None:
         environment_size = [
             (
@@ -210,10 +217,10 @@ def plot_spikemat_position_aligned(
         ax.set_yticks(yax)
         ax.set_xticklabels([0,f"{(xax[1]-xax[0])/100}m"])
         ax.set_yticklabels([0,f"{(yax[1]-yax[0])/100}m"])
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(False)
-    ax.spines['left'].set_visible(False)
+    #ax.spines['top'].set_visible(False)
+    #ax.spines['right'].set_visible(False)
+    #ax.spines['bottom'].set_visible(False)
+    #ax.spines['left'].set_visible(False)
     ax.tick_params(direction='out', length=0, width=.5, pad=1)
 
     ax.set_xlabel("X Position")

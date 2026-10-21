@@ -1,13 +1,16 @@
 import torch
 import hippocampalseq.utils as hseu
+from .spike_mixin import *
 from .linear_gaussian_system import *
 
-class OUDynamics(LinearGaussianSystem):
+# TODO: Try setting F_{12} in the bias term to 0.
+
+class OUDynamics(SpikeMixin, LinearGaussianSystem):
     r"""Dynamics of a partially-observed OU process. Taken from eqn. 16 Chen 2025.
     $$\begin{pmatrix}v_{t+1} \\ z_{t+1} \end{pmatrix} = 
-        \left(I - \Delta t\begin{pmatrix}F_{11} & F_{12} \\ -F_{12} & F_{22}\end{pmatrix}\right)
+        \left(I + \Delta t\begin{pmatrix}F_{11} & F_{12} \\ -F_{12} & F_{22}\end{pmatrix}\right)
             \begin{pmatrix}v_t \\ z_t\end{pmatrix}
-        + \Delta t \begin{pmatrix}F_{12} & 0 \\ 0 & F_{22}\end{pmatrix}
+        - \Delta t \begin{pmatrix}F_{12} & 0 \\ 0 & F_{22}\end{pmatrix}
             \begin{pmatrix}x_t \\ x_t\end{pmatrix}
         + \begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & \sigma_z\sqrt{\Delta t} \end{pmatrix}\xi_t
     $$
@@ -41,34 +44,18 @@ class OUDynamics(LinearGaussianSystem):
 
         self.place_fields = hseu.ensure_torch(place_fields)
 
-        self.emission_probabilities = []
-        self.approximate_mean       = []
-        self.approximate_covariance = []
-        for spk in spikemat_train:
-            (
-                emission_probability, 
-                approx_mean, 
-                approx_cov
-            ) = self.spike_to_gaussian(spk)
-            
-            self.emission_probabilities.append(emission_probability)
-            self.approximate_mean.append(approx_mean)
-            self.approximate_covariance.append(approx_cov)
 
-        self.validation_emission_probabilities = []
-        self.validation_approximate_mean       = []
-        self.validation_approximate_covariance = []
-        if spikemat_valid is not None:
-            for spk in spikemat_valid:
-                (
-                    emission_probability, 
-                    approx_mean, 
-                    approx_cov
-                ) = self.spike_to_gaussian(spk)
-                
-                self.validation_emission_probabilities.append(emission_probability)
-                self.validation_approximate_mean.append(approx_mean)
-                self.validation_approximate_covariance.append(approx_cov)
+        (
+            self.emission_probabilities,
+            self.approximate_mean,
+            self.approximate_covariance
+        ) = self.spike_approximations(spikemat_train)
+
+        (
+            self.validation_emission_probabilities,
+            self.validation_approximate_mean,
+            self.validation_approximate_covariance
+        ) = self.spike_approximations(spikemat_valid)
 
         self.true_position_train = self._initialize_observations(true_position_train)
         if true_position_valid is not None:
@@ -120,23 +107,6 @@ class OUDynamics(LinearGaussianSystem):
             + f"\n    $\sigma_{{v,0}}$ = {self.velocity_prior_variance.exp().item():.2f}"
         )
 
-    def spike_to_gaussian(self, spikemat: hseu.NDArray):
-        spikemat = hseu.ensure_torch(spikemat).double()
-
-        emission_probability = hseu.calc_poisson_emission_probabilities_2d(
-            spikemat, 
-            self.place_fields,
-            self.dt
-        )
-        emission_probability /= torch.sum(emission_probability, axis=(1,2), keepdim=True)
-        emission_probability = torch.nan_to_num(emission_probability, nan=0.0, posinf=0.0, neginf=0.0)
-
-        approx_mean, approx_cov = hseu.analytical_gaussian_approximation(
-            self.grid,
-            emission_probability,
-        )
-        return emission_probability, approx_mean, approx_cov
-
     def _construct_initial_mean(self, mode: str = "train") -> torch.Tensor:
         diffs  = torch.tensor([es[1] + es[0] for es in self.environment_size])
         starts = torch.tensor([es[0] for es in self.environment_size])
@@ -162,7 +132,7 @@ class OUDynamics(LinearGaussianSystem):
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$I - \Delta t \begin{pmatrix} F_{11} & F_{12} \\
+        $$I + \Delta t \begin{pmatrix} F_{11} & F_{12} \\
             -F_{12} & F_{22}\end{pmatrix}
         $$
         """
@@ -175,11 +145,11 @@ class OUDynamics(LinearGaussianSystem):
             torch.hstack(( F11, F12)), 
             torch.hstack((-F21, F22))
         ))
-        return torch.eye(self.augmented_dim) - F * self.dt
+        return torch.eye(self.augmented_dim) + F * self.dt
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
+        $$-\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
         $$
         """
         if mode == "train":
@@ -193,7 +163,7 @@ class OUDynamics(LinearGaussianSystem):
             zs = self.F12 * self.dt * tp
             xs = self.F22 * self.dt * tp
             bias.append(
-                torch.cat((zs, xs), dim=1)
+                -torch.cat((zs, xs), dim=1)
             )
         return bias
 
@@ -274,7 +244,7 @@ class OUDynamics(LinearGaussianSystem):
                 torch.cat(( F11 * I, F12 * I), dim=1),
                 torch.cat((-F12 * I, F22 * I), dim=1)
             ), dim=0)
-            F = torch.eye(self.augmented_dim) - F * self.dt
+            F = torch.eye(self.augmented_dim) + F * self.dt
 
             sigv = torch.exp(velocity_variance)**2 * self.dt
             sigz = torch.exp(position_variance)**2 * self.dt
@@ -291,7 +261,7 @@ class OUDynamics(LinearGaussianSystem):
                 T = len(Ezz[i])
 
                 tpos = true_position[i][1:]
-                bias = torch.cat((
+                bias = -torch.cat((
                     F12 * tpos,
                     F22 * tpos
                 ), dim=1) * self.dt
@@ -307,7 +277,7 @@ class OUDynamics(LinearGaussianSystem):
                 bl1 = Ez[i][1:] @ bias.mT
                 bl2 = F @ Ez[i][:-1] @ bias.mT
                 bl3 = bias @ bias.mT
-                bloss = bl1 - bl2 - bl2.mT + bl3
+                bloss =  bl3 + bl2.mT - bl1 - bl1.mT
 
                 tloss = torch.sum(tloss + bloss, axis=0)
                 tloss = hseu.mulinv(Q, tloss)
@@ -372,19 +342,11 @@ class OUDynamics(LinearGaussianSystem):
             Xtest: list[hseu.NDArray]|None = None
         ):
         self.true_position_test = self._initialize_observations(Xtest)
-        self.testing_emission_probability   = []
-        self.testing_approximate_mean       = []
-        self.testing_approximate_covariance = []
-        for spk in spikemats:
-            (
-                emission_probability,
-                approximate_mean,
-                approximate_cov
-            ) = self.spike_to_gaussian(spk)
-            self.testing_emission_probability.append(emission_probability)
-            self.testing_approximate_mean.append(approximate_mean)
-            self.testing_approximate_covariance.append(approximate_cov)
-
+        (
+            self.testing_emission_probability,
+            self.testing_approximate_mean,
+            self.testing_approximate_covariance
+        ) = self.spike_approximations(spikemats)
         return super().transform(
             self.testing_approximate_mean
         )

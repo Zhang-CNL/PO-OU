@@ -75,7 +75,7 @@ def spike_raster_plot(
         ax.eventplot(
             spikes.index.values,
             lineoffsets=uid,
-            linelengths=4, 
+            linelengths=.5, 
             linewidths=.1,
             color='black', 
             orientation='horizontal'
@@ -87,7 +87,7 @@ def spike_raster_plot(
     ax.spines['left'].set_linewidth(.5)
 
     ax.set_ylabel("Cell ID", rotation=90, labelpad=-5)
-    ax.set_ylabel("Time (s)")
+    ax.set_xlabel("Time (s)")
     ax.tick_params(direction='out', length=1, width=.5)
 
     ax.set_yticks([0, len(spike_data)])
