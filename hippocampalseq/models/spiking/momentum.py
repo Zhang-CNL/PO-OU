@@ -1,24 +1,11 @@
 import numpy as np
 import torch 
-from dataclasses import dataclass, field, asdict
-from functools import wraps
 
 import hippocampalseq.utils as hseu
-from .spike_mixin import *
-from .linear_gaussian_system import *
+from hippocampalseq.models.linear_gaussian_system import LDSStatistics
+from .spiking_base import *
 
-__all__ = [
-    'Momentum',
-    'MomentumResults'
-]
-
-@dataclass 
-class MomentumResults(LDSResults):
-    emission_probabilities : list[torch.Tensor] = field(default_factory=list)
-    approximate_mean       : list[torch.Tensor] = field(default_factory=list)
-    approximate_covariance : list[torch.Tensor] = field(default_factory=list)
-
-class Momentum(SpikeMixin, LinearGaussianSystem):
+class Momentum(SpikingBase):
     r"""State-space model that includes momentum as a parameters.
     We have a uniform prior and our observation covariance shifts over time.
 
@@ -55,39 +42,26 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
             bin_size (int): Size of individual bins in cm.
         """
         if place_fields.shape[-1] == 1:
-            n_zdim = 1
+            nzdim = 1
         else:
-            n_zdim = 2
+            nzdim = 2
         super().__init__(
-            n_zdim, 
-            n_zdim, 
             2,
-            environment_size=environment_size,
-            bin_size=bin_size,
-            initialization_method=initialization_method
+            slice(nzdim,None),
+            dt, 
+            environment_size,
+            bin_size,
+            place_fields,
+            spikemat_train,
+            spikemat_valid,
+            initialization_method
         )
-
-        self.dt   = torch.tensor(dt)
-        self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
-
-        self.place_fields = hseu.ensure_torch(place_fields)
-        (
-            self.emission_probabilities,
-            self.approximate_mean,
-            self.approximate_covariance
-        ) = self.spike_approximations(spikemat_train)
-
-        (
-            self.validation_emission_probabilities,
-            self.validation_approximate_mean,
-            self.validation_approximate_covariance
-        ) = self.spike_approximations(spikemat_valid)
 
         # Random initialization of parameters
         # Scale of ln(10) meters
         self.decay     = self.random_initializer("decay", (1,), method=initialization_method)
         self.diffusion = self.random_initializer("diffusion", (1,), method=initialization_method)
-        self.n_parameters   = 2
+        self.n_parameters = 2
 
     def name(self):
         return "Momentum"
@@ -98,24 +72,6 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
             + f"\n    Diffusion = {self.diffusion.exp().item():.2f}"
         )
 
-
-    @wraps(LinearGaussianSystem._initialize_values)
-    def _initialize_values(self, X: list[torch.Tensor]) -> MomentumResults:
-        meanbase = lambda: [torch.zeros((len(x), self.augmented_dim, 1)) for x in X]
-        covbase = lambda: [torch.zeros((len(x), self.augmented_dim, self.augmented_dim)) for x in X]
-        return MomentumResults(
-            observations           = X,
-            predicted_mean         = meanbase(), 
-            predicted_cov          = covbase(),
-            filtered_mean          = meanbase(),
-            filtered_cov           = covbase(),
-            smoothed_gain          = covbase(),
-            smoothed_mean          = meanbase(),
-            smoothed_cov           = covbase(),
-            emission_probabilities = self.emission_probabilities,
-            approximate_mean       = self.approximate_mean,
-            approximate_covariance = self.approximate_covariance
-        )
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""Construct the transition matrix in the form
@@ -158,15 +114,6 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
             torch.eye(self.emission_dim), 
         ))
 
-    def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
-        if mode == "train":
-            return self.approximate_covariance
-        elif mode == "valid":
-            return self.validation_approximate_covariance
-        elif mode == "test":
-            return self.testing_approximate_covariance
-        else:
-            raise ValueError("Mode must be train, valid, or test")
 
     def _construct_initial_mean(self, mode: str = "train") -> torch.Tensor:
         r"""Construct prior for momentum SSM.
@@ -185,9 +132,9 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
             (torch.Tensor): Prior mean for augmented state $[z_t; z_{t-1}]^T$
             (torch.Tensor): Prior covariance for augmented state
         """
-        diffs = torch.tensor([es[1] + es[0] for es in self.environment_size])
+        diffs  = torch.tensor([es[1] + es[0] for es in self.environment_size])
         starts = torch.tensor([es[0] for es in self.environment_size])
-        zmean = (diffs / 2 + starts)[:,None]
+        zmean  = (diffs / 2 + starts)[:,None]
         vmean  = torch.zeros((self.latent_dim, 1))
         return torch.cat((
             vmean, zmean
@@ -212,23 +159,11 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
     def _construct_emission_bias(self, mode: str = "train") -> torch.Tensor:
         return torch.zeros((self.emission_dim, 1))
 
-    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
-        return LDSParameters(
-            transition_matrix     = self.global_parameters.transition_matrix,
-            transition_covariance = self.global_parameters.transition_covariance,
-            transition_bias       = self.global_parameters.transition_bias,
-            emission_matrix       = self.global_parameters.emission_matrix,
-            emission_covariance   = self.global_parameters.emission_covariance[batch],
-            emission_bias         = self.global_parameters.emission_bias,
-            initial_mean          = self.global_parameters.initial_mean,
-            initial_covariance    = self.global_parameters.initial_covariance
-        )
-
-    def _complete_loglikelihood(self, values: MomentumResults, _: KalmanStatistics, mode: str = "train") -> torch.Tensor:
+    def _complete_loglikelihood(self, values: LDSResults, _: KalmanStatistics, mode: str = "train") -> torch.Tensor:
         r"""Calculate the full-data log-likelihood for the model given the current state.
 
         Args:
-            values (MomentumResults): The current decoded values for hidden states.
+            values (LDSResults): The current decoded values for hidden states.
             mode (str): Either "train", "valid" or "test".
             _ (KalmanStatistics): Ignored for this model.
 
@@ -306,14 +241,14 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
 
         return -0.5 * loglike
 
-    def _calculate_sufficient_statistics(self, values: MomentumResults, mode: str="train") -> KalmanStatistics:
+    def _calculate_sufficient_statistics(self, values: LDSResults, mode: str="train") -> KalmanStatistics:
         """
         Calculate sufficient statistics for performing maximization given the filtered
         and smoothed values of the model.
         Avoids calculating various unused values from the Kalman filtering version.
 
         Args:
-            values (MomentumResults): The filtered and smoothed values of the model.
+            values (LDSResults): The filtered and smoothed values of the model.
 
         Returns:
             KalmanStatistics: The sufficient statistics of the model.
@@ -352,7 +287,7 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
 
     def _solve_parameters(
             self, 
-            values: MomentumResults,
+            values: LDSResults,
             stats: SufficientStatistics,
             optimizer: str = "Adam",
             lr: float = .01, 
@@ -362,7 +297,7 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
         """Estimate all relevant parameters for the momentum SSM using autograd.
 
         Args:
-            values (MomentumResults): Momentum filtering pass results.
+            values (LDSResults): Momentum filtering pass results.
             stats (SufficientStatistics): Sufficient statistics from the Kalman filter/smoother.
             optimizer (str): The optimizer to use. Defaults to "Adam".
             lr (float): Learning rate for the optimizer. Defaults to 0.01.
@@ -427,56 +362,3 @@ class Momentum(SpikeMixin, LinearGaussianSystem):
         self._initialize_globals()
 
         return loss
-
-    def fit(self, 
-            Xtrain: list[hseu.NDArray]|None=None, 
-            Xvalid: list[hseu.NDArray]|None=None,
-            n_iter: int = 1000, 
-            emtol: float = 1e-3, 
-            patience: int = 5,
-            val_freq: int = 10,
-            **maximization_args
-        ) -> MomentumResults:
-        """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
-
-        Parameters:
-            Xtrain (list[hseu.NDArray]|None): If None, uses `self.approximate_mean` as the observed training values. Defaults to None.
-            Xvalid (list[hseu.NDArray]|None): If None, uses `self.validation_approximate_mean` as observed validation. Defaults to None.
-            n_iter (int): Maximum number of EM iterations. Defaults to 1000.
-            emtol (float): Tolerance for the change in log-likelihood between iterations. Defaults to 1e-3.
-            patience (int): Number of validation iterations without improvement before stopping. Defaults to 5.
-            val_freq (int): Frequency of validation checks. Defaults to 10.
-            **maximization_args: Keyword arguments to pass to the parent class's maximization method.
-
-        Returns:
-            MomentumResults: Results of fitting the model to the data.
-        """
-        if Xtrain is None:
-            Xtrain = self.approximate_mean
-        if Xvalid is None and len(self.validation_approximate_mean) > 0:
-            Xvalid = self.validation_approximate_mean
-        return super().fit(
-            Xtrain,
-            Xvalid,
-            n_iter=n_iter,
-            emtol=emtol,
-            patience=patience,
-            val_freq=val_freq,
-            **maximization_args
-        )
-
-    def transform(self,
-            spikemats: list[hseu.NDArray],
-            Xtest: list[hseu.NDArray]|None = None
-        ):
-        (
-            self.testing_emission_probability,
-            self.testing_approximate_mean,
-            self.testing_approximate_covariance
-        ) = self.spike_approximations(spikemats)
-
-        if Xtest is None:
-            Xtest = self.testing_approximate_mean
-        return super().transform(
-            Xtest
-        ) 

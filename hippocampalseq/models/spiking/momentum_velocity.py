@@ -1,7 +1,7 @@
 import torch
 
 import hippocampalseq.utils as hseu
-from .linear_gaussian_system import *
+from hippocampalseq.models.linear_gaussian_system import *
 from .momentum import *
 
 class MomentumVelocity(Momentum):
@@ -84,11 +84,6 @@ class MomentumVelocity(Momentum):
             R.append(emit)
         return R
 
-    def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
-        params = super().build_batch_parameters(batch, mode)
-        params.emission_covariance = self.global_parameters.emission_covariance[batch]
-        return params
-
     def _calculate_sufficient_statistics(self, values: MomentumResuts, mode="train") -> KalmanStatistics:
         r"""Calculate sufficient statistics for the momentum with velocity model.
         Since our log-likelihood calculation has non-constant emissions,
@@ -126,7 +121,7 @@ class MomentumVelocity(Momentum):
 
     def _solve_parameters(
             self, 
-            values: MomentumResults, 
+            values: LDSResults, 
             stats: SufficientStatistics, 
             optimizer: str = "Adam", 
             lr: float = 0.01, 
@@ -279,7 +274,7 @@ class MomentumVelocity(Momentum):
             patience: int = 5,
             val_freq: int = 10,
             **maximization_args
-        ) -> MomentumResults:
+        ) -> LDSResults:
         """Perform EM to fit the parameters.
 
         Args:
@@ -290,7 +285,7 @@ class MomentumVelocity(Momentum):
             maximization_args: Passed to `_solve_parameters`
         
         Returns:
-            MomentumResults: Fitted model information.
+            LDSResults: Fitted model information.
         """
 
         self.velocity_train = self.calculate_velocity(Xtrain, "train")
@@ -319,18 +314,11 @@ class MomentumVelocity(Momentum):
         )
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]|None=None):
-        self.testing_emission_probability   = []
-        self.testing_approximate_mean       = []
-        self.testing_approximate_covariance = []
-        for spk in spikemats:
-            (
-                emission_probability,
-                approximate_mean,
-                approximate_cov
-            ) = self.spike_to_gaussian(spk)
-            self.testing_emission_probability.append(emission_probability)
-            self.testing_approximate_mean.append(approximate_mean)
-            self.testing_approximate_covariance.append(approximate_cov)
+        (
+            self.testing_emission_probabilities,
+            self.testing_approximate_mean,
+            self.testing_approximate_covariance
+        ) = self.spike_approximations(spikemats)
 
         self.velocity_test = self.calculate_velocity(Xtest, "test")
         Xtest = [

@@ -2,12 +2,14 @@ import torch
 from functools import wraps
 
 from .momentum import *
-from .linear_gaussian_system import *
+from hippocampalseq.models.linear_gaussian_system import *
 import hippocampalseq.utils as hseu
 
 __all__ = [
     'CANNDynamics',
 ]
+
+# TODO: Rename this class
 
 class CANNDynamics(Momentum):
     def __init__(self, 
@@ -137,15 +139,15 @@ class CANNDynamics(Momentum):
         params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
 
-    def _calculate_sufficient_statistics(self, values: MomentumResults, mode:str = "train") -> KalmanStatistics:
+    def _calculate_sufficient_statistics(self, values: LDSResults, mode:str = "train") -> KalmanStatistics:
         return LinearGaussianSystem._calculate_sufficient_statistics(self, values, mode)
 
-    def _complete_loglikelihood(self, values: MomentumResults, stats: KalmanStatistics, mode: str = "train") -> torch.Tensor:
+    def _complete_loglikelihood(self, values: LDSResults, stats: KalmanStatistics, mode: str = "train") -> torch.Tensor:
         return LinearGaussianSystem._complete_loglikelihood(self, values, stats, mode)
 
     def _solve_parameters(
             self, 
-            values: MomentumResults, 
+            values: LDSResults, 
             stats: SufficientStatistics, 
             optimizer: str = "Adam", 
             lr: float = 0.01, 
@@ -254,13 +256,6 @@ class CANNDynamics(Momentum):
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
         self.true_position_test = self._initialize_observations(Xtest)
-        (
-            self.testing_emission_probability,
-            self.testing_approximate_mean,
-            self.testing_approximate_covariance
-        ) = self.spike_approximations(spikemats)
-
-        return LinearGaussianSystem.transform(
-            self,
-            self.testing_approximate_mean
+        return super().transform(
+            spikemats
         )

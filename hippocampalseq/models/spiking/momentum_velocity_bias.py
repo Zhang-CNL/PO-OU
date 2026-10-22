@@ -99,7 +99,7 @@ class MomentumVelocityBias(Momentum):
         return params
 
     def _solve_parameters(self, 
-            values: MomentumResults, 
+            values: LDSResults, 
             stats: SufficientStatistics, 
             optimizer: str = "Adam", 
             lr: float = 0.01, 

@@ -2,8 +2,6 @@ import torch
 import copy
 import warnings
 from dataclasses import dataclass, field
-from torch.distributions import MultivariateNormal
-
 import hippocampalseq.utils as hseu
 from .statespace import *
 
@@ -30,7 +28,6 @@ class LDSResults:
     :param smoothed_cov            : list[torch.Tensor] : Smoothed covariance $\hat{V}_{t|T}$ 
     :param loglike                 : list[float]        : Observed log likelihood $ln\ P(x_{1...T}|\theta)$
     :param loglike_full            : torch.Tensor       : Complete data log likelihood $ln\ P(x_{1...T},z_{1...T}|\theta)$
-    :param cumulative_probabilities: torch.Tensor       : Cumulative probabilities for each time-series.
     :param aic                     : float              : Akaike information criterion
     :param bic                     : float              : Bayesian information criterion 
     """
@@ -44,7 +41,6 @@ class LDSResults:
     smoothed_cov             : list[torch.Tensor] = field(default_factory=list) 
     loglike                  : list[float]        = field(default_factory=list)
     loglike_full             : torch.Tensor       = field(default_factory=lambda: torch.empty(0))
-    cumulative_probabilities : torch.Tensor       = field(default_factory=lambda: torch.empty(0))
     aic                      : float              = 0
     bic                      : float              = 0
 
@@ -109,8 +105,6 @@ class LinearGaussianSystem(StateSpace):
         emission_dim: int,
         order: int = 1,
         default_params: dict[str, torch.Tensor] = {},
-        environment_size: list[tuple[int,...]]|None = None,
-        bin_size: float|None = None,
         initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
     ):
         r"""Initialize the LDS.
@@ -121,9 +115,6 @@ class LinearGaussianSystem(StateSpace):
             order (int): Order of the LDS. The augmented state will be order * latent_dim. Default: 1
             default_params (dict[str, torch.Tensor], optional): Dictionary of default parameters.
                 These parameters will not be learned. Default {}.
-            environment_size (list[tuple[int,...]]|None, optional): Size of the environment the code is being run in.
-                Only use to calculate the marginal distribution. Default: None. 
-            bin_size (float|None, optional): Bin size in centimeters. Only use to calculate the marginal distribution. Default: None
             initialization_method (str|dict[str, hseu.NDArray], optional): Method for initializing the parameters.
                 Either a string ['normal', 'uniform'] or a dict with named parameters. Default: 'uniform'
         """
@@ -143,8 +134,6 @@ class LinearGaussianSystem(StateSpace):
             + self.emission_dim \
             - sum([p.numel() for p in default_params.values()])
 
-        self.environment_size = environment_size
-        self.bin_size = bin_size
         self.initialization_method = initialization_method
 
     def name(self):
@@ -665,57 +654,6 @@ class LinearGaussianSystem(StateSpace):
             if "initial_cov" not in self.no_em_vars:
                 self.global_parameters.initial_covariance = self._initial_cov_mle(stats)
 
-    def _calculate_marginals(self, environment_size: list[tuple[int,...]], bin_size: int, values: KalmanResults) -> torch.Tensor:
-        r"""Calculates the marginal probabilities for each bin in the environment.
-        What is the probability that the mouse is in a given bin at a given time $P(X_t = x, Y_t = y|\mu_t, \Sigma_t)$
-
-        Args:
-            environment_size (list[tuple[int,...]]): List of tuples of size (min,max) for each axis.
-            bin_size (int): Size of individual bins in cm.
-            values (KalmanResults): Kalman filter results.
-
-        Returns:
-            torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
-        """
-        sz = tuple(int((es[1] - es[0]) / bin_size) for es in environment_size)
-        if len(sz) == 1:
-            sz = sz + (1,)
-        Z = hseu.make_ndgrid(environment_size, bin_size, indexing='ij')
-        cumulative_probabilities = torch.zeros((len(values.smoothed_mean),) + sz)
-
-        for i in range(len(values.smoothed_mean)):
-            sm = values.smoothed_mean[i][:,self.latent_dim:]
-            sc = torch.atleast_2d(values.smoothed_cov[i][:,self.latent_dim:,self.latent_dim:])
-            cp = torch.zeros((sm.shape[0],)+sz)
-            for t in range(sm.shape[0]):
-                cov_t = sc[t]
-                U, S, Vh = torch.linalg.svd(cov_t)
-                S_clamped = torch.clamp(S, min=1e-8)
-                cov_reg = U @ torch.diag(S_clamped) @ Vh
-                try:
-                    L = torch.linalg.cholesky(cov_reg)
-                except Exception as e:
-                    print(i,t)
-                    print(values.smoothed_cov[i][t-2:t+3])
-                    print(values.filtered_cov[i][t-2:t+3])
-                    print(values.predicted_cov[i][t-2:t+3])
-                    print(values.smoothed_gain[i][t-2:t+3])
-                    raise e
-
-                mvn = MultivariateNormal(
-                    sm[t].ravel(), 
-                    scale_tril=L
-                )
-                log_prob = mvn.log_prob(Z)
-                log_prob = log_prob.reshape(sz)
-                cp[t] = log_prob
-            
-            cp -= torch.logsumexp(cp, dim=(1, 2), keepdim=True)
-            cp = torch.exp(cp)
-            cumulative_probabilities[i] = torch.sum(cp,axis=0)
-
-        return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
-
     def e_step(self, values: LDSResults, mode: str = "train") -> tuple[LDSResults, torch.Tensor]:
         """E-step: filter and smooth, then compute log-likelihood.
         
@@ -785,7 +723,7 @@ class LinearGaussianSystem(StateSpace):
 
             # Convergence check on training data
             if i > 0 and abs((values.loglike[-1] - values.loglike[-2]) / values.loglike[-2]) < emtol:
-                print(f"Training converged after {i} epochs, exiting")
+                print(f"Training converged after {i+1} epochs, exiting")
                 break
 
             if i % 20 == 0:
@@ -834,24 +772,11 @@ class LinearGaussianSystem(StateSpace):
             sum(len(obs) for obs in values.observations)
         )
 
-        if self.environment_size is not None and self.bin_size is not None:
-            values.cumulative_probabilities = self._calculate_marginals(
-                self.environment_size, 
-                self.bin_size, 
-                values
-            )
-
         if Xvalid is None:
             return values
 
         self._initialize_globals("valid")
         valid_values = self.e_step(valid_values, mode="valid")[0]
-        if self.environment_size is not None and self.bin_size is not None:
-            valid_values.cumulative_probabilities = self._calculate_marginals(
-                self.environment_size,
-                self.bin_size,
-                valid_values
-            )
         valid_values.loglike_full = self._complete_loglikelihood(
             valid_values,
             self._calculate_sufficient_statistics(valid_values, "valid"),

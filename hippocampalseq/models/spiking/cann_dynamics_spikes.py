@@ -1,29 +1,16 @@
-from hippocampalseq.models.linear_gaussian_system import LDSResults
 import torch
-from scipy.ndimage import gaussian_filter1d
 
 import hippocampalseq.utils as hseu
 from .cann_dynamics import *
+from .spiking_base import count_spikes,lag_spikes
 
-def count_spikes(spikemat: torch.Tensor) -> torch.Tensor:
-    spk = hseu.ensure_torch(spikemat).double()
-    return hseu.atleast_3d(spk.sum(dim=1))
-
-def lag_spikes(spikecount: torch.Tensor, n_lags: int=1) -> torch.Tensor:
-    return torch.roll(spikecount, shifts=n_lags, dims=0)
+# TODO: Rename this class
 
 class CANNDynamicsSpikes(CANNDynamics):
     def __init__(
             self,
-            dt: float,
-            environment_size: list[tuple[int,...]],
-            bin_size: int,
-            place_fields: hseu.NDArray,
-            spikemat_train: hseu.NDArray,
-            true_position_train: list[hseu.NDArray],
-            spikemat_valid: hseu.NDArray|None=None,
-            true_position_valid: list[hseu.NDArray]|None = None,
-            initialization_method: str|dict[str, hseu.NDArray] = 'uniform',
+            *args,
+            **kwargs
         ):
         r"""Projected CANN dynamics with a $\tau_E$ term added to the equation.
 
@@ -33,24 +20,19 @@ class CANNDynamicsSpikes(CANNDynamics):
         and $c$ is a tunable parameter.
         """
         super().__init__(
-            dt=dt, 
-            environment_size=environment_size, 
-            bin_size=bin_size,
-            place_fields=place_fields,
-            true_position_train=true_position_train, 
-            true_position_valid=true_position_valid,
-            spikemat_train=spikemat_train,
-            spikemat_valid=spikemat_valid,
-            initialization_method=initialization_method
+            *args,
+            **kwargs
         )
 
-
+        spikemat_train = kwargs.get('spikemat_train')
+        spikemat_valid = kwargs.get('spikemat_valid', None)
         self.n_spikes_train = [
             count_spikes(spk) for spk in spikemat_train
         ]
-        self.n_spikes_valid = [
-            count_spikes(spk) for spk in spikemat_valid
-        ]
+        if spikemat_valid is not None:
+            self.n_spikes_valid = [
+                count_spikes(spk) for spk in spikemat_valid
+            ]
 
         self.tau = self.random_initializer(
             "tau",
@@ -65,7 +47,7 @@ class CANNDynamicsSpikes(CANNDynamics):
     def __str__(self):
         return (
             super().__str__()
-            + f"\n    Spike Scaling = {self.tau.item():.2f}"
+            + f"\n    Spike Scaling = {self.tau.exp().item():.2f}"
         )
 
     def build_denom(self, tau: torch.Tensor, spikes: torch.Tensor) -> torch.Tensor:
@@ -97,7 +79,7 @@ class CANNDynamicsSpikes(CANNDynamics):
 
         Fs = []
         for spk in nspikes:
-            tspk = self.build_denom(self.tau, spk)
+            tspk = self.build_denom(self.tau.exp(), spk)
             Ftop = top.expand(len(tspk),-1,-1)
             Fbot = torch.cat((
                 I.expand(len(tspk),-1,-1) / tspk,
@@ -129,7 +111,7 @@ class CANNDynamicsSpikes(CANNDynamics):
 
         Qs = []
         for spk in nspikes:
-            tspk = self.build_denom(self.tau, spk)
+            tspk = self.build_denom(self.tau.exp(), spk)
             Qtop = top.expand(len(tspk),-1,-1)
             Qbot = torch.cat((
                 Z.expand(len(tspk),-1,-1),
@@ -162,7 +144,7 @@ class CANNDynamicsSpikes(CANNDynamics):
 
         biases = []
         for spk,tp in zip(nspikes, true_position):
-            tspk = self.build_denom(self.tau, spk)
+            tspk = self.build_denom(self.tau.exp(), spk)
             top = torch.zeros_like(tp)
             bottom = Udt @ tp / tspk
             bias = torch.cat((top, bottom), dim=1)
@@ -173,7 +155,6 @@ class CANNDynamicsSpikes(CANNDynamics):
         params = super().build_batch_parameters(batch, mode)
         params.transition_matrix     = self.global_parameters.transition_matrix[batch]
         params.transition_covariance = self.global_parameters.transition_covariance[batch]
-        params.transition_bias       = self.global_parameters.transition_bias[batch]
         return params
 
     def _solve_parameters(
@@ -214,6 +195,7 @@ class CANNDynamicsSpikes(CANNDynamics):
 
             lmb  = torch.exp(decay)
             sigv = torch.exp(diffusion)
+            tau  = torch.exp(tau)
             U    = torch.exp(syn_input)
             sigz = torch.exp(pos_variance)
 
@@ -230,7 +212,7 @@ class CANNDynamicsSpikes(CANNDynamics):
             total_loss = 0
             for i in range(n_batches):
                 T     = len(stats.Ez[i])
-                spike = self.build_denom(tau, spikes[i][:-1])
+                spike = self.build_denom(tau, spikes[i])[1:]
                 tp    = self.true_position_train[i][1:]
 
                 Fb = torch.cat((

@@ -1,14 +1,8 @@
 import torch
 import hippocampalseq.utils as hseu
-from .linear_gaussian_system import LDSStatistics
+from .spiking_base import count_spikes, lag_spikes
 from .ou_dynamics import OUDynamics
 
-def count_spikes(spikemat: torch.Tensor) -> torch.Tensor:
-    spk = hseu.ensure_torch(spikemat).double()
-    return hseu.atleast_3d(spk.sum(dim=1))
-
-def lag_spikes(spikecount: torch.Tensor, n_lag: int=1) -> torch.Tensor:
-    return torch.roll(spikecount, shifts=n_lag, dims=0)
 
 class OUDynamicsScaled(OUDynamics):
     r"""Version of the OUDynamics model where the 
@@ -33,10 +27,14 @@ class OUDynamicsScaled(OUDynamics):
         if initialization_method == 'hotstart':
             print('Hotstarting the model with no spike-scaling considered...')
             ou_model = OUDynamics(
-                dt, environment_size,
-                bin_size, place_fields,
-                spikemat_train, true_position_train,
-                spikemat_valid, true_position_valid 
+                dt,
+                environment_size,
+                bin_size,
+                place_fields,
+                spikemat_train,
+                true_position_train,
+                spikemat_valid,
+                true_position_valid,
             )
             results = ou_model.fit()
             initialization_method = {
@@ -49,15 +47,14 @@ class OUDynamicsScaled(OUDynamics):
             }
             print('Hotstarting complete.')
         super().__init__(
-            dt=dt,
-            environment_size=environment_size,
-            bin_size=bin_size,
-            place_fields=place_fields,
-            spikemat_train=spikemat_train,
-            true_position_train=true_position_train,
-            spikemat_valid=spikemat_valid,
-            true_position_valid=true_position_valid,
-            initialization_method=initialization_method
+            dt,
+            environment_size,
+            bin_size,
+            place_fields,
+            spikemat_train,
+            true_position_train,
+            spikemat_valid,
+            true_position_valid
         ) 
 
         self.spikecount_train = [count_spikes(spk) for spk in spikemat_train]
@@ -80,7 +77,7 @@ class OUDynamicsScaled(OUDynamics):
     def __str__(self):
         return (super().__str__()
             + "\n    "
-            + rf"$\tau$ = {self.tau.item():.2f}"
+            + rf"$\tau$ = {self.tau.exp().item():.2f}"
         )
 
     def build_denom(self, tau: torch.Tensor, spikes: torch.Tensor) -> torch.Tensor:
@@ -109,14 +106,14 @@ class OUDynamicsScaled(OUDynamics):
         for spk in spikecount:
             T = len(spk)
             It = I.expand(T,-1,-1)
-            denom = self.build_denom(self.tau, spk)
+            denom = self.build_denom(self.tau.exp(), spk)
             Ftop = torch.cat((self.F11 * It, self.F12 * It), dim=2)
             Fbot = torch.cat((
                 -self.F12 / denom * It,
                  self.F22 / denom * It
             ), dim=2)
             F = torch.cat((Ftop, Fbot), dim=1)
-            F = torch.eye(self.augmented_dim) + F * self.dt
+            F = torch.eye(self.augmented_dim) - F * self.dt
             F_scaled.append(F)
         return F_scaled
 
@@ -141,8 +138,8 @@ class OUDynamicsScaled(OUDynamics):
 
         b_scaled = []
         for tp,spk in zip(true_pos,spikecount):
-            denom = self.build_denom(self.tau, spk)
-            b = -torch.cat((
+            denom = self.build_denom(self.tau.exp(), spk)
+            b = torch.cat((
                 self.F12 * self.dt * tp,
                 self.F22 * self.dt * tp / denom
             ), dim=1)
@@ -172,7 +169,7 @@ class OUDynamicsScaled(OUDynamics):
         Q_scaled = []
         for spk in spikecount:
             T = len(spk)
-            denom = self.build_denom(self.tau, spk)
+            denom = self.build_denom(self.tau.exp(), spk)
             _Z = Z.expand(T,-1,-1)
             _I = I.expand(T,-1,-1)
             _sigv = sigv * _I
@@ -192,7 +189,7 @@ class OUDynamicsScaled(OUDynamics):
         # Transition bias already handled up above.
         return params
 
-    def _solve_parameters(self, values: MomentumResults, stats: LDSStatistics, optimizer: str = "Adam", lr: float = 0.01, n_epochs: int = 1000, gd_tol: float = 0.001) -> torch.Tensor:
+    def _solve_parameters(self, values: LDSResults, stats: LDSStatistics, optimizer: str = "Adam", lr: float = 0.01, n_epochs: int = 1000, gd_tol: float = 0.001) -> torch.Tensor:
         params = [
             hseu.grad_tensor(self.F11),
             hseu.grad_tensor(self.F12),
@@ -223,6 +220,7 @@ class OUDynamicsScaled(OUDynamics):
             Ftop = torch.cat((F11 * I, F12 * I), dim=1)
             Qtop = torch.cat((sigv * I, Z), dim=1)
 
+            tau = torch.exp(tau)
             sigv0 = torch.exp(velocity_prior_variance)**2 * self.dt
             true_position = self.true_position_train
             spikecount = self.spikecount_train
@@ -231,20 +229,20 @@ class OUDynamicsScaled(OUDynamics):
             for i in range(n_batches):
                 T = len(Ez[i])
                 tpos = true_position[i][1:]
-                denom = self.build_denom(tau, spikecount[i][:-1])
+                denom = self.build_denom(tau, spikecount[i])[1:]
                 _I = I.expand(T-1,-1,-1)
                 Fscaled = torch.cat((
                     Ftop.expand(T-1,-1,-1),
                     torch.cat((-F12 * _I / denom, F22 * _I / denom), dim=2)
                 ), dim=1)
-                Fscaled = torch.eye(self.augmented_dim) + Fscaled * self.dt
+                Fscaled = torch.eye(self.augmented_dim) - Fscaled * self.dt
 
                 Qscaled = torch.cat((
                     Qtop.expand(T-1,-1,-1),
                     torch.cat((Z, sigz * I), dim=1) / denom
                 ), dim=1)
 
-                b_scaled = -torch.cat((
+                b_scaled = torch.cat((
                     F12 * tpos,
                     F22 * tpos / denom
                 ), dim=1) * self.dt
@@ -300,8 +298,8 @@ class OUDynamicsScaled(OUDynamics):
 
     def transform(self,
             spikemats: list[hseu.NDArray],
-            Xtest: list[hseu.NDArray]|None = None
+            X: list[hseu.NDArray]
         ):
 
         self.spikecount_test = [count_spikes(spk) for spk in spikemats]
-        return super().transform(spikemats, Xtest)
+        return super().transform(spikemats, X)

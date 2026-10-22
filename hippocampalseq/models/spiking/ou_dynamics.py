@@ -1,16 +1,15 @@
 import torch
 import hippocampalseq.utils as hseu
-from .spike_mixin import *
-from .linear_gaussian_system import *
+from .spiking_base import *
 
 # TODO: Try setting F_{12} in the bias term to 0.
 
-class OUDynamics(SpikeMixin, LinearGaussianSystem):
+class OUDynamics(SpikingBase):
     r"""Dynamics of a partially-observed OU process. Taken from eqn. 16 Chen 2025.
     $$\begin{pmatrix}v_{t+1} \\ z_{t+1} \end{pmatrix} = 
-        \left(I + \Delta t\begin{pmatrix}F_{11} & F_{12} \\ -F_{12} & F_{22}\end{pmatrix}\right)
+        \left(I - \Delta t\begin{pmatrix}F_{11} & F_{12} \\ -F_{12} & F_{22}\end{pmatrix}\right)
             \begin{pmatrix}v_t \\ z_t\end{pmatrix}
-        - \Delta t \begin{pmatrix}F_{12} & 0 \\ 0 & F_{22}\end{pmatrix}
+        + \Delta t \begin{pmatrix}F_{12} & 0 \\ 0 & F_{22}\end{pmatrix}
             \begin{pmatrix}x_t \\ x_t\end{pmatrix}
         + \begin{pmatrix}\sigma_v\sqrt{\Delta t} & 0 \\ 0 & \sigma_z\sqrt{\Delta t} \end{pmatrix}\xi_t
     $$
@@ -27,35 +26,20 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
             initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
         ):
         if place_fields.shape[-1] == 1:
-            n_zdim = 1
+            nzdim = 1
         else:
-            n_zdim = 2
+            nzdim = 2
         super().__init__(
-            n_zdim, 
-            n_zdim, 
             2,
-            environment_size=environment_size,
-            bin_size=bin_size,
-            initialization_method=initialization_method
+            slice(nzdim, None),
+            dt,
+            environment_size,
+            bin_size,
+            place_fields,
+            spikemat_train,
+            spikemat_valid,
+            initialization_method
         )
-
-        self.dt = torch.tensor(dt)
-        self.grid = hseu.make_ndgrid(environment_size, bin_size, 'ij')
-
-        self.place_fields = hseu.ensure_torch(place_fields)
-
-
-        (
-            self.emission_probabilities,
-            self.approximate_mean,
-            self.approximate_covariance
-        ) = self.spike_approximations(spikemat_train)
-
-        (
-            self.validation_emission_probabilities,
-            self.validation_approximate_mean,
-            self.validation_approximate_covariance
-        ) = self.spike_approximations(spikemat_valid)
 
         self.true_position_train = self._initialize_observations(true_position_train)
         if true_position_valid is not None:
@@ -145,7 +129,7 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
             torch.hstack(( F11, F12)), 
             torch.hstack((-F21, F22))
         ))
-        return torch.eye(self.augmented_dim) + F * self.dt
+        return torch.eye(self.augmented_dim) - F * self.dt
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         r"""
@@ -163,7 +147,7 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
             zs = self.F12 * self.dt * tp
             xs = self.F22 * self.dt * tp
             bias.append(
-                -torch.cat((zs, xs), dim=1)
+                torch.cat((zs, xs), dim=1)
             )
         return bias
 
@@ -187,34 +171,17 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
             torch.eye(self.emission_dim), 
         ))
 
-    def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
-        if mode == "train":
-            return self.approximate_covariance
-        elif mode == "valid":
-            return self.validation_approximate_covariance
-        elif mode == "test":
-            return self.testing_approximate_covariance
-        else:
-            raise ValueError("Mode must be train, valid, or test")
-
     def _construct_emission_bias(self, mode: str = "train") -> torch.Tensor:
         return torch.zeros((self.emission_dim, 1))
 
     def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
-        return LDSParameters(
-            transition_matrix     = self.global_parameters.transition_matrix,
-            transition_covariance = self.global_parameters.transition_covariance,
-            transition_bias       = self.global_parameters.transition_bias[batch],
-            emission_matrix       = self.global_parameters.emission_matrix,
-            emission_covariance   = self.global_parameters.emission_covariance[batch],
-            emission_bias         = self.global_parameters.emission_bias,
-            initial_mean          = self.global_parameters.initial_mean,
-            initial_covariance    = self.global_parameters.initial_covariance
-        )
+        params = super().build_batch_parameters(batch, mode)
+        params.transition_bias = self.global_parameters.transition_bias[batch]
+        return params
 
     def _solve_parameters(
             self, 
-            values: MomentumResults,
+            values: LDSResults,
             stats: SufficientStatistics,
             optimizer: str = "Adam",
             lr: float = .01, 
@@ -244,7 +211,7 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
                 torch.cat(( F11 * I, F12 * I), dim=1),
                 torch.cat((-F12 * I, F22 * I), dim=1)
             ), dim=0)
-            F = torch.eye(self.augmented_dim) + F * self.dt
+            F = torch.eye(self.augmented_dim) - F * self.dt
 
             sigv = torch.exp(velocity_variance)**2 * self.dt
             sigz = torch.exp(position_variance)**2 * self.dt
@@ -261,7 +228,7 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
                 T = len(Ezz[i])
 
                 tpos = true_position[i][1:]
-                bias = -torch.cat((
+                bias = torch.cat((
                     F12 * tpos,
                     F22 * tpos
                 ), dim=1) * self.dt
@@ -312,41 +279,7 @@ class OUDynamics(SpikeMixin, LinearGaussianSystem):
         self._initialize_globals()
 
         return loss
-            
-    def fit(self,
-            Xtrain: list[hseu.NDArray]|None=None, 
-            Xvalid: list[hseu.NDArray]|None=None,
-            n_iter: int = 1000, 
-            emtol: float = 1e-3, 
-            patience: int = 5,
-            val_freq: int = 10,
-            **maximization_args
-        ):
-        if Xtrain is None:
-            Xtrain = self.approximate_mean
-        if Xvalid is None and len(self.validation_approximate_mean) > 0:
-            Xvalid = self.validation_approximate_mean
 
-        return super().fit(
-            Xtrain,
-            Xvalid,
-            n_iter=n_iter,
-            emtol=emtol,
-            patience=patience,
-            val_freq=val_freq,
-            **maximization_args
-        )
-
-    def transform(self,
-            spikemats: list[hseu.NDArray],
-            Xtest: list[hseu.NDArray]|None = None
-        ):
-        self.true_position_test = self._initialize_observations(Xtest)
-        (
-            self.testing_emission_probability,
-            self.testing_approximate_mean,
-            self.testing_approximate_covariance
-        ) = self.spike_approximations(spikemats)
-        return super().transform(
-            self.testing_approximate_mean
-        )
+    def transform(self, spikemats: list[hseu.NDArray], X: list[hseu.NDArray]):
+        self.true_position_test = self._initialize_observations(X)
+        return super().transform(spikemats)
