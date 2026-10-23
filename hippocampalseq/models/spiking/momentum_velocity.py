@@ -51,6 +51,11 @@ class MomentumVelocity(Momentum):
             initialization_method=initialization_method
         )
         self.velocity_type = velocity_type
+        self.velocity      = {
+            'train': None,
+            'valid': None,
+            'test' : None
+        }
         self.emission_velocity_variance = self.random_initializer(
             "emission_velocity_variance",
             (self.emission_dim, self.emission_dim),
@@ -68,13 +73,7 @@ class MomentumVelocity(Momentum):
     def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
         emv = self.emission_velocity_variance @ self.emission_velocity_variance.T
         R = []
-        if mode == "train":
-            acov = self.approximate_covariance
-        elif mode == "valid":
-            acov = self.validation_approximate_covariance
-        elif mode == "test":
-            acov = self.testing_approximate_covariance
-
+        acov = self.approximate_covariance[mode]
         for ac in acov:
             emit = torch.zeros((
                 len(ac), self.emission_dim, self.emission_dim
@@ -84,7 +83,7 @@ class MomentumVelocity(Momentum):
             R.append(emit)
         return R
 
-    def _calculate_sufficient_statistics(self, values: MomentumResuts, mode="train") -> KalmanStatistics:
+    def _calculate_sufficient_statistics(self, values: MomentumResuts, mode: str = "train") -> KalmanStatistics:
         r"""Calculate sufficient statistics for the momentum with velocity model.
         Since our log-likelihood calculation has non-constant emissions,
         we calculate $\mathbb{E}[v_t v_t^T]$, $\mathbb{E}[v_t \hat{v}_t^T]$, $\mathbb{E}[\hat{v}_tv_t^T]$, and $\mathbb{E}[\hat{v}_t\hat{v}_t^T]$.
@@ -92,12 +91,7 @@ class MomentumVelocity(Momentum):
         still want to keep stats.Ezz from the momentum model for our latent storage.
 
         """
-        if mode == "train":
-            velocity = self.velocity_train
-        elif mode == "valid":
-            velocity = self.velocity_valid
-        elif mode == "test":
-            velocity = self.velocity_test
+        velocity = self.velocity[mode]
         stats = super()._calculate_sufficient_statistics(values, mode)
 
         Exx,Exz,Ezx,Ezz = [],[],[],[]
@@ -143,10 +137,11 @@ class MomentumVelocity(Momentum):
             \right]
         $$
         """
-        decay = hseu.grad_tensor(self.decay)
-        diffusion = hseu.grad_tensor(self.diffusion)
-        K = hseu.grad_tensor(self.emission_velocity_variance)
-        params = [decay, diffusion, K]
+        params = [
+            hseu.grad_tensor(self.decay),
+            hseu.grad_tensor(self.diffusion),
+            hseu.grad_tensor(self.emission_velocity_variance)
+        ]
 
         def loss_closure(
                 params, 
@@ -220,12 +215,7 @@ class MomentumVelocity(Momentum):
         if self.velocity_type == 'true':
             return self._initialize_observations(X)
         elif self.velocity_type == 'observed':
-            if mode == "train":
-                X = self.approximate_mean
-            elif mode == "test":
-                X = self.testing_approximate_mean
-            else:
-                X = self.validation_approximate_mean
+            X = self.approximate_mean[mode]
             if self.emission_dim == 4:
                 velocity = [
                     (
@@ -288,19 +278,19 @@ class MomentumVelocity(Momentum):
             LDSResults: Fitted model information.
         """
 
-        self.velocity_train = self.calculate_velocity(Xtrain, "train")
+        self.velocity["train"] = self.calculate_velocity(Xtrain, "train")
         Xtrain = [
             torch.hstack((v,x)) for v,x in zip(
-                self.velocity_train,
-                self.approximate_mean
+                self.velocity["train"],
+                self.approximate_mean["train"]
             )
         ]
-        if self.validation_approximate_mean is not None:
-            self.velocity_valid = self.calculate_velocity(Xvalid, "valid")
+        if len(self.approximate_mean["valid"]) > 0:
+            self.velocity["valid"] = self.calculate_velocity(Xvalid, "valid")
             Xvalid = [
                 torch.hstack((v,x)) for v,x in zip(
-                    self.velocity_valid,
-                    self.validation_approximate_mean
+                    self.velocity["valid"],
+                    self.approximate_mean["valid"]
                 )
             ]
         return super().fit(
@@ -315,16 +305,16 @@ class MomentumVelocity(Momentum):
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]|None=None):
         (
-            self.testing_emission_probabilities,
-            self.testing_approximate_mean,
-            self.testing_approximate_covariance
+            self.emission_probabilities['test'],
+            self.approximate_mean['test'],
+            self.approximate_covariance['test']
         ) = self.spike_approximations(spikemats)
 
-        self.velocity_test = self.calculate_velocity(Xtest, "test")
+        self.velocity['test'] = self.calculate_velocity(Xtest, "test")
         Xtest = [
             torch.hstack((v,x)) for v,x in zip(
-                self.velocity_test,
-                self.testing_approximate_mean
+                self.velocity['test'],
+                self.approximate_mean['test']
             )
         ]
 

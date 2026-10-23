@@ -12,9 +12,14 @@ class DiffusionScaled(Diffusion):
 
         spikemat_train = kwargs['spikemat_train']
         spikemat_valid = kwargs.get('spikemat_valid', None)
-        self.spikecount_train = [count_spikes(spk) for spk in spikemat_train]
+        self.spikecount = {
+            'train': None,
+            'valid': None,
+            'test' : None
+        }
+        self.spikecount['train'] = [count_spikes(spk) for spk in spikemat_train]
         if spikemat_valid is not None:
-            self.spikecount_valid = [count_spikes(spk) for spk in spikemat_valid]
+            self.spikecount['valid'] = [count_spikes(spk) for spk in spikemat_valid]
 
         self.tau = self.random_initializer(
             "tau", 
@@ -37,12 +42,7 @@ class DiffusionScaled(Diffusion):
         return hseu.atleast_3d(1.0 + tau * n_t)
 
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
-        if mode == 'train':
-            spikes = self.spikecount_train
-        elif mode == 'valid':
-            spikes = self.spikecount_valid
-        elif mode == 'test':
-            spikes = self.spikecount_test
+        spikes = self.spikecount[mode]
         Q = super()._construct_transition_covariance(mode)
         Qs = []
         for spk in spikes:
@@ -80,7 +80,7 @@ class DiffusionScaled(Diffusion):
             total_loss = 0
             for i in range(len(Ezz)):
                 T = len(Ezz[i])
-                denom = self.build_denom(tau, self.spikecount_train[i])[1:]
+                denom = self.build_denom(tau, self.spikecount['train'][i])[1:]
                 _sig = sigma / denom
                 loss = Ezz[i][1:] - Ezz1[i] - Ezz1[i].mT + Ezz[i][:-1]
                 loss = torch.sum(loss / _sig, axis=0)
@@ -109,5 +109,5 @@ class DiffusionScaled(Diffusion):
         return loss
 
     def transform(self, spikemats: list[hseu.NDArray], X: list[hseu.NDArray]|None = None) -> LDSResults:
-        self.spikecount_test = [count_spikes(spk) for spk in spikemats]
+        self.spikecount['test'] = [count_spikes(spk) for spk in spikemats]
         return super().transform(spikemats, X)

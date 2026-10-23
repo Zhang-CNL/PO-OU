@@ -41,9 +41,11 @@ class OUDynamics(SpikingBase):
             initialization_method
         )
 
-        self.true_position_train = self._initialize_observations(true_position_train)
+        self.true_position = {
+            'train': self._initialize_observations(true_position_train)
+        }
         if true_position_valid is not None:
-            self.true_position_valid = self._initialize_observations(true_position_valid)
+            self.true_position['valid'] = self._initialize_observations(true_position_valid)
 
         self.F11 = self.random_initializer(
             "F11",
@@ -116,7 +118,7 @@ class OUDynamics(SpikingBase):
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$I + \Delta t \begin{pmatrix} F_{11} & F_{12} \\
+        $$I - \Delta t \begin{pmatrix} F_{11} & F_{12} \\
             -F_{12} & F_{22}\end{pmatrix}
         $$
         """
@@ -133,15 +135,10 @@ class OUDynamics(SpikingBase):
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$-\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
+        $$\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
         $$
         """
-        if mode == "train":
-            true_pos = self.true_position_train
-        elif mode == "valid":
-            true_pos = self.true_position_valid
-        elif mode == "test":
-            true_pos = self.true_position_test
+        true_pos = self.true_position[mode]
         bias = []
         for tp in true_pos:
             zs = self.F12 * self.dt * tp
@@ -198,7 +195,12 @@ class OUDynamics(SpikingBase):
         ]
 
         def loss_closure(params, n_batches: int, stats: SufficientStatistics):
-            F11,F12,F22,velocity_variance,position_variance,velocity_prior_variance = params
+            (
+                F11,F12,F22,
+                velocity_variance,
+                position_variance,
+                velocity_prior_variance
+            ) = params
 
             Ez   = stats.Ez
             Ezz  = stats.Ezz
@@ -222,7 +224,7 @@ class OUDynamics(SpikingBase):
             ), dim=0)
 
             sigv0 = torch.exp(velocity_prior_variance)**2 * self.dt# * I
-            true_position = self.true_position_train
+            true_position = self.true_position['train']
             total_loss = 0
             for i in range(n_batches):
                 T = len(Ezz[i])
@@ -281,5 +283,5 @@ class OUDynamics(SpikingBase):
         return loss
 
     def transform(self, spikemats: list[hseu.NDArray], X: list[hseu.NDArray]):
-        self.true_position_test = self._initialize_observations(X)
+        self.true_position['test'] = self._initialize_observations(X)
         return super().transform(spikemats)

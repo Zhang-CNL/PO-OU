@@ -51,11 +51,11 @@ class GaussianApproximation(StateSpace):
             mu,cov = approx_mean[t],approx_cov[t]
             mvn = multivariate_normal(mu.squeeze(), cov)
             probs[t] = mvn.logpdf(self.grid).reshape(probs.shape[1:])
-        probs       -= logsumexp(probs, axis=(1,2), keepdims=True)
+
+        probs  -= logsumexp(probs, axis=(1,2), keepdims=True)
         probs   = np.exp(probs)
         cumprob = np.sum(probs, axis=0)
-        cumprob     /= np.sum(cumprob)
-
+        cumprob /= np.sum(cumprob)
         return approx_mean, approx_cov, cumprob.T
 
     def fit(self,
@@ -63,8 +63,8 @@ class GaussianApproximation(StateSpace):
         *_: tuple,
         **__: dict
     ) -> GaussianApproximationResults:
-        means = []
-        covs = []
+        means    = []
+        covs     = []
         cumprobs = []
         for spikes in X:
             mean,cov,cumprob = self.approximate_spikemat(spikes)

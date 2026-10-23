@@ -45,12 +45,14 @@ class CANNDynamics(Momentum):
             initialization_method
         )
 
-        self.true_position_train = [
-            hseu.atleast_3d(hseu.ensure_torch(tp))
-            for tp in true_position_train
-        ]
+        self.true_position = {
+            'train': [
+                hseu.atleast_3d(hseu.ensure_torch(tp))
+                for tp in true_position_train
+            ]
+        }
         if true_position_valid is not None:
-            self.true_position_valid = [
+            self.true_position['valid'] = [
                 hseu.atleast_3d(hseu.ensure_torch(tp))
                 for tp in true_position_valid
             ]
@@ -116,14 +118,7 @@ class CANNDynamics(Momentum):
             0 \\ U\Delta t x_t
         \end{pmatrix}$$
         """
-        if mode == "train":
-            tpos = self.true_position_train
-        elif mode == "valid": 
-            tpos = self.true_position_valid
-        elif mode == "test":
-            tpos = self.true_position_test
-        else:
-            raise ValueError(f"Mode {mode} not recognized")
+        tpos = self.true_position[mode]
         b = []
         for tp in tpos:
             b.append(
@@ -198,7 +193,7 @@ class CANNDynamics(Momentum):
             for i in range(n_batches):
                 T = len(stats.Ez[i])
 
-                true_position = self.true_position_train[i][1:]
+                true_position = self.true_position['train'][i][1:]
 
                 b = torch.cat((
                         torch.zeros_like(true_position),
@@ -255,7 +250,7 @@ class CANNDynamics(Momentum):
         return loss
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
-        self.true_position_test = self._initialize_observations(Xtest)
+        self.true_position['test'] = self._initialize_observations(Xtest)
         return super().transform(
             spikemats
         )

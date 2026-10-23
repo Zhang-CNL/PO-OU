@@ -11,6 +11,9 @@ def _linear(A,b,v):
 def _exp(A,b,v):
     return torch.exp(A @ v + b)
 
+def _sigmoid(A,b,v):
+    return torch.sigmoid(A @ v + b)
+
 # TODO: Try using future speed F(v_t, v_{t+1})
 ## Motivation = movement signal delay 
 
@@ -56,6 +59,12 @@ class MomentumVelocityBias(Momentum):
                     torch.rand(self.latent_dim, self.latent_dim),
                     torch.rand(self.latent_dim, 1)
                 ]
+            elif bias_fn == 'sigmoid':
+                self.bias_fn = _sigmoid
+                self.bias_params = [
+                    torch.rand(self.latent_dim, self.latent_dim),
+                    torch.rand(self.latent_dim, 1)
+                ]
             else:
                 raise ValueError(f"Unknown bias function: {bias_fn}")
         elif isinstance(bias_fn, (tuple,list)) \
@@ -68,22 +77,20 @@ class MomentumVelocityBias(Momentum):
             raise TypeError("bias_fn must be a string or a tuple of a function and a list of parameters to optimize.")
 
         self.n_parameters += sum(p.numel() for p in self.bias_params)
-        self.velocity_train = self._initialize_observations(velocity_train)
+        self.velocity = {
+            'train': self._initialize_observations(velocity_train),
+            'valid': [],
+            'test' : None,
+        }
         if velocity_valid:
-            self.velocity_valid = self._initialize_observations(velocity_valid)
+            self.velocity["valid"] = self._initialize_observations(velocity_valid)
+
 
     def name(self):
         return "Momentum + External Velocity Bias"
 
     def _construct_transition_bias(self, mode: str = "train"):
-        if mode == "train":
-            velocity = self.velocity_train
-        elif mode == "valid":
-            velocity = self.velocity_valid
-        elif mode == "test":
-            velocity = self.velocity_test
-        else:
-            raise ValueError(f"Mode {mode} not recognized")
+        velocity = self.velocity[mode]
         bias = []
         for v in velocity:
             bias_top = hseu.atleast_2d(self.bias_fn(*self.bias_params, v))
@@ -106,12 +113,12 @@ class MomentumVelocityBias(Momentum):
             n_epochs: int = 1000, 
             gd_tol: float = 0.001
         ) -> torch.Tensor:
-        decay = hseu.grad_tensor(self.decay)
-        diffusion = hseu.grad_tensor(self.diffusion) 
-        bias_params = [
+        params = [
+            hseu.grad_tensor(self.decay),
+            hseu.grad_tensor(self.diffusion)
+        ] + [
             hseu.grad_tensor(p) for p in self.bias_params
         ]
-        params = [decay, diffusion] + bias_params
 
         def loss_closure(
                 params, 
@@ -161,7 +168,7 @@ class MomentumVelocityBias(Momentum):
             {
                 'n_batches' : len(values.observations), 
                 'stats'     : stats,
-                'velocity'  : self.velocity_train
+                'velocity'  : self.velocity["train"]
             },
             {
                 'optimizer' : optimizer,
@@ -171,8 +178,8 @@ class MomentumVelocityBias(Momentum):
             }
         )
 
-        self.decay = params[0].detach()
-        self.diffusion = params[1].detach()
+        self.decay       = params[0].detach()
+        self.diffusion   = params[1].detach()
         self.bias_params = [p.detach() for p in params[2:]]
 
         self._initialize_globals()
@@ -180,5 +187,5 @@ class MomentumVelocityBias(Momentum):
         return loss
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
-        self.velocity_test = self._initialize_observations(Xtest)
+        self.velocity["test"] = self._initialize_observations(Xtest)
         return super().transform(spikemats)

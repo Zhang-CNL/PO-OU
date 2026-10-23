@@ -47,17 +47,21 @@ class SpikingBase(LinearGaussianSystem):
         self.dt = torch.tensor(dt)
         self.grid = hseu.make_ndgrid(self.environment_size, self.bin_size, indexing='ij')
 
+        self.emission_probabilities = {}
+        self.approximate_mean       = {}
+        self.approximate_covariance = {}
+
         self.place_fields = hseu.ensure_torch(place_fields)
         (
-            self.emission_probabilities,
-            self.approximate_mean,
-            self.approximate_covariance
+            self.emission_probabilities["train"],
+            self.approximate_mean["train"],
+            self.approximate_covariance["train"]
         ) = self.spike_approximations(spikemat_train)
 
         (
-            self.validation_emission_probabilities,
-            self.validation_approximate_mean,
-            self.validation_approximate_covariance
+            self.emission_probabilities["valid"],
+            self.approximate_mean["valid"],
+            self.approximate_covariance["valid"]
         ) = self.spike_approximations(spikemat_valid)
 
         self.marginal_position_dims = position_dims
@@ -92,14 +96,7 @@ class SpikingBase(LinearGaussianSystem):
         )
 
     def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
-        if mode == "train":
-            return self.approximate_covariance
-        elif mode == "valid":
-            return self.validation_approximate_covariance
-        elif mode == "test":
-            return self.testing_approximate_covariance
-        else:
-            raise ValueError("Mode must be train, valid, or test")
+        return self.approximate_covariance[mode]
 
     def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
         """Builds a single batch of parameters.
@@ -208,9 +205,9 @@ class SpikingBase(LinearGaussianSystem):
         """
 
         if Xtrain is None:
-            Xtrain = self.approximate_mean
-        if Xvalid is None and len(self.validation_approximate_mean) > 0:
-            Xvalid = self.validation_approximate_mean
+            Xtrain = self.approximate_mean["train"]
+        if Xvalid is None and len(self.approximate_mean["valid"]) > 0:
+            Xvalid = self.approximate_mean["valid"]
 
         results = super().fit(
             Xtrain,
@@ -241,13 +238,13 @@ class SpikingBase(LinearGaussianSystem):
             X: list[hseu.NDArray]|None = None
         ) -> LDSResults:
         (
-            self.testing_emission_probabilities,
-            self.testing_approximate_mean,
-            self.testing_approximate_covariance
+            self.emission_probabilities["test"],
+            self.approximate_mean["test"],
+            self.approximate_covariance["test"]
         ) = self.spike_approximations(spikemats)
 
         if X is None:
-            X = self.testing_approximate_mean
+            X = self.approximate_mean["test"]
         return super().transform(
             X
         ) 

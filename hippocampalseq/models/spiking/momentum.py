@@ -307,10 +307,10 @@ class Momentum(SpikingBase):
         Returns:
             torch.Tensor: The final negative log likelihood.
         """
-        decay     = hseu.grad_tensor(self.decay)
-        diffusion = hseu.grad_tensor(self.diffusion)
-
-        params = [decay, diffusion]
+        params = [
+            hseu.grad_tensor(self.decay),
+            hseu.grad_tensor(self.diffusion)
+        ]
 
         def loss_closure(params, n_batches: int, stats: SufficientStatistics):
             decay,diffusion = params

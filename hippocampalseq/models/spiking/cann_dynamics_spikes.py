@@ -26,11 +26,13 @@ class CANNDynamicsSpikes(CANNDynamics):
 
         spikemat_train = kwargs.get('spikemat_train')
         spikemat_valid = kwargs.get('spikemat_valid', None)
-        self.n_spikes_train = [
-            count_spikes(spk) for spk in spikemat_train
-        ]
+        self.n_spikes = {
+            'train': [
+                count_spikes(spk) for spk in spikemat_train
+            ]
+        }
         if spikemat_valid is not None:
-            self.n_spikes_valid = [
+            self.n_spikes['valid'] = [
                 count_spikes(spk) for spk in spikemat_valid
             ]
 
@@ -61,14 +63,8 @@ class CANNDynamicsSpikes(CANNDynamics):
             \frac{\Delta t}{cn_{E,t}} & 1-\frac{U\Delta t}{cn_{E,t}}
         \end{pmatrix}$$
         """
-        if mode == "train":
-            nspikes = self.n_spikes_train
-        elif mode == "valid":
-            nspikes = self.n_spikes_valid
-        elif mode == "test":
-            nspikes = self.n_spikes_test
-        else:
-            raise ValueError(f"Mode {mode} not recognized")
+        nspikes = self.n_spikes[mode]
+
         I = torch.eye(self.latent_dim)
         Z = torch.zeros((self.latent_dim, self.latent_dim))
         If = torch.eye(self.augmented_dim)
@@ -81,10 +77,7 @@ class CANNDynamicsSpikes(CANNDynamics):
         for spk in nspikes:
             tspk = self.build_denom(self.tau.exp(), spk)
             Ftop = top.expand(len(tspk),-1,-1)
-            Fbot = torch.cat((
-                I.expand(len(tspk),-1,-1) / tspk,
-                M4 / tspk
-            ), dim=2)
+            Fbot = torch.cat((I, M4), dim=1) / tspk
             F = torch.cat((Ftop, Fbot), dim=1) * self.dt + If
             Fs.append(F)
         return Fs
@@ -95,14 +88,8 @@ class CANNDynamicsSpikes(CANNDynamics):
             \sigma_v^2 \Delta t & 0 \\ 0 & \frac{\sigma_z^2 \Delta t}{cn_{E,t}}
         \end{pmatrix}$$
         """
-        if mode == "train":
-            nspikes = self.n_spikes_train
-        elif mode == "valid":
-            nspikes = self.n_spikes_valid
-        elif mode == "test":
-            nspikes = self.n_spikes_test
-        else:
-            raise ValueError(f"Mode {mode} not recognized")
+        nspikes = self.n_spikes[mode]
+
         I = torch.eye(self.latent_dim)
         Z = torch.zeros((self.latent_dim, self.latent_dim))
         sigmav = torch.exp(self.diffusion)**2 * self.dt * I
@@ -127,18 +114,8 @@ class CANNDynamicsSpikes(CANNDynamics):
             0 \\ \frac{U\Delta t x_t}{cn_{E,t}}
         \end{pmatrix}$$
         """
-        if mode == "train":
-            nspikes = self.n_spikes_train
-            true_position = self.true_position_train
-        elif mode == "valid":
-            nspikes = self.n_spikes_valid
-            true_position = self.true_position_valid
-        elif mode == "test":
-            nspikes = self.n_spikes_test
-            true_position = self.true_position_test
-        else:
-            raise ValueError(f"Mode {mode} not recognized")
-
+        nspikes = self.n_spikes[mode]
+        true_position = self.true_position[mode]
         I = torch.eye(self.latent_dim)
         Udt = torch.exp(self.syn_input) * self.dt * I
 
@@ -189,8 +166,8 @@ class CANNDynamicsSpikes(CANNDynamics):
             Z = torch.zeros((self.latent_dim, self.latent_dim))
             If = torch.eye(self.augmented_dim)
 
-            Ez = stats.Ez
-            Ezz = stats.Ezz
+            Ez   = stats.Ez
+            Ezz  = stats.Ezz
             Ezz1 = stats.Ezz1
 
             lmb  = torch.exp(decay)
@@ -199,7 +176,7 @@ class CANNDynamicsSpikes(CANNDynamics):
             U    = torch.exp(syn_input)
             sigz = torch.exp(pos_variance)
 
-            spikes = self.n_spikes_train
+            spikes = self.n_spikes['train']
 
             sigmav = sigv**2 * self.dt
             sigmaz = sigz**2 * self.dt * I
@@ -213,24 +190,19 @@ class CANNDynamicsSpikes(CANNDynamics):
             for i in range(n_batches):
                 T     = len(stats.Ez[i])
                 spike = self.build_denom(tau, spikes[i])[1:]
-                tp    = self.true_position_train[i][1:]
+                tp    = self.true_position['train'][i][1:]
 
-                Fb = torch.cat((
-                    I.expand(T-1,-1,-1) / spike,
-                    -(U * I) / spike
-                ), dim=2) 
                 F = torch.cat((
                     Ftop.expand(T-1,-1,-1),
-                    Fb
+                    torch.cat((I, -U * I), dim=1) / spike 
                 ), dim=1) * self.dt + If
 
-                Qb = torch.cat((
-                    Z.expand(T-1,-1,-1),
-                    sigmaz / spike
-                ), dim=2)
                 Q = torch.cat((
                     Qtop.expand(T-1,-1,-1),
-                    Qb
+                    torch.cat((
+                        Z.expand(T-1,-1,-1),
+                        sigmaz / spike
+                    ), dim=2)
                 ), dim=1)
 
                 b = torch.cat((
@@ -287,10 +259,7 @@ class CANNDynamicsSpikes(CANNDynamics):
         return loss
 
     def transform(self, spikemats: list[hseu.NDArray], Xtest: list[hseu.NDArray]):
-        self.n_spikes_test = []
-        for spk in spikemats:
-            spk = spk.sum(axis=1)
-            spk = hseu.atleast_3d(spk)
-            self.n_spikes_test.append(torch.from_numpy(spk))
-
+        self.n_spikes['test'] = [
+            count_spikes(spk) for spk in spikemats
+        ]
         return super().transform(spikemats, Xtest)

@@ -57,9 +57,11 @@ class OUDynamicsScaled(OUDynamics):
             true_position_valid
         ) 
 
-        self.spikecount_train = [count_spikes(spk) for spk in spikemat_train]
+        self.spikecount = {
+            'train': [count_spikes(spk) for spk in spikemat_train]
+        }
         if spikemat_valid is not None:
-            self.spikecount_valid = [count_spikes(spk) for spk in spikemat_valid]
+            self.spikecount['valid'] = [count_spikes(spk) for spk in spikemat_valid]
 
         if isinstance(initialization_method, dict):
             self.initialization_method = 'uniform'
@@ -86,20 +88,12 @@ class OUDynamicsScaled(OUDynamics):
 
     def _construct_transition_matrix(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$I + \Delta t\begin{pmatrix}
+        $$I - \Delta t\begin{pmatrix}
             F_{11} & F_{12} \\
             -\tau_E^{-1}F_{12} & \tau_E^{-1}F_{22} \\
         \end{pmatrix}$$
         """
-        if mode == "train":
-            spikecount = self.spikecount_train
-        elif mode == "valid":
-            spikecount = self.spikecount_valid
-        elif mode == "test":
-            spikecount = self.spikecount_test
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
-
+        spikecount = self.spikecount[mode]
         I = torch.eye(self.latent_dim)
 
         F_scaled = []
@@ -109,9 +103,9 @@ class OUDynamicsScaled(OUDynamics):
             denom = self.build_denom(self.tau.exp(), spk)
             Ftop = torch.cat((self.F11 * It, self.F12 * It), dim=2)
             Fbot = torch.cat((
-                -self.F12 / denom * It,
-                 self.F22 / denom * It
-            ), dim=2)
+                -self.F12 * I,
+                 self.F22 * I
+            ), dim=1) / denom
             F = torch.cat((Ftop, Fbot), dim=1)
             F = torch.eye(self.augmented_dim) - F * self.dt
             F_scaled.append(F)
@@ -119,24 +113,14 @@ class OUDynamicsScaled(OUDynamics):
 
     def _construct_transition_bias(self, mode: str = "train") -> torch.Tensor:
         r"""
-        $$-\Delta t\begin{pmatrix}
+        $$\Delta t\begin{pmatrix}
             F_{12} \\
             \tau_E^{-1}F_{22} \\
         \end{pmatrix}x_t$$
         """
-        if mode == "train":
-            spikecount = self.spikecount_train
-            true_pos   = self.true_position_train
-        elif mode == "valid":
-            spikecount = self.spikecount_valid
-            true_pos   = self.true_position_valid
-        elif mode == "test":
-            spikecount = self.spikecount_test
-            true_pos   = self.true_position_test
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
-
-        b_scaled = []
+        spikecount = self.spikecount[mode]
+        true_pos   = self.true_position[mode]
+        b_scaled   = []
         for tp,spk in zip(true_pos,spikecount):
             denom = self.build_denom(self.tau.exp(), spk)
             b = torch.cat((
@@ -152,15 +136,7 @@ class OUDynamicsScaled(OUDynamics):
             \sigma_v^2\Delta t & 0 \\ 0 & \sigma_z^2\Delta t \tau_E^{-1}
         \end{pmatrix}$$
         """
-        if mode == "train":
-            spikecount = self.spikecount_train
-        elif mode == "valid":
-            spikecount = self.spikecount_valid
-        elif mode == "test":
-            spikecount = self.spikecount_test
-        else:
-            raise ValueError(f"Invalid mode: {mode}. Must be 'train', 'valid', or 'test'.")
-
+        spikecount = self.spikecount[mode]
         Z    = torch.zeros((self.latent_dim, self.latent_dim))
         I    = torch.eye(self.latent_dim)
         sigv = torch.exp(self.velocity_variance)**2 * self.dt
@@ -220,12 +196,13 @@ class OUDynamicsScaled(OUDynamics):
             Ftop = torch.cat((F11 * I, F12 * I), dim=1)
             Qtop = torch.cat((sigv * I, Z), dim=1)
 
-            tau = torch.exp(tau)
+            tau   = torch.exp(tau)
             sigv0 = torch.exp(velocity_prior_variance)**2 * self.dt
-            true_position = self.true_position_train
-            spikecount = self.spikecount_train
-            total_loss = 0
 
+            true_position = self.true_position['train']
+            spikecount    = self.spikecount['train']
+
+            total_loss = 0
             for i in range(n_batches):
                 T = len(Ez[i])
                 tpos = true_position[i][1:]
@@ -233,7 +210,7 @@ class OUDynamicsScaled(OUDynamics):
                 _I = I.expand(T-1,-1,-1)
                 Fscaled = torch.cat((
                     Ftop.expand(T-1,-1,-1),
-                    torch.cat((-F12 * _I / denom, F22 * _I / denom), dim=2)
+                    torch.cat((-F12 * I, F22 * I), dim=1) / denom
                 ), dim=1)
                 Fscaled = torch.eye(self.augmented_dim) - Fscaled * self.dt
 
@@ -301,5 +278,5 @@ class OUDynamicsScaled(OUDynamics):
             X: list[hseu.NDArray]
         ):
 
-        self.spikecount_test = [count_spikes(spk) for spk in spikemats]
+        self.spikecount['test'] = [count_spikes(spk) for spk in spikemats]
         return super().transform(spikemats, X)
