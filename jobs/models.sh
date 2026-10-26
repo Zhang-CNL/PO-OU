@@ -10,10 +10,10 @@
 #SBATCH --mail-user=armand.rathgeb@utsouthwestern.edu
 #SBATCH --mail-type=ALL
 
-module load python/3.14.0
+module load python/3.13.0
 source $(conda info --base)/etc/profile.d/conda.sh
 
-RAT_NAMES=("Harpy" "Imp" "Janni" "Naga")
+RAT_NAMES=("Harpy" "Imp" "Janni")
 
 RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/"
 
@@ -22,3 +22,4 @@ conda activate hippocampalswr
 # Model results are saved to {RESULTS_PATH}/{RAT_NAME}/{SESSION}/{MODEL}
 python -u models.py --rats "${RAT_NAMES[$SLURM_ARRAY_TASK_ID]}" \
     --results-path $RESULTS_PATH $@
+

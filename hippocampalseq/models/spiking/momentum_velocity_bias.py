@@ -158,7 +158,7 @@ class MomentumVelocityBias(Momentum):
                 bloss = bloss + (bias[1:].mT @ bias[1:]) 
                 bloss = torch.sum(bloss, axis=0) / sigma
 
-                total_loss += (iloss + loss + ibloss + bloss) / 2
+                total_loss += (iloss + loss + ibloss + bloss)
 
             return total_loss
 

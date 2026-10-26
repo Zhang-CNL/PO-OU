@@ -221,7 +221,7 @@ class CANNDynamics(Momentum):
                 loss = hseu.mulinv(Q, loss)
                 loss = (T-1) * torch.logdet(Q) + torch.trace(loss)
 
-                total_loss += (iloss + loss) / 2 
+                total_loss += (iloss + loss) 
 
             return total_loss
 

@@ -185,7 +185,7 @@ class MomentumVelocity(Momentum):
                 eloss = torch.sum(eloss, axis=0)
                 eloss = T * torch.logdet(Kt) + eloss
 
-                total_loss += (iloss + hloss + eloss) / 2
+                total_loss += (iloss + hloss + eloss)
 
             return total_loss
 

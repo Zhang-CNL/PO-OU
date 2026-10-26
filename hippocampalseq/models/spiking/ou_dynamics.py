@@ -23,6 +23,7 @@ class OUDynamics(SpikingBase):
             true_position_train: list[hseu.NDArray],
             spikemat_valid: list[hseu.NDArray]|None=None,
             true_position_valid: list[hseu.NDArray]|None = None,
+            bias: bool = False,
             initialization_method: str|dict[str, hseu.NDArray] = 'uniform'
         ):
         if place_fields.shape[-1] == 1:
@@ -79,6 +80,7 @@ class OUDynamics(SpikingBase):
         )
 
         self.n_parameters = 6
+        self.bias = bias
 
     def name(self):
         return "OU Process Dynamics"
@@ -138,15 +140,18 @@ class OUDynamics(SpikingBase):
         $$\Delta t \begin{pmatrix}F_{12} \\ F_{22}\end{pmatrix}x_t
         $$
         """
-        true_pos = self.true_position[mode]
-        bias = []
-        for tp in true_pos:
-            zs = self.F12 * self.dt * tp
-            xs = self.F22 * self.dt * tp
-            bias.append(
-                torch.cat((zs, xs), dim=1)
-            )
-        return bias
+        if self.bias:
+            true_pos = self.true_position[mode]
+            bias = []
+            for tp in true_pos:
+                zs = self.F12 * self.dt * tp
+                xs = self.F22 * self.dt * tp
+                bias.append(
+                    torch.cat((zs, xs), dim=1)
+                )
+            return bias
+        else:
+            return torch.zeros((self.augmented_dim, 1))
 
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
         r"""
@@ -173,7 +178,8 @@ class OUDynamics(SpikingBase):
 
     def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
         params = super().build_batch_parameters(batch, mode)
-        params.transition_bias = self.global_parameters.transition_bias[batch]
+        if self.bias:
+            params.transition_bias = self.global_parameters.transition_bias[batch]
         return params
 
     def _solve_parameters(
@@ -229,11 +235,12 @@ class OUDynamics(SpikingBase):
             for i in range(n_batches):
                 T = len(Ezz[i])
 
-                tpos = true_position[i][1:]
-                bias = torch.cat((
-                    F12 * tpos,
-                    F22 * tpos
-                ), dim=1) * self.dt
+                if self.bias:
+                    tpos = true_position[i][1:]
+                    bias = torch.cat((
+                        F12 * tpos,
+                        F22 * tpos
+                    ), dim=1) * self.dt
 
                 iloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
                 iloss = self.latent_dim * torch.log(sigv0) + iloss / sigv0
@@ -243,10 +250,13 @@ class OUDynamics(SpikingBase):
                 tl3 = F @ Ezz[i][:-1] @ F.mT
                 tloss = tl1 - tl2 - tl2.mT + tl3
 
-                bl1 = Ez[i][1:] @ bias.mT
-                bl2 = F @ Ez[i][:-1] @ bias.mT
-                bl3 = bias @ bias.mT
-                bloss =  bl3 + bl2.mT - bl1 - bl1.mT
+                if self.bias:
+                    bl1 = Ez[i][1:] @ bias.mT
+                    bl2 = F @ Ez[i][:-1] @ bias.mT
+                    bl3 = bias @ bias.mT
+                    bloss =  bl3 + bl2.mT - bl1 - bl1.mT
+                else:
+                    bloss = 0.0
 
                 tloss = torch.sum(tloss + bloss, axis=0)
                 tloss = hseu.mulinv(Q, tloss)

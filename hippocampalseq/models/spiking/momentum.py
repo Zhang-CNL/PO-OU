@@ -337,7 +337,7 @@ class Momentum(SpikingBase):
                 loss = torch.sum(loss, axis=0) / sigma
                 loss = self.latent_dim * (T-1) * torch.log(sigma) + loss
 
-                total_loss += (iloss + loss) / 2 
+                total_loss += (iloss + loss) 
 
             return total_loss
 

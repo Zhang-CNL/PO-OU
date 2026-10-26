@@ -1,252 +1,294 @@
-import os
-import uuid
-import sys 
-import time
-import json
 import click
+import os
+import sys 
+import json
 import traceback
 sys.path.append(os.path.realpath(".."))
 sys.path.append(os.path.realpath("."))
 
-import numpy as np
-from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 import hippocampalseq as hse
-import hippocampalseq.utils as hseu
 import hippocampalseq.io as hseio
-import hippocampalseq.preprocessing as hsepp
+import hippocampalseq.utils as hseu
+import hippocampalseq.plotting as hsepl
 import hippocampalseq.models as hsem
 
-import analyze
+MODELS = {
+    "MAP"                  : hsem.BayesianMAP,
+    "Momentum"             : hsem.Momentum,
+    "MomentumVelocity"     : hsem.MomentumVelocity,
+    "MomentumVelocityBias" : hsem.MomentumVelocityBias,
+    "CANNDynamics"         : hsem.CANNDynamics,
+    "CANNDynamicsBias"     : hsem.CANNDynamicsSpikes
+}
 
 def run_model(
         model_name: str,
         model_kwargs: dict[str, Any],
         model_fit_kwargs: dict[str, Any] = {},
+        model_pred_kwargs: dict[str, Any] = {}
     ):
-
-    models = {
-        'MAP'             : hsem.BayesianMAP,
-        'Momentum'        : hsem.Momentum,
-        'MomentumVelocity': hsem.MomentumVelocity,
-    }
-    model = models[model_name](**model_kwargs)
-    return model.fit(**model_fit_kwargs)
-
-def run_models_over_data(
-        save_name: str,
-        parameters: dict[str, Any],
-        place_fields: np.ndarray,
-        raw_data: hse.RawData,
-        dataset: hse.Theta|hse.Replay,
-        dt: float,
-    ):
-    bin_size = parameters.get('bin_size', 2.0)
-    start = time.time()
-    map_decoded = run_model('MAP',
-        {
-            'place_fields': place_fields, 
-            'dt': dt, 
-            'bin_size': bin_size
-        },
-        {'X': spikes}
-    )
-    end = time.time()
-    print(f"Completed MAP decoding. {end-start} seconds")
-
-    save_dict = {
-        'map': asdict(map_decoded)
-    }
-
-    momentum_kwargs = {
-        'place_fields'     : place_fields, 
-        'spikes'           : spikes,
-        'dt'               : dt, 
-        'environment_size' : raw_data.environment_size,
-        'bin_size'         : bin_size,
-        'seed'             : parameters.get('seed', 42)
-    }
-
-    start = time.time()
-    momentum_decoded = run_model('Momentum',
-        momentum_kwargs,
-        {
-        }
-    )
-    end = time.time()
-    print(f"Completed momentum decoding. {end-start} seconds")
-
-    save_dict['momentum'] = {
-        'decoded_trajectories' : momentum_decoded.smoothed_mean,
-        'cov'             : momentum_decoded.smoothed_cov,
-        'cumulative_probabilities': momentum_decoded.cumulative_probabilities,
-        'loglike' : momentum_decoded.loglike_full,
-        'aic'     : momentum_decoded.aic,
-        'bic'     : momentum_decoded.bic
-    }
-
-    if isinstance(dataset, hse.Theta):
-        start = time.time()
-        if len(raw_data.environment_size) == 1:
-            max_axis = analyze.get_major_axis(raw_data.raw_position)
-            true_velocity = [v[f'V_{max_axis}'].values for v in theta_data.ground_truth]
-        else:
-            true_velocity = [v[['V_x', 'V_y']].values for v in theta_data.ground_truth]
-
-        momentum_v_true_decoded = run_model('MomentumVelocity',
-            momentum_kwargs | {'velocity_type': 'true'},
-            {
-                'X': true_velocity
+    try:
+        model = MODELS[model_name](**model_kwargs)
+        decoded = model.fit(**model_fit_kwargs)
+        if isinstance(decoded, tuple):
+            out = {
+                'training'   : decoded[0],
+                'validation' : decoded[1]
             }
-        )
-        end = time.time()
-        print(f"Completed momentum velocity decoding. {end-start} seconds")
+        else:
+            out = {
+                'training': decoded
+            }
+        if len(model_pred_kwargs) > 0:
+            predicted = model.transform(**model_pred_kwargs)
+            out['testing'] = predicted
+        return model, out
+    except Exception as e:
+        print(traceback.format_exc(), file=sys.stderr)
+        print('-'*100, file=sys.stderr)
+        print(f"Model {model_name} failed")
+        return None,{}
 
-        save_dict['momentum_v_true'] = {
-            'decoded_trajectories' : momentum_v_true_decoded.smoothed_mean,
-            'cov'             : momentum_v_true_decoded.smoothed_cov,
-            'cumulative_probabilities': momentum_v_true_decoded.cumulative_probabilities,
-            'loglike' : momentum_v_true_decoded.loglike_full,
-            'aic'     : momentum_v_true_decoded.aic,
-            'bic'     : momentum_v_true_decoded.bic
+def run_theta_models(
+        raw_data: hse.RawData, 
+        place_field_data: hse.PlaceFields, 
+        theta_data: hse.Theta,
+        parameters: dict[str, Any],
+        results_path: str|Path
+    ):
+    place_fields = place_field_data.place_fields[place_fields.place_cell_ids]
+    environment_size = raw_data.environment_size
+
+    indices = hseu.train_test_valid_split(
+        len(theta_data.spikes), 
+        parameters.get('percent_train', 0.8),
+        parameters.get('percent_validation', 0.1)
+    )
+
+    true_velocity = [
+        gt[[f'V_{d}' for d in environment_size.axes()]].values
+        for gt in theta_data.ground_truth
+    ]
+    true_position = [
+        gt[environment_size.axes()].values
+        for gt in theta_data.ground_truth
+    ]
+    extract_indices = lambda ls,idx: [ls[i] for i in idx] if len(idx) > 0 else None
+    tv_train,tv_valid,tv_test = [
+        extract_indices(true_velocity, idx) 
+        for idx in indices
+    ]
+    tp_train,tp_valid,tp_test = [
+        extract_indices(true_position, idx)
+        for idx in indices
+    ]
+    sp_train,sp_valid,sp_test = [
+        extract_indices(theta_data.spikes, idx)
+        for idx in indices
+    ]
+
+    output = {}
+
+    map_model,map_results = run_model(
+        "MAP",
+        {
+            'place_fields' : place_fields,
+            'dt'           : parameters.get('time_window_s'),
+            'bin_size'     : parameters.get('bin_size', 2.0)
+        },
+        {
+            'X' : theta_data.spikemat
         }
+    )
+    output |= {
+        "MAP": map_results
+    }
 
-        start = time.time()
-        momentum_v_pred_decoded = run_model('MomentumVelocity',
-            momentum_kwargs | {'velocity_type': 'observed'},
-        )
-        end = time.time()
-        print(f"Completed momentum velocity decoding. {end-start} seconds")
-
-        save_dict['momentum_v_pred'] = {
-            'decoded_trajectories' : momentum_v_pred_decoded.smoothed_mean,
-            'cov'             : momentum_v_pred_decoded.smoothed_cov,
-            'cumulative_probabilities': momentum_v_pred_decoded.cumulative_probabilities,
-            'loglike' : momentum_v_pred_decoded.loglike_full,
-            'aic'     : momentum_v_pred_decoded.aic,
-            'bic'     : momentum_v_pred_decoded.bic
+    momentum_model,momentum_results = run_model(
+        "Momentum", 
+        {
+            'dt'               : parameters.get('time_window_s'),
+            'environment_size' : environment_size,
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'place_fields'     : place_fields,
+            'spikemat_train'   : sp_train,
+            'spikemat_valid'   : sp_valid,
+        },
+        {},
+        {
+            'spikemats' : sp_test
         }
+    )
+    output |= {
+        "Momentum": momentum_results
+    }
 
-    hseio.save_to_mat2(save_name,
-        save_dict
+    momentum_vel_model,momentum_vel_results = run_model(
+        "MomentumVelocity",
+        {
+            'dt'               : parameters.get('time_window_s'),
+            'environment_size' : environment_size,
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'place_fields'     : place_fields,
+            'spikemat_train'   : sp_train,
+            'spikemat_valid'   : sp_valid,
+            'velocity_type'    : 'true' 
+        },
+        {
+            'Xtrain' : tv_train,
+            'Xvalid' : tv_valid
+        },
+        {
+            'spikemats' : sp_test,
+            'Xtest'     : tv_test
+        }
+    )
+    output |= {
+        "MomentumVelocityTrue": momentum_vel_results
+    }
+
+    momentum_vellik_model,momentum_vellik_results = run_model(
+        "MomentumVelocity",
+        {
+            'dt'               : parameters.get('time_window_s'),
+            'environment_size' : environment_size,
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'place_fields'     : place_fields,
+            'spikemat_train'   : sp_train,
+            'spikemat_valid'   : sp_valid,
+            'velocity_type'    : 'observed'
+        },
+        {
+        },
+        {
+            'spikemats' : sp_test
+        }
+    )
+    output |= {
+        "MomentumVelocityLikelihood": momentum_vellik_results
+    }
+
+    momentum_vbias_model,momentum_vbias_results = run_model(
+        "MomentumVelocityBias",
+        {
+            'velocity_train'   : tv_train,
+            'velocity_valid'   : tv_valid,
+            'bias_fn'          : 'linear',
+            'dt'               : parameters.get('time_window_s'),
+            'environment_size' : environment_size,
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'place_fields'     : place_fields,
+            'spikemat_train'   : sp_train,
+            'spikemat_valid'   : sp_valid,
+        },
+        {
+        },
+        {
+            'spikemats' : sp_test,
+            'Xtest'     : tv_test
+        }
+    )
+    output |= {
+        "MomentumVelocityBias": momentum_vbias_results
+    }
+
+    cann_model,cann_results = run_model(
+        "CANNDynamics",
+        {
+            'true_position_train' : tp_train,
+            'true_position_valid' : tp_valid,
+            'dt'                  : theta_time_window_s,
+            'bin_size'            : bin_size,
+            'environment_size'    : raw_data.environment_size,
+            'place_fields'        : place_fields,
+            'spikemat_train'      : sp_train,
+            'spikemat_valid'      : sp_valid,
+        },
+        {
+        },
+        {
+            'spikemats' : sp_test,
+            'Xtest'     : tp_test
+        }
+    )
+    output |= {
+        "CANNDynamics": cann_results
+    }
+
+    cann_bias_model,cann_bias_results = run_model(
+        "CANNDynamicsBias",
+        {
+            'spikemat'         : sp_train,
+            'place_fields'     : place_fields,
+            'dt'               : parameters.get('time_window_s'),
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'environment_size' : environment_size,
+            'true_position'    : tp_train,
+        }, {}, {
+            'spikemat': sp_test,
+            'true_position': tp_test
+        }
+    )
+    output |= {
+        "CANNDynamicsBias": cann_bias_results
+    }
+
+    hseio.save_to_mat2(
+        results_path / "model_theta_results.mat",
+        {
+            "split_indices" : {
+                "train"      : indices[0],
+                "validation" : indices[1],
+                "test"       : indices[2]
+            } 
+        } | output
     )
 
 @click.command()
-@click.option("--data-path", default="../data/")
 @click.option("--results-path", default="../results")
 @click.option("--run-config")
 @click.option("--rats", multiple=True, type=click.Choice(hseio.RAT_NAMES), default=hseio.RAT_NAMES)
 def main(
-        data_path: str, 
-        results_path: str, 
+        results_path: str,
         run_config: str,
-        rats: list[str]
+        rats: list[str],
     ):
-    os.makedirs(results_path, exist_ok=True)
-
-    with open(os.path.realpath(run_config), 'r') as f:
+    if not isinstance(rats, list):
+        rats = [rats]
+    results_path = Path(results_path)
+    run_config = Path(run_config)
+    with open(run_config, 'r') as f:
         parameters = json.loads(f.read())
-
-    profile_name = parameters.get("name", str(uuid.uuid4()))
-    results_path = os.path.join(results_path, profile_name)
-    os.makedirs(results_path, exist_ok=True)
-
-    with open(os.path.join(results_path, "config.json"), 'w') as f:
-        json.dump(parameters, f, indent=4)
+    
+    results_path = results_path / parameters.get("name")
+    print(results_path)
 
     for rat in rats:
-        rat_path = os.path.join(data_path, rat)
+        rat_path = results_path / rat
         for session in os.listdir(rat_path):
+            results_dir = rat_path / session
             track_type = session[:-1]
             session_n  = int(session[-1])
-            env_size   = None if track_type == 'Linear' else [(0,200),(0,200)]
 
-            if rat == "Janni" and track_type == "Open":
-                print("Skipping Janni Open tracks (broken data)")
-                continue
+            print(f"Training models on {rat}:{session}")
+            raw_data = hseio.load_from_mat2(results_dir / "raw_data.mat")
+            place_field_data = raw_data['place_field_data']
+            raw_data = raw_data['raw_data']
 
-            if track_type not in parameters.get("session_types", ["Linear", "Open"]):
-                continue
+            if not paramaters.get("ignore_theta", False):
+                theta_data = hseo.load_from_mat2(results_dir / "theta_data.mat")
+                run_theta_models(
+                    raw_data,
+                    place_field_data,
+                    theta_data,
+                    results_dir
+                )
 
-            print(f"Started working on rat {rat}, session {session}")
-            results_dir = os.path.join(results_path, rat, session)
-            os.makedirs(results_dir, exist_ok=True)
-
-            (
-                raw_data,
-                place_field_data
-            ) = hse.load_raw_data(
-                data_path,
-                rat,
-                session_n,
-                track_type,
-                bin_size_cm       = parameters.get('bin_size_cm', 2.0),
-                environment_size  = env_size,
-                loading_kwargs    = parameters.get('loading_args', {}),
-                placefield_kwargs = parameters.get('placefield_args', {})
-            )
-
-            hseio.save_to_mat2(
-                os.path.join(results_dir, 'raw_data.mat'),
-                {
-                    'raw_data'         : raw_data,
-                    'place_field_data' : place_field_data
-                }
-            )
-
-            print(f"Finished loading {rat} {session}")
-            
-            if track_type == 'Linear':
-                env_size = raw_data.environment_size
-
-            place_fields = place_field_data.place_fields[place_field_data.place_cell_ids]
-
-            try:
-                if not parameters.get("ignore_theta", False):
-                    theta_data = hse.process_theta(
-                        raw_data,
-                        place_field_data,
-                        velocity_cutoff = parameters.get('velocity_cutoff', 10.0),
-                        theta_kwargs    = parameters.get('theta_args', {})
-                    )
-                    hseio.save_to_mat2(
-                        os.path.join(results_dir, 'theta_raw.mat'),
-                        {"theta_data": theta_data },
-                    )
-                    run_models_over_data(
-                        os.path.join(results_dir, 'model_theta_results.mat'),
-                        parameters,
-                        place_fields,
-                        theta_data.spikes,
-                        parameters.get('theta_time_window_s', 60.0/1000),
-                        int(parameters.get('bin_size_cm', 2)),
-                        raw_data.environment_size
-                    )
-            except Exception as e:
-                print(traceback.format_exc(), file=sys.stderr)
-                print("-"*100, file=sys.stderr)
-                print(f"\nFailed to decode theta for {rat} {session}. {e}", file=sys.stderr)
-
-
-            try:
-                if not parameters.get("ignore_ripples", False):
-                    raise NotImplementedError("Ripple preprocessing not implemented yet.")
-                    run_models_over_data(
-                        os.path.join(results_dir, 'model_swr_results.mat'),
-                        parameters,
-                        place_fields,
-                        ripple_data.spikes,
-                        parameters.get('ripple_time_window_s', 5.0/1000),
-                        int(parameters.get('bin_size_cm', 2)),
-                        raw_data.environment_size
-                    )
-            except Exception as e:
-                print(traceback.format_exc(), file=sys.stderr)
-                print("-"*100, file=sys.stderr)
-                print(f"\nFailed to decode ripple for {rat} {session}. {e}", file=sys.stderr)
-
-    print("Job completed")
+            if not parameters.get("ignore_ripple", False):
+                raise NotImplementedError
 
 if __name__ == "__main__":
     main()

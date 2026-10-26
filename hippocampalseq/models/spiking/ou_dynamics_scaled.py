@@ -22,6 +22,7 @@ class OUDynamicsScaled(OUDynamics):
             true_position_train: list[hseu.NDArray],
             spikemat_valid: list[hseu.NDArray]|None=None,
             true_position_valid: list[hseu.NDArray]|None = None,
+            bias: bool = False,
             initialization_method: str|dict[str, hseu.NDArray] = 'hotstart'
         ):
         if initialization_method == 'hotstart':
@@ -35,6 +36,7 @@ class OUDynamicsScaled(OUDynamics):
                 true_position_train,
                 spikemat_valid,
                 true_position_valid,
+                bias
             )
             results = ou_model.fit()
             initialization_method = {
@@ -54,7 +56,8 @@ class OUDynamicsScaled(OUDynamics):
             spikemat_train,
             true_position_train,
             spikemat_valid,
-            true_position_valid
+            true_position_valid,
+            bias
         ) 
 
         self.spikecount = {
@@ -118,17 +121,20 @@ class OUDynamicsScaled(OUDynamics):
             \tau_E^{-1}F_{22} \\
         \end{pmatrix}x_t$$
         """
-        spikecount = self.spikecount[mode]
-        true_pos   = self.true_position[mode]
-        b_scaled   = []
-        for tp,spk in zip(true_pos,spikecount):
-            denom = self.build_denom(self.tau.exp(), spk)
-            b = torch.cat((
-                self.F12 * self.dt * tp,
-                self.F22 * self.dt * tp / denom
-            ), dim=1)
-            b_scaled.append(b)
-        return b_scaled
+        if self.bias:
+            spikecount = self.spikecount[mode]
+            true_pos   = self.true_position[mode]
+            b_scaled   = []
+            for tp,spk in zip(true_pos,spikecount):
+                denom = self.build_denom(self.tau.exp(), spk)
+                b = torch.cat((
+                    self.F12 * self.dt * tp,
+                    self.F22 * self.dt * tp / denom
+                ), dim=1)
+                b_scaled.append(b)
+            return b_scaled
+        else:
+            return torch.zeros((self.augmented_dim, 1))
 
     def _construct_transition_covariance(self, mode: str = "train") -> torch.Tensor:
         r"""
@@ -219,10 +225,11 @@ class OUDynamicsScaled(OUDynamics):
                     torch.cat((Z, sigz * I), dim=1) / denom
                 ), dim=1)
 
-                b_scaled = torch.cat((
-                    F12 * tpos,
-                    F22 * tpos / denom
-                ), dim=1) * self.dt
+                if self.bias:
+                    b_scaled = torch.cat((
+                        F12 * tpos,
+                        F22 * tpos / denom
+                    ), dim=1) * self.dt
 
                 iloss = Ez[i][0,:self.latent_dim].mT @ Ez[i][0,:self.latent_dim]
                 iloss = self.latent_dim * torch.log(sigv0) + iloss / sigv0
@@ -232,10 +239,13 @@ class OUDynamicsScaled(OUDynamics):
                 tl3 = Fscaled @ Ezz[i][:-1] @ Fscaled.mT
                 tloss = tl1 - tl2 - tl2.mT + tl3
 
-                bl1 = Ez[i][1:] @ b_scaled.mT
-                bl2 = Fscaled @ Ez[i][:-1] @ b_scaled.mT
-                bl3 = b_scaled @ b_scaled.mT
-                bloss = bl3 + bl2 + bl2.mT - bl1 - bl1.mT
+                if self.bias:
+                    bl1 = Ez[i][1:] @ b_scaled.mT
+                    bl2 = Fscaled @ Ez[i][:-1] @ b_scaled.mT
+                    bl3 = b_scaled @ b_scaled.mT
+                    bloss = bl3 + bl2 + bl2.mT - bl1 - bl1.mT
+                else:
+                    bloss = 0.0
 
                 tloss = hseu.mulinv(Qscaled, tloss + bloss)
                 tloss = torch.sum(tloss, axis=0)
