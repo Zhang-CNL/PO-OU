@@ -11,16 +11,18 @@ class BayesianMAPResults:
     cumulative_probabilities : np.ndarray
 
 class BayesianMAP(StateSpace):
-    def __init__(self, place_fields: np.ndarray, dt: float, bin_size: float):
+    def __init__(self, place_fields: np.ndarray, dt: float, bin_size: float, drop_zeros: bool = True):
         """Model for Bayesian Maximum A-Posteriori decoding.
         Args:
             place_fields (np.ndarray|torch.Tensor): (Ncells, Nbx, Nby) Place field grids.
             dt (float): Time step for the transition matrix.
             bin_size (float): Bin size in centimeters
+            drop_zeros (bool, optional): Whether to drop zero-count spikes. Defaults to True.
         """
         self.place_fields = place_fields
         self.dt = dt
         self.bin_size = bin_size
+        self.drop_zeros = drop_zeros
 
     def name(self):
         return "Bayesian Maximum A-Posteriori Estimator"
@@ -37,9 +39,12 @@ class BayesianMAP(StateSpace):
         Returns:
             npt.ArrayLike: Decoded trajectory of shape (T, 2)
         """
-        spikemat_nonzero = spikemat[np.where(spikemat.sum(axis=1) > 0)]
+        if self.drop_zeros:
+            spikemat = spikemat[np.where(spikemat.sum(axis=1) > 0)]
+        else:
+            spikemat = spikemat
         emission_probability = hseu.calc_poisson_emission_probabilities_2d(
-            spikemat_nonzero, 
+            spikemat, 
             self.place_fields, 
             self.dt
         )

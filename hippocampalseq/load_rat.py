@@ -8,7 +8,6 @@ from typing import Any
 import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsep
 
-@hseio.register_type
 @dataclass
 class RawData:
     raw_position       : nap.TsdFrame
@@ -22,14 +21,12 @@ class RawData:
     lfp_data           : nap.TsdFrame
     environment_size   : hsep.EnvironmentSize
 
-@hseio.register_type
 @dataclass 
 class PlaceFields: 
     place_fields   : np.ndarray
     place_cell_ids : np.ndarray
     position_hist  : np.ndarray
 
-@hseio.register_type
 @dataclass 
 class Theta:
     ground_truth      : list[nap.TsdFrame]
@@ -39,10 +36,10 @@ class Theta:
     trough_indices    : np.ndarray
     spikes_with_phase : dict[int, nap.TsdFrame]
 
-@hseio.register_type
 @dataclass
 class Replay:
-    spikes : list[np.ndarray]
+    ground_truth : list[nap.TsdFrame]
+    spikes       : list[np.ndarray]
 
 def load_raw_data(
         base_data_path: str,
@@ -190,6 +187,26 @@ def process_theta(
     )
 
 def process_replay(
+        raw_data: RawData,
+        placefield_data: PlaceFields,
+        replay_kwargs: dict[str, Any] = {
+            'time_window_s': 5.0 / 1000,
+            'time_window_advance_s': None,
+        }
+    ) -> Replay:
+    start = time.time()
+    ground_truth, spikemats = hsep.extract_ripple_segments(
+        raw_data.raw_position,
+        raw_data.lfp_data,
+        raw_data.ripple_periods,
+        raw_data.raw_spikes,
+        placefield_data.place_cell_ids,
+        time_window_s         = replay_kwargs.get('time_window_s', 5.0 / 1000),
+        time_window_advance_s = replay_kwargs.get('time_window_advance_s', None)
+    )
+    print(f"Extracting replay sequences took {time.time() - start}")
 
-    ):
-    pass
+    return Replay(
+        ground_truth,
+        spikemats
+    )

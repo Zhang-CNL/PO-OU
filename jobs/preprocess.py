@@ -2,6 +2,7 @@ import click
 import sys
 import json
 import os
+import compress_pickle
 sys.path.append(os.path.realpath("."))
 sys.path.append(os.path.realpath(".."))
 
@@ -10,6 +11,7 @@ from pathlib import Path
 import hippocampalseq as hse
 import hippocampalseq.io as hseio
 import hippocampalseq.preprocessing as hsep
+import hippocampalseq.plotting as hsepl
 
 @click.command()
 @click.option("--data-path", default="../data/")
@@ -23,18 +25,17 @@ def main(data_path: str, results_path: str, run_config: str, rat: str):
     with open(run_config, 'r') as f:
         parameters = json.loads(f.read())
 
-    os.makedirs(results_path, exist_ok=True)
-    with open(results_path / 'config.json', 'w') as f:
-        json.dump(parameters, f, indent=4) # Save this for examination later
+    results_path = results_path / parameters.get("name")
 
+    os.makedirs(results_path, exist_ok=True)
     for session in os.listdir(data_path / rat):
-        track_type = session[:-1]
+
         session_num = int(session[-1])
         if track_type not in parameters.get("session_types", ["Linear", "Open"]):
             continue
 
         rat_data_path = data_path / rat / session
-        os.makedirs(rat_data_path, exists_ok=True)
+        os.makedirs(rat_data_path, exist_ok=True)
 
         environment_size = None
         if track_type == 'Open':
@@ -62,7 +63,7 @@ def main(data_path: str, results_path: str, run_config: str, rat: str):
         processed_values["placefield_data"] = place_field_data
 
         if not parameters.get("ignore_theta", False):
-            theta_data = hse.process_data(
+            theta_data = hse.process_theta(
                 raw_data,
                 place_field_data,
                 theta_kwargs=parameters.get("theta_args", {})
@@ -70,8 +71,14 @@ def main(data_path: str, results_path: str, run_config: str, rat: str):
             processed_values["theta_data"] = theta_data
 
         if not parameters.get("ignore_ripples", False):
-            raise NotImplementedError
+            replay_data = hse.process_ripples(
+                raw_data,
+                place_field_data,
+                replay_kwargs=parameters.get("replay_args", {})
+            )
+            processed_values["replay_data"] = replay_data
 
+        os.makedirs(results_path / rat / session, exist_ok=True)
         compress_pickle.dump(
             processed_values,
             results_path / rat / session / "preprocessed_data.pkl.gz"
@@ -102,6 +109,10 @@ def main(data_path: str, results_path: str, run_config: str, rat: str):
                 file_path=results_path,
                 file_name="session_stitching.pdf"
             )
+
+    with open(results_path / 'config.json', 'w') as f:
+        json.dump(parameters, f, indent=4) # Save this for examination later
+    print(f"Preprocessing complete. Results saved to {results_path}")
 
 if __name__ == '__main__':
     main()

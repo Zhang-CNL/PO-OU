@@ -208,12 +208,17 @@ def weighted_fit(dist, col_idx, phase_bin, position_bin, mid):
     slope = cxy / cxx
     return slope, my - slope * mx, cxy / np.sqrt(cxx * cyy)
 
+
+
+
 def plot_across_session_decoding_hist(
+        max_prob_trace: np.ndarray,
         decoding_distribution: np.ndarray, 
         forward_window: tuple[int,int] = (260, 60), 
         reverse_window: tuple[int,int] = (80,230),
         phase_bin: float = 10, 
-        position_bin: float = 2
+        position_bin: float = 2,
+        fit_method="argmax"
     ):
     npos = decoding_distribution.shape[0]
     pbin = int(round(360/phase_bin))
@@ -247,12 +252,25 @@ def plot_across_session_decoding_hist(
     mid = npos // 2
     fwd_xcols = np.arange(fwd_start_col, fwd_end_col)
     rev_xcols = np.arange(rev_start_col, rev_end_col)
-    fwd_line_deg, fwd_b, fwd_r = weighted_fit(decoding_distribution, fwd_xcols, phase_bin, position_bin, mid)
-    rev_line_deg, rev_b, rev_r = weighted_fit(decoding_distribution, rev_xcols, phase_bin, position_bin, mid)
     fwd_xdeg = fwd_xcols * phase_bin + phase_bin / 2
     rev_xdeg = rev_xcols * phase_bin + phase_bin / 2
-    fwd_fit_cm = fwd_line_deg * fwd_xdeg + fwd_b
-    rev_fit_cm = rev_line_deg * rev_xdeg + rev_b
+
+    if fit_method == "argmax":          # IRFS_PLOT_FIGURE_ONE_B: polyfit through per-column argmax
+        fwd_y = decoding_distribution[:, fwd_start_col:fwd_end_col].argmax(axis=0)
+        rev_y = decoding_distribution[:, rev_start_col:rev_end_col].argmax(axis=0)
+        fwd_m, fwd_c = np.polyfit(fwd_xcols, fwd_y, 1)
+        rev_m, rev_c = np.polyfit(rev_xcols, rev_y, 1)
+        fwd_fit_cm = ((fwd_m * fwd_xcols + fwd_c) - mid) * position_bin
+        rev_fit_cm = ((rev_m * rev_xcols + rev_c) - mid) * position_bin
+        fwd_line_deg = fwd_m * position_bin / phase_bin
+        rev_line_deg = rev_m * position_bin / phase_bin
+    elif fit_method == "weighted":
+        fwd_line_deg, fwd_b, _ = weighted_fit(decoding_distribution, fwd_xcols, phase_bin, position_bin, mid)
+        rev_line_deg, rev_b, _ = weighted_fit(decoding_distribution, rev_xcols, phase_bin, position_bin, mid)
+        fwd_fit_cm = fwd_line_deg * fwd_xdeg + fwd_b
+        rev_fit_cm = rev_line_deg * rev_xdeg + rev_b
+    else:
+        raise ValueError(fit_method)
 
     
     fig,axs = plt.subplots(2,1,
@@ -300,7 +318,8 @@ def plot_across_session_decoding_hist(
     plt.colorbar(im, ax=axs[0], label='Normalized probability', pad=.02)
 
     # Plot smoothed MAP trace
-    max_p = gaussian_filter1d(decoding_distribution.max(axis=0), sigma=1.0)
+    max_p = np.tile(np.asarray(max_prob_trace), 2)
+    #max_p = gaussian_filter1d(decoding_distribution.max(axis=0), sigma=1.0)
     phase_deg = np.arange(decoding_distribution.shape[1]) * phase_bin + phase_bin / 2
     axs[1].plot(phase_deg, max_p, 'ko-', linewidth=2, markersize=4, markerfacecolor='black')
     for deg in window_degs:
@@ -310,6 +329,7 @@ def plot_across_session_decoding_hist(
     axs[1].set_ylabel("Max\nposterior", fontsize=11)
     axs[1].set_xlim(0, decoding_distribution.shape[1] * phase_bin)
     axs[1].set_xticks(np.arange(0, 721, 90))
+    axs[1].set_ylim(max_prob_trace.min(), max_prob_trace.max())
 
     plt.tight_layout()
 
