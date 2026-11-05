@@ -238,7 +238,7 @@ class CANNDynamicsSpikes(CANNDynamics):
             loss_closure,
             params,
             {
-                'n_batches' : len(self.n_spikes_train),
+                'n_batches' : len(self.n_spikes['train']),
                 'stats'     : stats
             },
             {

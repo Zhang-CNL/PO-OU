@@ -19,6 +19,11 @@ def theta_model_analysis(
     ):
     pass
 
+def replay_model_analysis(
+        replay_model_data
+    ):
+    pass
+
 @click.command()
 @click.option("--results-path", default="../results")
 @click.option("--run-config")
@@ -47,7 +52,12 @@ def main(results_path: str, run_config: str, rat: str):
             )
 
         if not parameters.get("ignore_ripple", False):
-            raise NotImplementedError
+            replay_model_data = compress_pickle.load(
+                results_dir / "model_replay_results.pkl.gz"
+            )
+            replay_model_analysis(
+                replay_model_data
+            )
 
 if __name__ == '__main__':
     main()

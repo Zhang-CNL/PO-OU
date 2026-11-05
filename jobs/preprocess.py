@@ -18,24 +18,33 @@ import hippocampalseq.plotting as hsepl
 @click.option("--results-path", default="../results")
 @click.option("--run-config")
 @click.option("--rat", type=click.Choice(hseio.RAT_NAMES))
-def main(data_path: str, results_path: str, run_config: str, rat: str):
-    data_path    = Path(data_path)
+@click.option("--rerun", default=False, is_flag=True)
+def main(data_path: str, results_path: str, run_config: str, rat: str, rerun: bool):
+    data_path    = Path(data_path) / rat
     results_path = Path(results_path)
     run_config   = Path(run_config)
     with open(run_config, 'r') as f:
         parameters = json.loads(f.read())
 
-    results_path = results_path / parameters.get("name")
+    results_path = results_path / parameters["name"] / rat
 
     os.makedirs(results_path, exist_ok=True)
-    for session in os.listdir(data_path / rat):
-
+    for session in os.listdir(data_path):
+        if session.endswith("_bad"):
+            continue
+        track_type  = session[:-1]
         session_num = int(session[-1])
         if track_type not in parameters.get("session_types", ["Linear", "Open"]):
             continue
 
-        rat_data_path = data_path / rat / session
+        rat_data_path   = data_path / session
+        rat_result_path = results_path / session
         os.makedirs(rat_data_path, exist_ok=True)
+        os.makedirs(rat_result_path, exist_ok=True)
+
+        if not rerun and os.path.exists(rat_result_path / "preprocessed_data.pkl.bz2"):
+            print(f"Skipping {rat} {session} as it has already been processed.")
+            continue
 
         environment_size = None
         if track_type == 'Open':
@@ -78,35 +87,34 @@ def main(data_path: str, results_path: str, run_config: str, rat: str):
             )
             processed_values["replay_data"] = replay_data
 
-        os.makedirs(results_path / rat / session, exist_ok=True)
         compress_pickle.dump(
             processed_values,
-            results_path / rat / session / "preprocessed_data.pkl.gz"
+            rat_result_path / "preprocessed_data.pkl.bz2"
         )
 
         hsepl.plot_place_fields(
             place_field_data,
             raw_data,
             track_type,
-            results_path
+            rat_result_path
         )
         hsepl.plot_trajectory_with_velocity(
             raw_data.raw_position[['x','y']].values,
             raw_data.raw_position['Velocity'].values,
             raw_data.environment_size if track_type == 'Open' else None,
-            file_path=results_path,
+            file_path=rat_result_path,
             file_name="true_trajectories.pdf"
         )
         hsepl.plot_lfp_data(
             raw_data.lfp_data,
-            file_path=results_path,
+            file_path=rat_result_path,
             file_name="lfp_data.pdf"
         )
         if len(raw_data.environment_size) == 1:
             hsepl.plot_session_stitching(
                 raw_data.running_position,
                 raw_data.running_spikes,
-                file_path=results_path,
+                file_path=rat_result_path,
                 file_name="session_stitching.pdf"
             )
 

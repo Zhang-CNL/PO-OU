@@ -804,12 +804,6 @@ class LinearGaussianSystem(StateSpace):
         self._initialize_globals("test")
         values = self._initialize_values(X)
         values = self.e_step(values, mode="test")[0]
-        if self.environment_size is not None and self.bin_size is not None:
-            values.cumulative_probabilities = self._calculate_marginals(
-                self.environment_size, 
-                self.bin_size, 
-                values    
-            )
         values.loglike_full = self._complete_loglikelihood(
             values,
             self._calculate_sufficient_statistics(values, "test"),

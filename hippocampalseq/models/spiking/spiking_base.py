@@ -3,13 +3,19 @@ import hippocampalseq.utils as hseu
 from functools import wraps
 from torch.distributions import MultivariateNormal
 from hippocampalseq.models.linear_gaussian_system import *
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 
 __all__ = [
     'SpikingBase',
+    'SpikingResults',
     'count_spikes',
     'lag_spikes'
 ]
+
+@dataclass
+class SpikingResults(LDSResults):
+    posterior_probabilities : list[torch.Tensor] = field(default_factory=list)
+    cumulative_probabilities: torch.Tensor       = field(default_factory=lambda: torch.tensor([]))
 
 def count_spikes(spikemat: torch.Tensor) -> torch.Tensor:
     spk = hseu.ensure_torch(spikemat).double()
@@ -98,6 +104,15 @@ class SpikingBase(LinearGaussianSystem):
     def _construct_emission_covariance(self, mode: str = "train") -> torch.Tensor:
         return self.approximate_covariance[mode]
 
+    def _initialize_values(self, X: list[hseu.NDArray]) -> SpikingResults:
+        values = super()._initialize_values(X)
+        values = SpikingResults(
+            **asdict(values),
+            posterior_probabilities  = [],
+            cumulative_probabilities = torch.tensor([])
+        )
+        return values
+
     def build_batch_parameters(self, batch: int, mode: str = "train") -> LDSParameters:
         """Builds a single batch of parameters.
         In this case, only the emission covariance is treated as being batch dependent.
@@ -142,12 +157,14 @@ class SpikingBase(LinearGaussianSystem):
             values (KalmanResults): Kalman filter results.
 
         Returns:
+            list[torch.Tensor]: The posterior probabilities for each time step. Each tensor is of shape (T, nbx, nby).
             torch.Tensor: The marginal probabilities for each bin in the environment. (Ncells, nbx, nby)
         """
         sz = tuple(int((es[1] - es[0]) / bin_size) for es in environment_size)
         if len(sz) == 1:
             sz = sz + (1,)
         Z = hseu.make_ndgrid(environment_size, bin_size, indexing='ij')
+        posterior_probabilities  = []
         cumulative_probabilities = torch.zeros((len(values.smoothed_mean),) + sz)
 
         for i in range(len(values.smoothed_mean)):
@@ -156,15 +173,16 @@ class SpikingBase(LinearGaussianSystem):
             cp = torch.zeros((sm.shape[0],)+sz)
             for t in range(sm.shape[0]):
                 cov_t = sc[t]
-                try:
-                    L = torch.linalg.cholesky(cov_t)
-                except Exception as e:
-                    print(i,t)
-                    print(values.smoothed_cov[i][t-2:t+3])
-                    print(values.filtered_cov[i][t-2:t+3])
-                    print(values.predicted_cov[i][t-2:t+3])
-                    print(values.smoothed_gain[i][t-2:t+3])
-                    raise e
+                L = torch.linalg.cholesky(cov_t)
+                #try:
+                #    L = torch.linalg.cholesky(cov_t)
+                #except Exception as e:
+                #    print(i,t)
+                #    print(values.smoothed_cov[i][t-2:t+3])
+                #    print(values.filtered_cov[i][t-2:t+3])
+                #    print(values.predicted_cov[i][t-2:t+3])
+                #    print(values.smoothed_gain[i][t-2:t+3])
+                #    raise e
 
                 mvn = MultivariateNormal(
                     sm[t].ravel(), 
@@ -172,13 +190,18 @@ class SpikingBase(LinearGaussianSystem):
                 )
                 log_prob = mvn.log_prob(Z)
                 log_prob = log_prob.reshape(sz)
-                cp[t] = log_prob
+                cp[t]    = log_prob
             
             cp -= torch.logsumexp(cp, dim=(1, 2), keepdim=True)
             cp = torch.exp(cp)
+            posterior_probabilities.append(cp)
             cumulative_probabilities[i] = torch.sum(cp,axis=0)
 
-        return cumulative_probabilities / cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
+        cumulative_probabilities /= cumulative_probabilities.sum(axis=(1, 2), keepdim=True)
+        return (
+            posterior_probabilities,
+            cumulative_probabilities
+        )
 
     def fit(self,
             Xtrain: list[hseu.NDArray]|None=None,
@@ -188,7 +211,7 @@ class SpikingBase(LinearGaussianSystem):
             patience: int = 5,
             val_freq: int = 10,
             **maximization_args
-        ) -> LDSResults:
+        ) -> SpikingResults:
         """Run the Expectation-Maximization algorithm to fit the model parameters to the data.
 
         Parameters:
@@ -201,7 +224,7 @@ class SpikingBase(LinearGaussianSystem):
             **maximization_args: Keyword arguments to pass to the parent class's maximization method.
 
         Returns:
-            LDSResults: Results of fitting the model to the data.
+            SpikingResults: Results of fitting the model to the data.
         """
 
         if Xtrain is None:
@@ -219,24 +242,28 @@ class SpikingBase(LinearGaussianSystem):
             **maximization_args
         )
         if not isinstance(results, tuple):
-            results.cumulative_probabilities = self._calculate_marginals(
+            posterior,cumulative = self._calculate_marginals(
                 self.environment_size,
                 self.bin_size,
                 results
             )
+            results.posterior_probabilities  = posterior
+            results.cumulative_probabilities = cumulative
         else:
             for res in results:
-                res.cumulative_probabilities = self._calculate_marginals(
+                posterior,cumulative = self._calculate_marginals(
                     self.environment_size,
                     self.bin_size,
                     res
                 )       
+                res.posterior_probabilities  = posterior
+                res.cumulative_probabilities = cumulative
         return results
 
     def transform(self,
             spikemats: list[hseu.NDArray],
             X: list[hseu.NDArray]|None = None
-        ) -> LDSResults:
+        ) -> SpikingResults:
         (
             self.emission_probabilities["test"],
             self.approximate_mean["test"],
@@ -245,7 +272,15 @@ class SpikingBase(LinearGaussianSystem):
 
         if X is None:
             X = self.approximate_mean["test"]
-        return super().transform(
+        results = super().transform(
             X
         ) 
+        posterior,cumulative = self._calculate_marginals(
+            self.environment_size,
+            self.bin_size,
+            results
+        )
+        results.posterior_probabilities  = posterior
+        results.cumulative_probabilities = cumulative
+        return results
 

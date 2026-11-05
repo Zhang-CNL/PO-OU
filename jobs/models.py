@@ -111,8 +111,52 @@ def run_theta_models(
     )
     output |= {
         "MAP": {
-            'model'   : map_model,
+            'model'   : {
+                'name': map_model.name()
+            },
             'results' : map_results
+        }
+    }
+
+    diffusion_model,diffusion_results = run_model(
+        "Diffusion",
+        {
+            'dt'               : parameters['theta_args']['time_window_s'],
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'environment_size' : environment_size,
+            'place_fields'     : place_fields,
+            'spikemat_train'   : sp_train,
+            'spikemat_valid'   : sp_valid,
+        },
+    )
+    output |= {
+        "Diffusion": {
+            'model'   : {
+                'name': diffusion_model.name(),
+                'marginal_position_dims': diffusion_model.marginal_position_dims
+            },
+            'results' : diffusion_results
+        }
+    }
+
+    diffusion_scaled_model,diffusion_scaled_results = run_model(
+        "DiffusionScaled",
+        {
+            'dt'               : parameters['theta_args']['time_window_s'],
+            'bin_size'         : parameters.get('bin_size', 2.0),
+            'environment_size' : environment_size,
+            'place_fields'     : place_fields,
+            'spikemat_train'   : sp_train,
+            'spikemat_valid'   : sp_valid,
+        },
+    )
+    output |= {
+        "DiffusionScaled": {
+            'model'   : {
+                'name': diffusion_scaled_model.name(),
+                'marginal_position_dims': diffusion_scaled_model.marginal_position_dims
+            },
+            'results' : diffusion_scaled_results
         }
     }
 
@@ -129,7 +173,10 @@ def run_theta_models(
     )
     output |= {
         "Momentum": {
-            'model'   : momentum_model,
+            'model': {
+                'name': momentum_model.name(),
+                'marginal_position_dims': momentum_model.marginal_position_dims
+            },
             'results' : momentum_results
         }
     }
@@ -152,7 +199,10 @@ def run_theta_models(
     )
     output |= {
         "MomentumVelocityTrue": {
-            'model'   : momentum_vel_model,
+            'model'   : {
+                'name': momentum_vel_model.name(),
+                'marginal_position_dims': momentum_vel_model.marginal_position_dims
+            },
             'results' : momentum_vel_results
         }
     }
@@ -171,7 +221,10 @@ def run_theta_models(
     )
     output |= {
         "MomentumVelocityLikelihood": {
-            'model'   : momentum_vellik_model,
+            'model'   : {
+                'name': momentum_vellik_model.name(),
+                'marginal_position_dims': momentum_vellik_model.marginal_position_dims
+            },
             'results' : momentum_vellik_results
         }
     }
@@ -192,7 +245,10 @@ def run_theta_models(
     )
     output |= {
         "MomentumVelocityBias": {
-            'model'   : momentum_vbias_model,
+            'model'   : {
+                'name': momentum_vbias_model.name(),
+                'marginal_position_dims': momentum_vbias_model.marginal_position_dims
+            },
             'results' : momentum_vbias_results
         }
     }
@@ -212,7 +268,10 @@ def run_theta_models(
     )
     output |= {
         "CANNDynamics": {
-            'model'   : cann_model,
+            'model'   : {
+                'name': cann_model.name(),
+                'marginal_position_dims': cann_model.marginal_position_dims
+            },
             'results' : cann_results
         }
     }
@@ -233,7 +292,10 @@ def run_theta_models(
     )
     output |= {
         "CANNDynamicsBias": {
-            'model'   : cann_bias_model,
+            'model'   : {
+                'name': cann_bias_model.name(),
+                'marginal_position_dims': cann_bias_model.marginal_position_dims
+            },
             'results' : cann_bias_results
         }
     }
@@ -251,16 +313,13 @@ def run_theta_models(
             'true_position_valid' : tp_valid,
             'bias'                : True
         }, 
-        {
-        },
-        {
-            'spikemats' : sp_test,
-            'X'         : tp_test
-        }
     )
     output |= {
         "OUDynamicsBias": {
-            'model'   : ou_model,
+            'model': {
+                'name': ou_model.name(),
+                'marginal_position_dims': ou_model.marginal_position_dims
+            },
             'results' : ou_results
         }
     }
@@ -278,17 +337,14 @@ def run_theta_models(
             'true_position_valid' : tp_valid,
             'bias'                : False
         }, 
-        {
-        },
-        {
-            'spikemats' : sp_test,
-            'X'         : tp_test
-        }
     )
     output |= {
         "OUDynamicsNoBias": {
-            'model'   : oub_model,
-            'results' : oub_results
+            'model': {
+                'name': ounb_model.name(),
+                'marginal_position_dims': ounb_model.marginal_position_dims
+            },
+            'results' : ounb_results
         }
     }
 
@@ -309,7 +365,10 @@ def run_theta_models(
     )
     output |= {
         "OUDynamicsScaled": {
-            'model'   : ous_model,
+            'model': {
+                'name': ous_model.name(),
+                'marginal_position_dims': ous_model.marginal_position_dims
+            },
             'results' : ous_results
         }
     }
@@ -331,7 +390,10 @@ def run_theta_models(
     )
     output |= {
         "OUDynamicsScaledNoBias": {
-            'model'   : ousnb_model,
+            'model': {
+                'name': ousnb_model.name(),
+                'marginal_position_dims': ousnb_model.marginal_position_dims
+            },
             'results' : ousnb_results
         }
     }
@@ -343,7 +405,7 @@ def run_theta_models(
                 "validation" : indices[1],
             } 
         } | output,
-        results_path / "model_theta_results.mat",
+        results_path / "model_theta_results.pkl.bz2",
     )
     
 def run_replay_models(
@@ -390,7 +452,7 @@ def run_replay_models(
         "MAP",
         {
             'place_fields' : place_fields,
-            'dt'           : parameters['theta_args']['time_window_s'],
+            'dt'           : parameters['ripple_args']['time_window_s'],
             'bin_size'     : parameters.get('bin_size', 2.0)
         },
         {
@@ -407,7 +469,7 @@ def run_replay_models(
     momentum_model,momentum_results = run_model(
         "Momentum", 
         {
-            'dt'               : parameters['theta_args']['time_window_s'],
+            'dt'               : parameters['ripple_args']['time_window_s'],
             'environment_size' : environment_size,
             'bin_size'         : parameters.get('bin_size', 2.0),
             'place_fields'     : place_fields,
@@ -429,7 +491,7 @@ def run_replay_models(
                 "validation" : indices[1],
             } 
         } | output,
-        results_path / "model_theta_results.mat",
+        results_path / "model_replay_results.pkl.bz2",
     )
 
 @click.command()
@@ -442,15 +504,15 @@ def main(results_path: str, run_config: str, rat: str):
     with open(run_config, 'r') as f:
         parameters = json.loads(f.read())
     
-    results_path = results_path / parameters.get("name")
+    results_path = results_path / parameters["name"] / rat
 
-    for session in os.listdir(results_path / rat):
-        results_dir = results_path / rat / session
+    for session in os.listdir(results_path):
+        results_dir = results_path / session
         track_type  = session[:-1]
         session_n   = int(session[-1])
 
         print(f"Training models on {rat} {session}")
-        rat_data = compress_pickle.load(results_dir / "preprocessed_data.pkl.gz")
+        rat_data = compress_pickle.load(results_dir / "preprocessed_data.pkl.bz2")
 
         if not parameters.get("ignore_theta", False):
             run_theta_models(
@@ -461,8 +523,14 @@ def main(results_path: str, run_config: str, rat: str):
                 results_dir
             )
 
-        if not parameters.get("ignore_ripple", False):
-            raise NotImplementedError
+        if not parameters.get("ignore_ripples", False):
+            run_replay_models(
+                rat_data['raw_data'],
+                rat_data['placefield_data'],
+                rat_data['replay_data'],
+                parameters,
+                results_dir
+            )
 
 if __name__ == "__main__":
     main()

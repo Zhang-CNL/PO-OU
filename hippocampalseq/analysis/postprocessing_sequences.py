@@ -1,121 +1,352 @@
-
+import pynapple as nap
 import numpy as np
-import hippocampalseq.utils as hseu
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
+from scipy.stats import multivariate_normal
+from scipy.special import logsumexp
 
 import os
 from datetime import datetime
 
-import numpy as np
 import torch
 from torch.distributions import MultivariateNormal
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.pyplot as plt
 import hippocampalseq.utils as hseu
 
-
-
-def gaussian_to_grid(means, covs, environment_size, bin_size_cm, latent_dim):
-    """Turn per-window Gaussian posteriors into (T, Nx, 1) grids like emission_probabilities."""
+def gaussians_to_grid(
+        means: list[torch.Tensor], 
+        covs: list[torch.Tensor], 
+        environment_size: list[tuple[int, ...]], 
+        bin_size_cm: int, 
+        marginal_position_slice: slice
+    ):
+    """Turn per-window Gaussian posteriors into (T, Nx, Ny) grids like emission_probabilities."""
     Z = hseu.make_ndgrid(environment_size, bin_size_cm, indexing='ij')
-    out = []
+    Z = hseu.ensure_numpy(Z)
+    normalized_posteriors = []
     for m, c in zip(means, covs):
-        m = m[:, latent_dim:].detach().double()
-        c = torch.atleast_2d(c[:, latent_dim:, latent_dim:].detach().double())
-        g = torch.zeros((len(m), len(Z)), dtype=torch.double)
+        m = hseu.ensure_numpy(m[:, marginal_position_slice])
+        c = hseu.ensure_numpy(c[:, marginal_position_slice, marginal_position_slice])
+        c = hseu.atleast_2d(c)
+        segment_grid = np.zeros((len(m), len(Z)), dtype=float)
         for t in range(len(m)):
-            mvn = MultivariateNormal(m[t].ravel(), scale_tril=torch.linalg.cholesky(c[t]))
-            lp = mvn.log_prob(Z)
-            g[t] = torch.exp(lp - torch.logsumexp(lp, 0))
-        out.append(g[:, :, None])                      # (T, Nx, 1)
-    return out
+            mvn = multivariate_normal(mean=m[t].ravel(), cov=c[t])
+            lp = mvn.logpdf(Z)
+            segment_grid[t] = np.exp(lp - logsumexp(lp, 0))
+        if segment_grid.ndim == 2:
+            segment_grid = segment_grid[:,:,np.newaxis]
+        normalized_posteriors.append(segment_grid)
+    return normalized_posteriors
 
+def bayesian_map_to_grids(
+        posteriors: list[torch.Tensor],
+        *,
+        environment_size: list[tuple[int, ...]]|None=None,
+        bin_size_cm: int|None = None
+    ) -> list[np.ndarray]:
+    """Convert posteriors from Bayesian MAP to normalized grids. 
+    Checks for correct shape, non-negativity, and finiteness. 
+    Args:
+        posteriors (list[torch.Tensor]): List of posterior tensors (T, Nx, Ny).
+        environment_size (list[tuple[int, ...]]|None): Optional list of environment sizes for shape validation.
+        bin_size_cm (int|None): Optional bin size in cm for shape validation.
 
-def peak_posterior_new(emission_probabilities, environment_size, segments, spikemats, *,
-                        bin_size_cm=2, phase_bin=10, minimum_max=0.01, half_width=30,
-                        velocity_cutoff=10.0, spike_count_percentile=66.67,
-                        count_window=(80, 240), theta_start=70.0,
-                        theta_length_s=(0.08, 0.16), step_s=5e-3, direction=None):
-    """Per-position peak-phase histogram (Wang et al. 2020).
-
-    Oscillations are kept if every window is above velocity_cutoff, the cycle length is
-    within theta_length_s, phase is monotonic within the cycle, and (optionally) the run
-    direction matches. Of those, the top (100 - spike_count_percentile)% by spike count
-    inside count_window ("firing near the peak of theta") are used.
+    Returns:
+        list[np.ndarray]: List of normalized posterior grids (T, Nx, Ny).
     """
-    grid = hseu.make_ndgrid(environment_size, bin_size_cm, indexing='ij').numpy()[:, 0]
-    axis_col = environment_size.axes()[0]
-    n_pos = 2 * half_width + 1
-    dist_edges = (np.arange(n_pos + 1) - half_width - 0.5) * bin_size_cm
-    n_ph = int(np.ceil(360 / phase_bin))
-    min_max = minimum_max
+    normalized_grids = []
+    for i,posterior in enumerate(posteriors):
+        grid = hseu.ensure_numpy(posterior)
 
-    rel, phase_all, osc_all, vel_all, spk_all, dir_all, t_all = [], [], [], [], [], [], []
-    osc_offset = 0
+        assert grid.ndim == 3, f"Posterior {i} must be 3D (T, Nx, Ny), got {grid.ndim}D"
+        if environment_size is not None and bin_size_cm is not None:
+            expected_shape = tuple(int(np.ceil(s / bin_size_cm)) for s in environment_size)
+            assert grid.shape[1:3] == expected_shape, (
+                f"Posterior {i} shape {grid.shape[1:3]} does not match expected "
+                f"shape {expected_shape} for environment size {environment_size} "
+                f"and bin size {bin_size_cm}"
+            )
+        assert np.all(np.isfinite(grid)), f"Posterior {i} contains non-finite values"
+        assert np.all(grid >= 0), f"Posterior {i} contains negative values"
+        
+        rowsum = grid.sum(axis=(1, 2), keepdims=True)
+        normalized_posterior = np.divide(grid, rowsum, out=np.zeros_like(grid), where=(rowsum > 0))
+        normalized_grids.append(normalized_posterior)
 
-    for ep, frame, spk in zip(emission_probabilities, segments, spikemats):
-        ep = ep.detach().numpy().reshape(len(ep), -1)
-        pos = frame[axis_col].values
-        d = np.sign(pos[-1] - pos[0]) or 1.0
-        R = np.zeros((n_pos, len(ep)))
-        for t in range(len(ep)):
-            dbin = np.digitize((grid - pos[t]) * d, dist_edges) - 1
-            ok = (dbin >= 0) & (dbin < n_pos)
-            np.add.at(R[:, t], dbin[ok], ep[t][ok])
-        rel.append(R)
-        ph = np.mod(frame['Phase Deg'].values, 360.0); ph[ph == 0] = 360.0
-        phase_all.append(ph)
-        osc_all.append(frame['Oscillation Number'].values.astype(int) + osc_offset)
-        osc_offset = osc_all[-1].max() + 1
-        vel_all.append(frame['Velocity'].values)
-        spk_all.append(np.asarray(spk).sum(axis=1))
-        dir_all.append(np.full(len(ep), d))
-        t_all.append(frame.index.values)
+    return normalized_grids
 
-    R = np.concatenate(rel, axis=1); phase = np.concatenate(phase_all); osc = np.concatenate(osc_all)
-    vel = np.concatenate(vel_all); spk = np.concatenate(spk_all); dirs = np.concatenate(dir_all)
-    t_all = np.concatenate(t_all)
-
+def _phase_in_count_window(
+    phase: np.ndarray,
+    count_window: tuple[float, float],
+) -> np.ndarray:
+    """Return a mask for phases inside a possibly wrapping phase window."""
     lo, hi = count_window
-    def in_window(ph):
-        return (ph > lo) & (ph <= hi) if lo < hi else (ph > lo) | (ph <= hi)
+    if lo < hi:
+        return (phase > lo) & (phase <= hi)
+    return (phase > lo) | (phase <= hi)
 
-    info = {}
-    for o in np.unique(osc):
-        m = np.flatnonzero((osc == o) & (spk > 0))
-        if len(m) < 2 or np.any(vel[m] < velocity_cutoff):
-            continue
-        if direction is not None and dirs[m[0]] != direction:
-            continue
-        dur = t_all[m[-1]] - t_all[m[0]] + step_s
-        if not (theta_length_s[0] <= dur <= theta_length_s[1]):
-            continue
-        ph = phase[m].copy(); ph[ph <= theta_start] += 360.0
-        if np.any(np.diff(ph) < 0):
-            continue
-        info[o] = spk[m][in_window(phase[m])].sum()
+def _passes_cycle_flags(
+    indices: np.ndarray,
+    velocity: np.ndarray,
+    direction_per_sample: np.ndarray,
+    timestamps: np.ndarray,
+    phase: np.ndarray,
+    velocity_cutoff: float,
+    velocity_range: tuple[float,float]|None,
+    direction: float|None,
+    theta_length_s: tuple[float,float],
+    theta_start: float,
+    step_s: float,
+) -> bool:
+    """Check velocity, direction, duration, and phase progression for one cycle."""
+    if len(indices) < 2 or np.any(velocity[indices] < velocity_cutoff):
+        return False
 
-    counts = np.array(list(info.values()))
-    thr = np.percentile(counts, spike_count_percentile) if len(counts) else np.inf
-    selected = [o for o, s in info.items() if s >= thr]
-    print(f"{len(info)} oscillations pass flags; {len(selected)} selected "
-          f"(>= {thr:.0f} spikes in {count_window})")
+    if velocity_range is not None:
+        median_velocity = np.median(velocity[indices])
+        if not (velocity_range[0] <= median_velocity < velocity_range[1]):
+            return False
+
+    if direction is not None and direction_per_sample[indices[0]] != direction:
+        return False
+
+    duration = timestamps[indices[-1]] - timestamps[indices[0]] + step_s
+    if not (theta_length_s[0] <= duration <= theta_length_s[1]):
+        return False
+
+    unwrapped_phase = phase[indices].copy()
+    unwrapped_phase[unwrapped_phase <= theta_start] += 360.0
+    return not np.any(np.diff(unwrapped_phase) < 0)
+
+def select_oscillations(
+    osc: np.ndarray,
+    velocity: np.ndarray,
+    direction_per_sample: np.ndarray,
+    timestamps: np.ndarray,
+    phase: np.ndarray,
+    spike_count: np.ndarray,
+    *,
+    velocity_cutoff: float = 10.0,
+    velocity_range: tuple[float,float]|None = None,
+    direction: float|None = None,
+    theta_length_s: tuple[float,float] = (0.08, 0.16),
+    theta_start: float = 70.0,
+    step_s: float = 5e-3,
+    count_window: tuple[float,float] = (80, 190),
+    spike_count_percentile: float|None = 66.67,
+    verbose: bool = False,
+) -> tuple[list[int], float]:
+    """
+    Select cycles that pass the cycle checks and spike-count percentile.
+
+    Returns the selected cycle IDs and spike-count threshold.
+    """
+    in_window = _phase_in_count_window(phase, count_window)
+    cycle_spike_counts = {}
+
+    for cycle_id_value in np.unique(osc):
+        cycle_id = int(cycle_id_value)
+        indices = np.flatnonzero(osc == cycle_id)
+
+        passes_flags = _passes_cycle_flags(
+            indices,
+            velocity=velocity,
+            direction_per_sample=direction_per_sample,
+            timestamps=timestamps,
+            phase=phase,
+            velocity_cutoff=velocity_cutoff,
+            velocity_range=velocity_range,
+            direction=direction,
+            theta_length_s=theta_length_s,
+            theta_start=theta_start,
+            step_s=step_s,
+        )
+        if not passes_flags:
+            continue
+
+        window_spike_count = spike_count[indices][in_window[indices]].sum()
+        cycle_spike_counts[cycle_id] = window_spike_count
+
+    counts = np.array(list(cycle_spike_counts.values()))
+    if spike_count_percentile is not None:
+        threshold = (
+            np.percentile(counts, spike_count_percentile)
+            if counts.size
+            else float("inf")
+        )
+        selected = [
+            cycle_id
+            for cycle_id, count in cycle_spike_counts.items()
+            if count >= threshold
+        ]
+    else:
+        threshold = 0.0
+        selected = list(cycle_spike_counts.keys())
+
+    if verbose:
+        print(
+            f"{len(cycle_spike_counts)} oscillations pass flags; "
+            f"{len(selected)} selected "
+            f"(>= {threshold:.0f} spikes in {count_window})"
+        )
+
+    return selected
+
+def peak_posterior(
+    decoded_grids: list[np.ndarray],
+    environment_size: list[tuple[int,...]],
+    segments: list[nap.TsdFrame],
+    spikemats: list[np.ndarray],
+    *,
+    bin_size_cm: int = 2,
+    phase_bin: int = 10,
+    half_width: int = 30,
+    minimum_max: float = 0.01,
+    velocity_cutoff: float = 10.0,
+    spike_count_percentile: float = 66.67,
+    count_window: tuple[float,float] = (80, 190),
+    theta_start: float = 70.0,
+    theta_length_s: tuple[float,float] = (0.08, 0.16),
+    step_s: float = 5e-3,
+    direction: float|None = None,
+    velocity_range: tuple[float,float]|None = None,
+    verbose: bool = False,
+):
+    """Build a per-position peak-phase histogram for selected theta cycles."""
+    grid = hseu.ensure_numpy(hseu.make_ndgrid(environment_size, bin_size_cm, indexing="ij"))[:, 0]
+
+    # The declared axis can be wrong when the track runs along y. Choose the
+    # position column whose span best matches the decoded grid's track length.
+    axis_col = min(
+        (column for column in ("x", "y") if column in segments[0].columns),
+        key=lambda column: abs(np.ptp(
+                np.concatenate([segment[column].values for segment in segments])
+            )
+            - np.ptp(grid)
+        ),
+    )
+
+    n_pos      = 2 * half_width + 1
+    dist_edges = (np.arange(n_pos + 1) - half_width - 0.5) * bin_size_cm
+    n_ph       = int(np.ceil(360 / phase_bin))
+
+    rel         = []
+    phase_all   = []
+    osc_all     = []
+    vel_all     = []
+    spk_all     = []
+    dir_all     = []
+    t_all_parts = []
+    osc_offset  = 0
+
+    for ep, frame, spk in zip(decoded_grids, segments, spikemats):
+        ep_array = hseu.ensure_numpy(ep).reshape(len(ep), -1)
+
+        pos            = frame[axis_col].values
+        run_direction      = np.sign(pos[-1] - pos[0]) or 1.0
+        relative_posterior = np.zeros((n_pos, len(ep_array)))
+        
+        for time_index in range(len(ep_array)):
+            distance_bins = np.digitize(
+                (grid - pos[time_index]) * run_direction,
+                dist_edges,
+            ) - 1
+            valid_bins = ((distance_bins >= 0) & (distance_bins < n_pos))
+            np.add.at(
+                relative_posterior[:, time_index],
+                distance_bins[valid_bins],
+                ep_array[time_index][valid_bins],
+            )
+
+        rel.append(relative_posterior)
+
+        phase_values = np.mod(frame["Phase Deg"].values, 360.0)
+        phase_values[phase_values == 0] = 360.0
+        phase_all.append(phase_values)
+
+        oscillation_values = frame["Oscillation Number"].values.astype(int) + osc_offset
+        osc_all.append(oscillation_values)
+        osc_offset = int(oscillation_values.max()) + 1
+
+        vel_all.append(frame["Velocity"].values)
+        spk_all.append(np.asarray(spk).sum(axis=1))
+        dir_all.append(np.full(len(ep_array), run_direction))
+        t_all_parts.append(frame.index.values)
+
+    R     = np.concatenate(rel, axis=1) # Rat-relative position
+    phase = np.concatenate(phase_all)
+    osc   = np.concatenate(osc_all)
+    vel   = np.concatenate(vel_all)
+    spk   = np.concatenate(spk_all)
+    dirs  = np.concatenate(dir_all)
+    t_all = np.concatenate(t_all_parts)
+
+    selected = select_oscillations(
+        osc,
+        vel,
+        dirs,
+        t_all,
+        phase,
+        spk,
+        velocity_cutoff=velocity_cutoff,
+        velocity_range=velocity_range,
+        direction=direction,
+        theta_length_s=theta_length_s,
+        theta_start=theta_start,
+        step_s=step_s,
+        count_window=count_window,
+        spike_count_percentile=spike_count_percentile,
+        verbose=verbose,
+    )
 
     dist_of_peak = np.zeros((n_pos, n_ph))
-    for o in selected:
-        m = (osc == o) & (spk > 0)
-        if m.sum() < 2:
+    for oscillation_id in selected:
+        mask = (osc == oscillation_id) & (spk > 0)
+        if mask.sum() < 2:
             continue
-        cur, ph = R[:, m], phase[m]
-        mx = cur.max(axis=1)
-        for p in range(n_pos):
-            if mx[p] >= min_max and not np.all(cur[p] == mx[p]):
-                for phv in ph[cur[p] == mx[p]]:
-                    dist_of_peak[p, np.clip(int(np.ceil(phv / phase_bin)) - 1, 0, n_ph - 1)] += 1
-    col = dist_of_peak.sum(axis=0, keepdims=True); col[col == 0] = 1
-    return {"dist_of_peak_post": dist_of_peak, "norm_dist": dist_of_peak / col,
-            "n_oscillations_used": len(selected), "spike_count_threshold": thr}
+
+        current_posterior = R[:, mask]
+        current_phase     = phase[mask]
+        row_maxima        = current_posterior.max(axis=1)
+
+        for position_index in range(n_pos):
+            if (row_maxima[position_index] >= minimum_max 
+                and not np.all(current_posterior[position_index] == row_maxima[position_index])
+            ):
+                peak_phases = current_phase[
+                    current_posterior[position_index] == row_maxima[position_index]
+                ]
+                for peak_phase in peak_phases:
+                    phase_index = int(np.ceil(peak_phase / phase_bin)) - 1
+                    phase_index = int(np.clip(phase_index, 0, n_ph - 1))
+                    dist_of_peak[position_index, phase_index] += 1
+
+    column_totals = dist_of_peak.sum(axis=0, keepdims=True)
+    column_totals[column_totals == 0] = 1
+
+    params = {
+        "bin_size_cm"      : bin_size_cm,
+        "phase_bin"        : phase_bin,
+        "half_width"       : half_width,
+        "minimum_max"      : minimum_max,
+        "velocity_cutoff"  : velocity_cutoff,
+        "spike_percentile" : spike_count_percentile,
+        "count_window"     : count_window,
+        "theta_start"      : theta_start,
+        "theta_length_s"   : theta_length_s,
+        "step_s"           : step_s,
+        "direction"        : direction,
+    }
+
+    return {
+        "dist_of_peak_post"     : dist_of_peak,
+        "norm_dist"             : dist_of_peak / column_totals,
+        "n_oscillations_used"   : len(selected),
+        #"spike_count_threshold" : thr,
+        "params"                : params,
+    }
+ 
 
 def save_all_figures(figures_dict, save_dir, filename_tag):
     """Save all figures to organized PDFs."""
@@ -147,7 +378,16 @@ def save_all_figures(figures_dict, save_dir, filename_tag):
 
     return top_folder
 
-def _two_troughs(trace, phase_bin, smooth_sigma=1.0):
+def max_probability(decoded_grids: list[np.ndarray], axis: int = 0):
+    if not isinstance(decoded_grids, list):
+        decoded_grids = [decoded_grids]
+    max_probs = [
+        g.reshape(len(g),-1).max(axis=axis) for g in decoded_grids
+    ]
+    return max_probs
+            
+
+def _two_troughs(trace: np.ndarray, phase_bin: int, smooth_sigma: float|None=1.0):
     n = len(trace)
     x = np.concatenate([trace, trace, trace])
     if smooth_sigma:
@@ -164,7 +404,7 @@ def _two_troughs(trace, phase_bin, smooth_sigma=1.0):
     return np.sort([j0, j1]) * phase_bin + phase_bin / 2
 
 
-def identify_theta_sequence_windows(bimodal_firing_rate, decoding_distribution, phase_bin=10):
+def identify_theta_sequence_windows(bimodal_firing_rate: np.ndarray, decoding_distribution: np.ndarray, phase_bin: int = 10):
     fr_t  = _two_troughs(np.asarray(bimodal_firing_rate), phase_bin, smooth_sigma=1.0)
     dec_t = _two_troughs(np.asarray(decoding_distribution).max(axis=0), phase_bin, smooth_sigma=1.0)
     w = lambda a, b: [a % 360, b % 360]

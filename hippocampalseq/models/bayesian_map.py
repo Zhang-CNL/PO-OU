@@ -8,6 +8,7 @@ from .statespace import *
 @dataclass
 class BayesianMAPResults:
     decoded_trajectories     : list[np.ndarray]
+    posterior_probabilities  : list[np.ndarray]
     cumulative_probabilities : np.ndarray
 
 class BayesianMAP(StateSpace):
@@ -64,7 +65,7 @@ class BayesianMAP(StateSpace):
         max_coords = max_coords * self.bin_size + self.bin_size / 2
         cum_prob = emission_probability.sum(axis=0)
 
-        return max_coords,cum_prob
+        return max_coords,emission_probability,cum_prob
 
     def fit(self, 
             X: list[np.ndarray], 
@@ -79,13 +80,16 @@ class BayesianMAP(StateSpace):
         Returns:
             BayesianMAPResults: Decoded trajectories and cumulative probabilities.
         """
-        trajectories = []
-        cum_probs    = np.zeros((len(X),)+self.place_fields.shape[1:])
+        trajectories    = []
+        cum_probs       = np.zeros((len(X),)+self.place_fields.shape[1:])
+        posterior_probs = []
         for t,spike in enumerate(X):
-            trajectory,cum_probs[t] = self.bayesian_decoding_one(spike)
+            trajectory,posterior,cum_probs[t] = self.bayesian_decoding_one(spike)
             trajectories.append(trajectory)
+            posterior_probs.append(posterior)
         return BayesianMAPResults(
             trajectories,
+            posterior_probs,
             cum_probs
         )
 
