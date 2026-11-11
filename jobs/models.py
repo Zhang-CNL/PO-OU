@@ -103,7 +103,8 @@ def run_theta_models(
         {
             'place_fields' : place_fields,
             'dt'           : parameters['theta_args']['time_window_s'],
-            'bin_size'     : parameters.get('bin_size', 2.0)
+            'bin_size'     : parameters.get('bin_size', 2.0),
+            'drop_zeros'   : False
         },
         {
             'X' : theta_data.spikes
@@ -207,27 +208,27 @@ def run_theta_models(
         }
     }
 
-    momentum_vellik_model,momentum_vellik_results = run_model(
-        "MomentumVelocity",
-        {
-            'dt'               : parameters['theta_args']['time_window_s'],
-            'environment_size' : environment_size,
-            'bin_size'         : parameters.get('bin_size', 2.0),
-            'place_fields'     : place_fields,
-            'spikemat_train'   : sp_train,
-            'spikemat_valid'   : sp_valid,
-            'velocity_type'    : 'observed'
-        },
-    )
-    output |= {
-        "MomentumVelocityLikelihood": {
-            'model'   : {
-                'name': momentum_vellik_model.name(),
-                'marginal_position_dims': momentum_vellik_model.marginal_position_dims
-            },
-            'results' : momentum_vellik_results
-        }
-    }
+    #momentum_vellik_model,momentum_vellik_results = run_model(
+    #    "MomentumVelocity",
+    #    {
+    #        'dt'               : parameters['theta_args']['time_window_s'],
+    #        'environment_size' : environment_size,
+    #        'bin_size'         : parameters.get('bin_size', 2.0),
+    #        'place_fields'     : place_fields,
+    #        'spikemat_train'   : sp_train,
+    #        'spikemat_valid'   : sp_valid,
+    #        'velocity_type'    : 'observed'
+    #    },
+    #)
+    #output |= {
+    #    "MomentumVelocityLikelihood": {
+    #        'model'   : {
+    #            'name': momentum_vellik_model.name(),
+    #            'marginal_position_dims': momentum_vellik_model.marginal_position_dims
+    #        },
+    #        'results' : momentum_vellik_results
+    #    }
+    #}
 
     momentum_vbias_model,momentum_vbias_results = run_model(
         "MomentumVelocityBias",
@@ -397,16 +398,13 @@ def run_theta_models(
             'results' : ousnb_results
         }
     }
+    return {
+        "split_indices" : {
+            "train"      : indices[0],
+            "validation" : indices[1],
+        } 
+    } | output
 
-    compress_pickle.dump(
-        {
-            "split_indices" : {
-                "train"      : indices[0],
-                "validation" : indices[1],
-            } 
-        } | output,
-        results_path / "model_theta_results.pkl.bz2",
-    )
     
 def run_replay_models(
         raw_data: hse.RawData, 
@@ -483,22 +481,19 @@ def run_replay_models(
             'results' : momentum_results
         }
     }
-
-    compress_pickle.dump(
-        {
-            "split_indices" : {
-                "train"      : indices[0],
-                "validation" : indices[1],
-            } 
-        } | output,
-        results_path / "model_replay_results.pkl.bz2",
-    )
+    return {
+        "split_indices" : {
+            "train"      : indices[0],
+            "validation" : indices[1],
+        } 
+    } | output
 
 @click.command()
 @click.option("--results-path", default="../results")
 @click.option("--run-config")
 @click.option("--rat", type=click.Choice(hseio.RAT_NAMES))
-def main(results_path: str, run_config: str, rat: str):
+@click.option("--rerun", default=False, is_flag=True)
+def main(results_path: str, run_config: str, rat: str, rerun: bool):
     results_path = Path(results_path)
     run_config   = Path(run_config)
     with open(run_config, 'r') as f:
@@ -508,29 +503,51 @@ def main(results_path: str, run_config: str, rat: str):
 
     for session in os.listdir(results_path):
         results_dir = results_path / session
-        track_type  = session[:-1]
-        session_n   = int(session[-1])
-
+        if not os.path.isdir(results_dir):
+            continue
         print(f"Training models on {rat} {session}")
-        rat_data = compress_pickle.load(results_dir / "preprocessed_data.pkl.bz2")
+        track_type = session[:-1]
+        session_n  = int(session[-1])
+
+        rat_data = compress_pickle.load(results_dir / "preprocessed_data.pkl.bz")
 
         if not parameters.get("ignore_theta", False):
-            run_theta_models(
-                rat_data['raw_data'],
-                rat_data['placefield_data'],
-                rat_data['theta_data'],
-                parameters,
-                results_dir
-            )
+            theta_filepath = results_dir / "model_theta_results.pkl.bz"
+            if not rerun and os.path.exists(theta_filepath):
+                print(f"Skipping {rat} {session}-theta as it has already been run.")
+            else:
+                theta_results = run_theta_models(
+                    rat_data['raw_data'],
+                    rat_data['placefield_data'],
+                    rat_data['theta_data'],
+                    parameters,
+                    results_dir
+                )
+                compress_pickle.dump(
+                    theta_results,
+                    theta_filepath
+                )
+
 
         if not parameters.get("ignore_ripples", False):
-            run_replay_models(
-                rat_data['raw_data'],
-                rat_data['placefield_data'],
-                rat_data['replay_data'],
-                parameters,
-                results_dir
-            )
+            replay_filepath = results_path / "model_replay_results.pkl.bz",
+            if not rerun and os.path.exists(replay_filepath):
+                print(f"Skipping {rat} {session}-replay as it has already been run")
+            else:
+                replay_results = run_replay_models(
+                    rat_data['raw_data'],
+                    rat_data['placefield_data'],
+                    rat_data['replay_data'],
+                    parameters,
+                    results_dir
+                )
+                compress_pickle.dump(
+                    replay_results,
+                    replay_filepath
+                )
+
+    print(f"Finished running models for {rat}")
+
 
 if __name__ == "__main__":
     main()

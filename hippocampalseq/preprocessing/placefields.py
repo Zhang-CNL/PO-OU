@@ -16,6 +16,9 @@ class EnvironmentSize(NamedTuple):
         axes = [self.x, self.y]
         for axis in [a for a in axes if a is not None]:
             yield axis
+
+    def __reduce__(self):
+        return (type(self), (self.x, self.y))
     
     def axes(self) -> list[str]:
         axis = []
@@ -186,14 +189,14 @@ def calculate_placefields(
         if xspan >= yspan:
             axis = 2
             environment_size = EnvironmentSize(
-                (0, (len(xedges) - 1) * bin_size_cm),
-                None
+                x=(0, (len(xedges) - 1) * bin_size_cm),
+                y=None
             )
         else:
             axis = 1
             environment_size = EnvironmentSize(
-                None,
-                (0, (len(yedges) - 1) * bin_size_cm)
+                x=None,
+                y=(0, (len(yedges) - 1) * bin_size_cm)
             )
 
         linear_spike_hist = np.sum(spike_hists, axis=axis)

@@ -28,7 +28,7 @@ def plot_place_fields(
                     pfs=[i],
                     ax=ax[0]
                 )
-                esize= None
+                esize = None
             else:
                 plot_open_placefields(
                         place_field_data.place_fields,

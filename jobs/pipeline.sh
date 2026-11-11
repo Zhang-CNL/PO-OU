@@ -24,7 +24,10 @@ RESULTS_PATH="/project/bioinformatics/WZhang_lab/shared/theta_momentum/"
 #conda activate hippocampalswr
 # Runs each model and saves the processed data to {RESULTS_PATH}/{RAT_NAME}/{SESSION}
 python -u preprocess.py --rat "$RAT_NAME" \
-    --results-path "$RESULTS_PATH" "$@"
+    --results-path "$RESULTS_PATH" "$@" 
 
 python -u models.py --rat "$RAT_NAME" \
+    --results-path "$RESULTS_PATH" "$@"
+
+python -u individual_rat_analysis.py --rat "$RAT_NAME" \
     --results-path "$RESULTS_PATH" "$@"

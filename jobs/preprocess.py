@@ -20,7 +20,7 @@ import hippocampalseq.plotting as hsepl
 @click.option("--rat", type=click.Choice(hseio.RAT_NAMES))
 @click.option("--rerun", default=False, is_flag=True)
 def main(data_path: str, results_path: str, run_config: str, rat: str, rerun: bool):
-    data_path    = Path(data_path) / rat
+    data_path    = Path(data_path)
     results_path = Path(results_path)
     run_config   = Path(run_config)
     with open(run_config, 'r') as f:
@@ -29,7 +29,7 @@ def main(data_path: str, results_path: str, run_config: str, rat: str, rerun: bo
     results_path = results_path / parameters["name"] / rat
 
     os.makedirs(results_path, exist_ok=True)
-    for session in os.listdir(data_path):
+    for session in os.listdir(data_path / rat):
         if session.endswith("_bad"):
             continue
         track_type  = session[:-1]
@@ -37,12 +37,12 @@ def main(data_path: str, results_path: str, run_config: str, rat: str, rerun: bo
         if track_type not in parameters.get("session_types", ["Linear", "Open"]):
             continue
 
-        rat_data_path   = data_path / session
+        rat_data_path   = data_path / rat / session
         rat_result_path = results_path / session
         os.makedirs(rat_data_path, exist_ok=True)
         os.makedirs(rat_result_path, exist_ok=True)
 
-        if not rerun and os.path.exists(rat_result_path / "preprocessed_data.pkl.bz2"):
+        if not rerun and os.path.exists(rat_result_path / "preprocessed_data.pkl.bz"):
             print(f"Skipping {rat} {session} as it has already been processed.")
             continue
 
