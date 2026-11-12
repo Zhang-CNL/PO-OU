@@ -193,7 +193,7 @@ def theta_model_analysis(
         analysis_out[model_name] = peak_posterior
 
     with PdfPages(results_path / f"model_comparison.pdf") as pdf:
-        plt.figure(dpi=300)
+        plt.figure(figsize=(15,5),dpi=300)
         plt.subplot(1,3,1)
         plt.bar(model_names, aics)
         plt.title("AIC")
@@ -208,6 +208,7 @@ def theta_model_analysis(
         plt.bar(model_names, loglikes)
         plt.title("Log-likelihood")
         plt.xticks(rotation=45)
+        plt.tight_layout()
         pdf.savefig()
         plt.close()
 
@@ -236,6 +237,7 @@ def theta_session_analysis(session_data, track_type, results_path):
                 rat_pooled,
             )
             pdf.savefig()
+            plt.close()
 
 def replay_model_analysis(
         raw_data,
